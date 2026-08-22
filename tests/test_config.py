@@ -10,6 +10,7 @@ from finbot_filings.config import (
     sec_cik_overrides,
     sec_user_agent,
     section_folder,
+    xbrl_folder,
 )
 
 
@@ -41,6 +42,16 @@ def test_section_folder_reads_config_file(
     monkeypatch.setenv("FINBOT_FILINGS_CONFIG", str(config_file))
     monkeypatch.delenv("SECTION_FOLDER", raising=False)
     assert section_folder() == Path("/data/filings/sections")
+
+
+def test_xbrl_folder_reads_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file = tmp_path / "filings.env"
+    config_file.write_text("XBRL_FOLDER=/data/filings/xbrl/\n", encoding="utf-8")
+    monkeypatch.setenv("FINBOT_FILINGS_CONFIG", str(config_file))
+    monkeypatch.delenv("XBRL_FOLDER", raising=False)
+    assert xbrl_folder() == Path("/data/filings/xbrl")
 
 
 def test_sec_user_agent_reads_config_file(

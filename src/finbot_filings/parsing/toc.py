@@ -41,7 +41,11 @@ SPLIT_ITEM_SUFFIX_PATTERN = re.compile(
     re.IGNORECASE,
 )
 PART_PATTERN = re.compile(r"\bpart\s+(ii|i)\b", re.IGNORECASE)
+PART_ROW_PATTERN = re.compile(r"^\s*part\s+(ii|i)\b", re.IGNORECASE)
 TOC_PATTERN = re.compile(r"\btable\s+of\s+contents\b", re.IGNORECASE)
+LEADING_TOC_PATTERN = re.compile(
+    r"^(?:\s*table\s+of\s+contents\b[\s:|\-–—]*)+", re.IGNORECASE
+)
 WHITESPACE_PATTERN = re.compile(r"\s+")
 NUMERIC_PAGE_LINK_PATTERN = re.compile(r"^\d+(?:\s*[-–—,]\s*\d+)*$")
 ITEMLESS_ITEM_PATTERN = re.compile(r"^(\d{1,2}[a-c]?)\.?$", re.IGNORECASE)
@@ -85,20 +89,68 @@ def _part_from_text(value: str) -> str | None:
     return "part2" if match.group(1).upper() == "II" else "part1"
 
 
-def _target_starts_with_item(target: Tag, expected_item: str) -> bool:
+def _part_marker_from_row(value: str) -> str | None:
+    match = PART_ROW_PATTERN.search(value)
+    if match is None:
+        return None
+    return "part2" if match.group(1).upper() == "II" else "part1"
+
+
+def _toc_parts_by_row(toc_links: list[Tag]) -> dict[int, str]:
+    """Map every row in selected TOC tables to its preceding native Part marker."""
+    parts_by_row: dict[int, str] = {}
+    tables: dict[int, Tag] = {}
+    for link in toc_links:
+        table = link.find_parent("table")
+        if table is not None:
+            tables[id(table)] = table
+
+    for table in tables.values():
+        current_part: str | None = None
+        for row in table.find_all("tr"):
+            marker = _part_marker_from_row(_normalize_text(row.get_text(" ", strip=True)))
+            if marker is not None:
+                current_part = marker
+            if current_part is not None:
+                parts_by_row[id(row)] = current_part
+    return parts_by_row
+
+
+def _target_heading_text(target: Tag) -> str:
     chunks: list[str] = []
     for element in target.next_elements:
         if isinstance(element, NavigableString) and not _is_hidden_text(element):
             text = _normalize_text(str(element))
             if text:
                 chunks.append(text)
-        if len(" ".join(chunks)) >= 200:
+        if len(" ".join(chunks)) >= 500:
             break
-    match = _item_row_match(" ".join(chunks))
-    return match is not None and match.group(1).upper() == expected_item
+    return LEADING_TOC_PATTERN.sub("", " ".join(chunks), count=1).strip()
 
 
-def _link_evidence_priority(link: Tag, target: Tag, expected_item: str) -> int:
+def _target_item_evidence(
+    target: Tag, expected_item: str, expected_title: str
+) -> int:
+    """Score a destination that starts with the expected filing heading.
+
+    Inline XBRL filings often repeat ``Table of Contents`` immediately before a
+    section heading. That presentational prefix is ignored, but the Item heading
+    must still occur at the start of the destination text. A matching caption is
+    stronger evidence than the Item number alone.
+    """
+    target_text = _target_heading_text(target)
+    match = _item_row_match(target_text)
+    if match is None or match.group(1).upper() != expected_item:
+        return 0
+
+    target_words = " ".join(CAPTION_WORD_PATTERN.findall(target_text.lower()))
+    title_words = " ".join(CAPTION_WORD_PATTERN.findall(expected_title.lower()))
+    return 2 if title_words and title_words in target_words else 1
+
+
+def _link_evidence_priority(
+    link: Tag, target: Tag, expected_item: str, expected_title: str
+) -> int:
     """Prefer exact Item targets, then semantic links, then page links.
 
     Page-number links remain usable when they are the only links available for a
@@ -106,10 +158,65 @@ def _link_evidence_priority(link: Tag, target: Tag, expected_item: str) -> int:
     same canonical section to a different target. When semantic links disagree,
     an anchor whose destination starts with the expected Item heading wins.
     """
-    if _target_starts_with_item(target, expected_item):
-        return 2
+    target_evidence = _target_item_evidence(target, expected_item, expected_title)
+    if target_evidence:
+        # Both destination scores outrank link-text-only evidence. Caption
+        # agreement breaks ties between destinations that begin with the same
+        # Item number (for example, repeated Part I/Part II Item 1 rows).
+        return 2 + target_evidence
     link_text = _normalize_text(link.get_text(" ", strip=True))
     return 0 if NUMERIC_PAGE_LINK_PATTERN.fullmatch(link_text) else 1
+
+
+def _heading_key(value: str) -> str:
+    return " ".join(CAPTION_WORD_PATTERN.findall(value.lower()))
+
+
+def _recover_missing_toc_target(
+    soup: BeautifulSoup,
+    *,
+    link_position: int,
+    expected_item: str,
+    expected_title: str,
+    dom_positions: dict[int, int],
+) -> tuple[str, Tag] | None:
+    """Recover one broken TOC target from a unique exact adjacent heading anchor.
+
+    This is deliberately not general heading-based section discovery. It runs
+    only after a recognized TOC link is missing and requires an exact Item plus
+    caption heading outside a table. The heading must either carry another ID or
+    be immediately preceded by an ID-bearing anchor.
+    """
+    expected_key = _heading_key(f"Item {expected_item} {expected_title}")
+    candidates: list[tuple[str, Tag]] = []
+    for heading in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6"]):
+        if heading.find_parent("table") is not None:
+            continue
+        visible_text = " ".join(
+            _normalize_text(str(node))
+            for node in heading.descendants
+            if isinstance(node, NavigableString) and not _is_hidden_text(node)
+        )
+        if _heading_key(visible_text) != expected_key:
+            continue
+
+        target = heading if heading.get("id") else heading.find_previous_sibling()
+        if not isinstance(target, Tag) or not target.get("id"):
+            continue
+        if target is not heading and (
+            target.name != "a" or _normalize_text(target.get_text(" ", strip=True))
+        ):
+            continue
+        target_position = dom_positions.get(id(target), -1)
+        if target_position <= link_position:
+            continue
+        candidates.append((str(target.get("id")), target))
+
+    unique_candidates = {
+        (anchor_id, dom_positions[id(target)]): (anchor_id, target)
+        for anchor_id, target in candidates
+    }
+    return next(iter(unique_candidates.values())) if len(unique_candidates) == 1 else None
 
 
 def _discover_toc_links(
@@ -302,7 +409,7 @@ def _discover_itemless_10k_toc_links(
             if (
                 target is not None
                 and dom_positions[id(target)] > dom_positions[id(link)]
-                and _target_starts_with_item(target, item)
+                and _target_item_evidence(target, item, "")
             ):
                 has_exact_forward_target = True
                 break
@@ -416,6 +523,7 @@ def _classify_toc_entries(
     current_part: str | None = None
     source_id_counts: dict[str, int] = {}
     source_ids_by_row: dict[int, str] = {}
+    unresolved_native_sections: dict[str, str] = {}
 
     internal_links = [
         link
@@ -430,10 +538,14 @@ def _classify_toc_entries(
             soup, internal_links, dom_positions, form
         )
         diagnostics.itemless_toc_fallback_used = bool(toc_links)
+    parts_by_row = _toc_parts_by_row(toc_links)
     native_topic_outline = bool(toc_links) and not itemless_definitions and not any(
         _item_row_match(_link_context(link)) for link in toc_links
     )
     diagnostics.toc_like_region_found = bool(toc_links)
+    detected_outline_entries: dict[str, str] = {}
+    candidate_failure_reasons: dict[str, set[str]] = {}
+    ambiguous_native_ids: set[str] = set()
 
     for toc_order, link in enumerate(toc_links):
         href = str(link.get("href", "")).strip()
@@ -470,10 +582,21 @@ def _classify_toc_entries(
                     continue
             else:
                 item = item_match.group(1).upper()
-                part = explicit_part or current_part if form.form_type == "10-Q" else None
+                structural_part = parts_by_row.get(id(row)) if row is not None else None
+                part = (
+                    explicit_part or structural_part or current_part
+                    if form.form_type == "10-Q"
+                    else None
+                )
+                if structural_part is not None:
+                    current_part = structural_part
                 caption_definition = (
                     _caption_definition(context, item, form)
-                    if form.form_type == "10-Q" and explicit_part is None
+                    if (
+                        form.form_type == "10-Q"
+                        and explicit_part is None
+                        and structural_part is None
+                    )
                     else None
                 )
                 canonical = caption_definition or definitions.get((part, item))
@@ -486,15 +609,15 @@ def _classify_toc_entries(
                 if canonical is None and form.form_type == "10-Q":
                     if part is None:
                         diagnostics.ambiguous_item_classifications.append(context[:300])
-                    continue
                 source_title = source_title_from_context(context, item)
 
+        candidate_key = id(row) if row is not None and item is not None else id(link)
         base_native_id = source_section_id(part, item, source_title)
-        row_key = id(row) if row is not None and item is not None else id(link)
+        row_key = candidate_key
         existing_for_row = source_ids_by_row.get(row_key)
         if existing_for_row is not None:
             native_id = existing_for_row
-        elif item is not None:
+        elif item is not None and part is not None:
             native_id = base_native_id
             source_ids_by_row[row_key] = native_id
         else:
@@ -502,6 +625,7 @@ def _classify_toc_entries(
             source_id_counts[base_native_id] = count
             native_id = base_native_id if count == 1 else f"{base_native_id}_{count}"
             source_ids_by_row[row_key] = native_id
+        detected_outline_entries.setdefault(native_id, context[:300])
         canonical_id = canonical.section_id if canonical is not None else None
         section_id = canonical_id or native_id
         categories = semantic_categories(title=source_title, canonical=canonical)
@@ -511,18 +635,45 @@ def _classify_toc_entries(
         anchor_id = unquote(href[1:]).strip()
         target = soup.find(id=anchor_id) if anchor_id else None
         if not isinstance(target, Tag):
-            if anchor_id and anchor_id not in diagnostics.unresolved_anchor_ids:
-                diagnostics.unresolved_anchor_ids.append(anchor_id)
-            unresolved_id = canonical_id or native_id
-            if unresolved_id not in diagnostics.unresolved_section_ids:
-                diagnostics.unresolved_section_ids.append(unresolved_id)
-            continue
+            recovery = (
+                _recover_missing_toc_target(
+                    soup,
+                    link_position=dom_positions.get(id(link), -1),
+                    expected_item=item,
+                    expected_title=source_title,
+                    dom_positions=dom_positions,
+                )
+                if item is not None
+                else None
+            )
+            if recovery is None:
+                if anchor_id and anchor_id not in diagnostics.unresolved_anchor_ids:
+                    diagnostics.unresolved_anchor_ids.append(anchor_id)
+                unresolved_native_sections[native_id] = canonical_id or native_id
+                candidate_failure_reasons.setdefault(native_id, set()).add(
+                    "missing_anchor_target"
+                )
+                continue
+            missing_anchor_id = anchor_id
+            anchor_id, target = recovery
+            href = f"#{anchor_id}"
+            recovery_record = {
+                "section_id": section_id,
+                "missing_anchor_id": missing_anchor_id,
+                "recovered_anchor_id": anchor_id,
+                "method": "unique_exact_heading_adjacent_anchor",
+            }
+            if recovery_record not in diagnostics.recovered_anchor_targets:
+                diagnostics.recovered_anchor_targets.append(recovery_record)
 
         link_position = dom_positions.get(id(link), -1)
         target_position = dom_positions.get(id(target), -1)
         if target_position <= link_position:
             if anchor_id not in diagnostics.non_forward_anchor_ids:
                 diagnostics.non_forward_anchor_ids.append(anchor_id)
+            candidate_failure_reasons.setdefault(native_id, set()).add(
+                "non_forward_anchor"
+            )
             continue
         diagnostics.valid_anchor_targets += 1
         entry = RecognizedTocEntry(
@@ -546,7 +697,7 @@ def _classify_toc_entries(
             registrant_identity_source=registrant_source,
         )
         priority = (
-            _link_evidence_priority(link, target, item)
+            _link_evidence_priority(link, target, item, source_title)
             if item is not None
             else (
                 0
@@ -570,11 +721,33 @@ def _classify_toc_entries(
                 diagnostics.ambiguous_item_classifications.append(
                     f"{section_id}: {existing.anchor_id}, {anchor_id}"
                 )
+                ambiguous_native_ids.add(native_id)
+                candidate_failure_reasons.setdefault(native_id, set()).add(
+                    "ambiguous_anchor_targets"
+                )
             continue
         entries_by_section[native_id] = entry
         priorities_by_section[native_id] = priority
         targets_by_section[native_id] = target
 
+    extracted_native_ids = set(entries_by_section) - ambiguous_native_ids
+    diagnostics.native_outline_entries_detected = len(detected_outline_entries)
+    diagnostics.native_outline_entries_extracted = len(extracted_native_ids)
+    diagnostics.native_outline_entries_skipped.extend(
+        {
+            "toc_text": context,
+            "reason": ",".join(
+                sorted(candidate_failure_reasons.get(native_id, {"not_selected"}))
+            ),
+        }
+        for native_id, context in detected_outline_entries.items()
+        if native_id not in extracted_native_ids
+    )
+    diagnostics.unresolved_section_ids.extend(
+        section_id
+        for native_id, section_id in unresolved_native_sections.items()
+        if native_id not in entries_by_section
+    )
     entries = sorted(entries_by_section.values(), key=lambda entry: entry.dom_order)
     if diagnostics.unresolved_anchor_ids:
         warnings.append(
@@ -596,10 +769,11 @@ def parse_filing_sections(
     """Parse top-level sections using resolved TOC anchors and physical DOM order.
 
     Document-native titles and boundaries are primary. Canonical SEC Item IDs and
-    semantic categories are optional annotations and do not control success.
+    semantic categories are optional annotations and do not control extraction.
     Success requires a credible TOC with at least the form-specific minimum number
     of forward, resolvable section anchors. Missing targets produce partial output
-    when enough other boundaries remain usable.
+    when no alternate link resolves that same section and enough other boundaries
+    remain usable.
     """
     normalized_form = form_type.strip().upper()
     diagnostics = ParseDiagnostics()
@@ -688,10 +862,18 @@ def parse_filing_sections(
                 parse_warnings,
             )
     if len(entries) < form.minimum_resolved_sections:
+        reason = (
+            FailureReason.AMBIGUOUS_PART_ASSIGNMENT
+            if (
+                normalized_form == "10-Q"
+                and diagnostics.ambiguous_item_classifications
+            )
+            else FailureReason.INSUFFICIENT_SECTION_ANCHORS
+        )
         return _failure(
             file,
             normalized_form,
-            FailureReason.INSUFFICIENT_SECTION_ANCHORS,
+            reason,
             f"Resolved {len(entries)} sections; at least "
             f"{form.minimum_resolved_sections} are required.",
             diagnostics,
@@ -731,7 +913,10 @@ def parse_filing_sections(
         form_type=normalized_form,
         status=(
             ParseStatus.PARTIAL
-            if diagnostics.unresolved_anchor_ids
+            if (
+                diagnostics.unresolved_section_ids
+                or diagnostics.native_outline_entries_skipped
+            )
             else ParseStatus.SUCCESS
         ),
         sections=sections,

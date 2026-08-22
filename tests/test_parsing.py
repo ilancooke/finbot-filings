@@ -23,6 +23,9 @@ def test_normal_10q_distinguishes_parts_and_ignores_non_section_links() -> None:
     assert "part1_item1_financial_statements" in section_ids
     assert "part2_item1_legal_proceedings" in section_ids
     assert all(section.anchor_id != "footnote" for section in result.sections)
+    assert result.diagnostics.native_outline_entries_detected == 11
+    assert result.diagnostics.native_outline_entries_extracted == 11
+    assert result.diagnostics.native_outline_coverage == 1.0
 
 
 def test_text_is_readable_and_hidden_metadata_is_removed() -> None:
@@ -51,6 +54,65 @@ def test_missing_anchor_returns_partial_native_output() -> None:
     assert result.failure_reason is None
     assert "missing-i4" in result.diagnostics.unresolved_anchor_ids
     assert "part1_item4_controls" in result.diagnostics.unresolved_section_ids
+    assert result.diagnostics.native_outline_entries_detected == 7
+    assert result.diagnostics.native_outline_entries_extracted == 6
+    assert result.diagnostics.native_outline_entries_skipped == [
+        {
+            "toc_text": "Item 4. Controls and Procedures",
+            "reason": "missing_anchor_target",
+        }
+    ]
+
+
+def test_10q_preserves_noncanonical_native_items_under_unlinked_part_rows() -> None:
+    html = (FIXTURES / "normal_10q.html").read_text(encoding="utf-8")
+    html = html.replace(
+        '<tr><td><a href="#part-one">Part I — Financial Information</a></td></tr>',
+        '<tr><td>Part I — Financial Information</td></tr>',
+    ).replace(
+        '<tr><td>Item 1. <a href="#financial-statements">Financial Statements</a></td></tr>',
+        """<tr><td>Item 1A. <a href="#group-financials">Condensed Consolidated Financial Statements of Parent Holdings Inc.</a></td></tr>
+        <tr><td><a href="#group-balance-sheets">Condensed Consolidated Balance Sheets</a></td></tr>
+        <tr><td>Item 1B. <a href="#subsidiary-financials">Condensed Consolidated Financial Statements of Operating Subsidiary, Inc.</a></td></tr>""",
+    ).replace(
+        '<h2 id="financial-statements">Item 1. Financial Statements</h2>',
+        """<h2 id="group-financials">Item 1A. Condensed Consolidated Financial Statements of Parent Holdings Inc.</h2>
+        <h3 id="group-balance-sheets">Condensed Consolidated Balance Sheets</h3>
+        <h2 id="subsidiary-financials">Item 1B. Condensed Consolidated Financial Statements of Operating Subsidiary, Inc.</h2>""",
+    )
+
+    result = parse_filing_sections(
+        html.encode(), file=Path("combined-registrant-10q.html"), form_type="10-Q"
+    )
+
+    assert result.status is ParseStatus.SUCCESS
+    assert result.sections_found == 12
+    assert result.canonical_sections_mapped == 10
+    assert result.semantic_only_sections == 2
+    assert result.mapping_status.value == "partial"
+    assert result.diagnostics.native_outline_entries_detected == 12
+    assert result.diagnostics.native_outline_entries_extracted == 12
+    assert all(
+        section.source_title != "Condensed Consolidated Balance Sheets"
+        for section in result.sections
+    )
+    financials = {
+        section.source_section_id: section
+        for section in result.sections
+        if section.source_section_id in {"part1_item1a", "part1_item1b"}
+    }
+    assert set(financials) == {"part1_item1a", "part1_item1b"}
+    assert financials["part1_item1a"].canonical_section_id is None
+    assert financials["part1_item1a"].semantic_categories == (
+        "financial_statements",
+    )
+    assert financials["part1_item1a"].registrant_name == "Parent Holdings Inc"
+    assert financials["part1_item1b"].registrant_name == "Operating Subsidiary, Inc"
+    assert next(
+        section
+        for section in result.sections
+        if section.source_section_id == "part2_item1a"
+    ).canonical_section_id == "part2_item1a_risk_factors"
 
 
 def test_topic_oriented_10k_preserves_native_outline_without_item_mapping() -> None:
@@ -372,6 +434,123 @@ def test_10k_prefers_exact_item_heading_over_earlier_combined_target() -> None:
         if entry.section_id == "item1c_cybersecurity"
     ) == "cybersecurity"
     assert result.diagnostics.ambiguous_item_classifications == []
+
+
+def test_10q_prefers_expected_destination_after_toc_prefix() -> None:
+    html = (FIXTURES / "normal_10q.html").read_text(encoding="utf-8")
+    html = html.replace(
+        '<tr><td>Item 2. <a href="#mda">Management\'s Discussion and Analysis</a></td></tr>',
+        """<tr><td>Item 2.
+          <a href="#market-risk">Item 2.</a>
+          <a href="#mda">Management's Discussion and Analysis</a>
+          <a href="#mda">12</a>
+        </td></tr>""",
+    ).replace(
+        '<h2 id="mda">Item 2. MD&amp;A</h2>',
+        '<h2 id="mda">Table of Contents Item 2. Management\'s Discussion and Analysis</h2>',
+    )
+
+    result = parse_filing_sections(
+        html.encode(), file=Path("nike-tesla-style-10q.html"), form_type="10-Q"
+    )
+
+    assert result.status is ParseStatus.SUCCESS
+    mda = next(
+        entry
+        for entry in result.recognized_toc_entries
+        if entry.section_id == "part1_item2_mda"
+    )
+    assert mda.anchor_id == "mda"
+    assert result.diagnostics.ambiguous_item_classifications == []
+
+
+def test_broken_split_link_is_nonfatal_when_sibling_resolves_section() -> None:
+    html = (FIXTURES / "normal_10q.html").read_text(encoding="utf-8").replace(
+        '<tr><td>Item 4. <a href="#controls">Controls and Procedures</a></td></tr>',
+        """<tr><td>Item 4.
+          <a href="#missing-item-fragment">Item 4.</a>
+          <a href="#controls">Controls and Procedures</a>
+        </td></tr>""",
+    )
+
+    result = parse_filing_sections(
+        html.encode(), file=Path("broken-fragment-10q.html"), form_type="10-Q"
+    )
+
+    assert result.status is ParseStatus.SUCCESS
+    assert "missing-item-fragment" in result.diagnostics.unresolved_anchor_ids
+    assert "part1_item4_controls" not in result.diagnostics.unresolved_section_ids
+    assert any(
+        section.section_id == "part1_item4_controls" for section in result.sections
+    )
+
+
+def test_missing_toc_target_recovers_unique_exact_heading_anchor() -> None:
+    html = (FIXTURES / "normal_10q.html").read_text(encoding="utf-8").replace(
+        '<h2 id="risks">Item 1A. Risk Factors</h2>',
+        '<a id="_opaque-risk-anchor"></a><p>Item 1A. Risk Factors</p>',
+    )
+
+    result = parse_filing_sections(
+        html.encode(), file=Path("amc-style-10q.html"), form_type="10-Q"
+    )
+
+    assert result.status is ParseStatus.SUCCESS
+    risk_factors = next(
+        section
+        for section in result.sections
+        if section.section_id == "part2_item1a_risk_factors"
+    )
+    assert risk_factors.anchor_id == "_opaque-risk-anchor"
+    assert result.diagnostics.unresolved_anchor_ids == []
+    assert result.diagnostics.recovered_anchor_targets == [
+        {
+            "section_id": "part2_item1a_risk_factors",
+            "missing_anchor_id": "risks",
+            "recovered_anchor_id": "_opaque-risk-anchor",
+            "method": "unique_exact_heading_adjacent_anchor",
+        }
+    ]
+
+
+def test_missing_toc_target_does_not_guess_between_exact_headings() -> None:
+    html = (FIXTURES / "normal_10q.html").read_text(encoding="utf-8").replace(
+        '<h2 id="risks">Item 1A. Risk Factors</h2>',
+        """<a id="_first-risk-anchor"></a><p>Item 1A. Risk Factors</p>
+        <p>First risk discussion.</p>
+        <a id="_second-risk-anchor"></a><p>Item 1A. Risk Factors</p>""",
+    )
+
+    result = parse_filing_sections(
+        html.encode(), file=Path("ambiguous-heading-recovery-10q.html"), form_type="10-Q"
+    )
+
+    assert result.status is ParseStatus.PARTIAL
+    assert result.diagnostics.recovered_anchor_targets == []
+    assert "risks" in result.diagnostics.unresolved_anchor_ids
+    assert "part2_item1a_risk_factors" in result.diagnostics.unresolved_section_ids
+
+
+def test_10q_still_fails_when_destinations_have_equal_weak_evidence() -> None:
+    html = (FIXTURES / "normal_10q.html").read_text(encoding="utf-8")
+    html = html.replace(
+        '<tr><td>Item 2. <a href="#mda">Management\'s Discussion and Analysis</a></td></tr>',
+        """<tr><td>Item 2.
+          <a href="#mda-a">Management's Discussion</a>
+          <a href="#mda-b">Results of Operations</a>
+        </td></tr>""",
+    ).replace(
+        '<h2 id="mda">Item 2. MD&amp;A</h2>',
+        """<h2 id="mda-a">Operating overview</h2><p>First candidate.</p>
+        <h2 id="mda-b">Quarterly highlights</h2><p>Second candidate.</p>""",
+    )
+
+    result = parse_filing_sections(
+        html.encode(), file=Path("genuinely-ambiguous-10q.html"), form_type="10-Q"
+    )
+
+    assert result.status is ParseStatus.FAILURE
+    assert result.failure_reason is FailureReason.AMBIGUOUS_ITEM_LINKS
 
 
 def itemless_10k_html(*, business_caption: str = "Business") -> bytes:

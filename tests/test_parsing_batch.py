@@ -67,15 +67,24 @@ def test_batch_writes_section_files_and_inspection_manifest(tmp_path: Path) -> N
     assert summary.failed == 0
     assert summary.complete == 1
     assert summary.native_sections_extracted == 11
+    assert summary.native_outline_entries_detected == 11
+    assert summary.native_outline_entries_extracted == 11
+    assert summary.native_outline_coverage == 100.0
     assert summary.canonical_sections_mapped == 11
     assert summary.semantic_only_sections == 0
     assert summary.completeness_rate == 100.0
-    assert manifest["schema_version"] == 3
+    assert manifest["schema_version"] == 4
     assert manifest["parser"] == "native_toc"
     assert manifest["status"] == "success"
     assert manifest["source_filing_path"] == str(document)
     assert len(manifest["source_sha256"]) == 64
     assert manifest["sections_found"] == 11
+    assert manifest["native_outline"] == {
+        "entries_detected": 11,
+        "entries_extracted": 11,
+        "entries_skipped": [],
+        "coverage": 1.0,
+    }
     assert manifest["canonical_mapping"]["status"] == "complete"
     assert manifest["recognized_toc_entries"][0]["dom_order"] >= 0
     assert all(section["character_count"] > 0 for section in manifest["sections"])
@@ -121,10 +130,13 @@ def test_batch_summary_reports_native_extraction_and_mapping_counts(
     assert summary.complete == 2
     assert summary.completeness_rate == 100.0
     assert summary.native_sections_extracted == 18
+    assert summary.native_outline_entries_detected == 18
+    assert summary.native_outline_entries_extracted == 18
     assert summary.canonical_sections_mapped == 18
     assert "Native extraction rate: 100.0%" in output
     assert "Complete files:        2/2 (100.0%)" in output
     assert "Native sections:       18" in output
+    assert "Native outline coverage: 18/18 (100.0%)" in output
     assert "Exact mappings:        18" in output
 
 

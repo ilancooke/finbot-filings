@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+from types import SimpleNamespace
 
 import pytest
 
 import finbot_filings.cli as cli
 from finbot_filings.cli import build_parser
-from finbot_filings.models import Company
+from finbot_filings.models import Company, Filing
 
 
 def test_cli_rejects_unsupported_form() -> None:
@@ -65,6 +66,87 @@ def test_cli_accepts_parse_section_folders_and_form(tmp_path) -> None:
     assert args.overwrite is True
 
 
+def test_cli_accepts_xbrl_download_options(tmp_path) -> None:
+    args = build_parser().parse_args(
+        [
+            "download-xbrl",
+            "AAPL",
+            "--download-folder",
+            str(tmp_path),
+            "--form",
+            "10-q",
+            "--overwrite",
+        ]
+    )
+    assert args.download_folder == tmp_path
+    assert args.ticker == "AAPL"
+    assert args.form == "10-Q"
+    assert args.overwrite is True
+
+
+def test_cli_dispatches_xbrl_download(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    class Summary:
+        failed = 0
+
+    monkeypatch.setattr(cli, "SECClient", lambda: "client")
+
+    def fake_download(**kwargs):
+        captured.update(kwargs)
+        return Summary()
+
+    monkeypatch.setattr(cli, "download_xbrl_packages", fake_download)
+
+    exit_code = cli.main(
+        ["download-xbrl", "--download-folder", str(tmp_path), "--form", "10-K"]
+    )
+
+    assert exit_code == 0
+    assert captured == {
+        "client": "client",
+        "download_root": tmp_path,
+        "form_type": "10-K",
+        "ticker": None,
+        "overwrite": False,
+    }
+
+
+def test_cli_accepts_xbrl_extract_and_show_options(tmp_path) -> None:
+    extract = build_parser().parse_args(
+        [
+            "extract-xbrl",
+            "aapl",
+            "--form",
+            "10-k",
+            "--download-folder",
+            str(tmp_path / "raw"),
+            "--output-folder",
+            str(tmp_path / "derived"),
+            "--overwrite",
+        ]
+    )
+    assert extract.ticker == "aapl"
+    assert extract.form == "10-K"
+    assert extract.overwrite is True
+
+    show = build_parser().parse_args(
+        [
+            "show-xbrl",
+            "AAPL",
+            "--concept",
+            "Assets",
+            "--format",
+            "json",
+            "--limit",
+            "3",
+        ]
+    )
+    assert show.concept == "Assets"
+    assert show.format == "json"
+    assert show.limit == 3
+
+
 def test_cli_reports_no_matching_filings_as_failure(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -81,3 +163,53 @@ def test_cli_reports_no_matching_filings_as_failure(
 
     assert exit_code == 1
     assert "No exact 10-K filings found for NONE" in caplog.text
+
+
+def test_cli_download_uses_unified_filing_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    filing: Filing,
+) -> None:
+    client = object()
+    captured = {}
+    monkeypatch.setattr(cli, "SECClient", lambda: client)
+    monkeypatch.setattr(cli, "sec_cik_overrides", lambda: {})
+    monkeypatch.setattr(
+        cli,
+        "discover_filings",
+        lambda *args, **kwargs: (
+            Company(filing.ticker, filing.company_name, filing.cik),
+            [filing],
+        ),
+    )
+
+    def fake_bundle(**kwargs):
+        captured.update(kwargs)
+        paths = kwargs["storage"].paths_for(kwargs["filing"])
+        return SimpleNamespace(
+            paths=paths,
+            skipped=False,
+            document_acquisition_method="xbrl_package_member",
+            xbrl_status="downloaded",
+        )
+
+    monkeypatch.setattr(cli, "download_filing_bundle", fake_bundle)
+
+    exit_code = cli.main(
+        [
+            "download",
+            "AAPL",
+            "--form",
+            "10-K",
+            "--count",
+            "1",
+            "--download-folder",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["client"] is client
+    assert captured["filing"] is filing
+    assert captured["storage"].download_folder == tmp_path
+    assert captured["overwrite"] is False

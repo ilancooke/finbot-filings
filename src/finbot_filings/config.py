@@ -9,6 +9,7 @@ from pathlib import Path
 CONFIG_FILE_ENV = "FINBOT_FILINGS_CONFIG"
 DOWNLOAD_FOLDER_ENV = "DOWNLOAD_FOLDER"
 SECTION_FOLDER_ENV = "SECTION_FOLDER"
+XBRL_FOLDER_ENV = "XBRL_FOLDER"
 SEC_USER_AGENT_ENV = "SEC_USER_AGENT"
 SEC_CIK_OVERRIDES_ENV = "SEC_CIK_OVERRIDES"
 PROJECT_CONFIG_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -67,6 +68,11 @@ def download_folder() -> Path:
 def section_folder() -> Path:
     """Resolve SECTION_FOLDER from the environment or package config file."""
     return Path(_required_setting(SECTION_FOLDER_ENV)).expanduser()
+
+
+def xbrl_folder() -> Path:
+    """Resolve XBRL_FOLDER from the environment or package config file."""
+    return Path(_required_setting(XBRL_FOLDER_ENV)).expanduser()
 
 
 def sec_user_agent() -> str:

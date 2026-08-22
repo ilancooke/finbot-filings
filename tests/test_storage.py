@@ -45,6 +45,22 @@ def test_existing_file_is_skipped_by_default(tmp_path: Path, filing: Filing) -> 
     assert second.paths.metadata.read_bytes() == original_metadata
 
 
+def test_metadata_updates_record_document_provenance(
+    tmp_path: Path, filing: Filing
+) -> None:
+    result = LocalFilingStorage(tmp_path).store(
+        filing,
+        b"from package",
+        metadata_updates={
+            "document_acquisition_method": "xbrl_package_member",
+            "document_package_member": filing.primary_document,
+        },
+    )
+    metadata = json.loads(result.paths.metadata.read_text(encoding="utf-8"))
+    assert metadata["document_acquisition_method"] == "xbrl_package_member"
+    assert metadata["document_package_member"] == filing.primary_document
+
+
 def test_overwrite_replaces_document_and_metadata(tmp_path: Path, filing: Filing) -> None:
     moments = iter(
         [

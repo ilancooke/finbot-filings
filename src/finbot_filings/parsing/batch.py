@@ -21,8 +21,8 @@ from finbot_filings.parsing.models import (
 )
 from finbot_filings.parsing.toc import parse_filing_sections
 
-MANIFEST_SCHEMA_VERSION = 3
-PARSER_VERSION = "native-toc-v1"
+MANIFEST_SCHEMA_VERSION = 4
+PARSER_VERSION = "native-toc-v2"
 
 
 @dataclass(slots=True)
@@ -35,6 +35,8 @@ class BatchParseSummary:
     skipped: int = 0
     complete: int = 0
     native_sections_extracted: int = 0
+    native_outline_entries_detected: int = 0
+    native_outline_entries_extracted: int = 0
     canonical_sections_mapped: int = 0
     semantic_only_sections: int = 0
     unmapped_sections: int = 0
@@ -48,6 +50,16 @@ class BatchParseSummary:
     @property
     def completeness_rate(self) -> float:
         return (self.complete / self.processed * 100.0) if self.processed else 0.0
+
+    @property
+    def native_outline_coverage(self) -> float:
+        if self.native_outline_entries_detected == 0:
+            return 0.0
+        return (
+            self.native_outline_entries_extracted
+            / self.native_outline_entries_detected
+            * 100.0
+        )
 
 
 def _atomic_write_text(path: Path, value: str) -> None:
@@ -80,6 +92,12 @@ def _result_manifest(
         "source_extraction_status": result.status.value,
         "sections_found": result.sections_found,
         "native_sections_found": result.sections_found,
+        "native_outline": {
+            "entries_detected": result.diagnostics.native_outline_entries_detected,
+            "entries_extracted": result.diagnostics.native_outline_entries_extracted,
+            "entries_skipped": result.diagnostics.native_outline_entries_skipped,
+            "coverage": result.diagnostics.native_outline_coverage,
+        },
         "canonical_mapping": {
             "status": result.mapping_status.value,
             "exact_mappings": result.canonical_sections_mapped,
@@ -259,6 +277,12 @@ def parse_downloaded_filings(
             output_root=output_root,
             replace_existing=overwrite,
         )
+        summary.native_outline_entries_detected += (
+            result.diagnostics.native_outline_entries_detected
+        )
+        summary.native_outline_entries_extracted += (
+            result.diagnostics.native_outline_entries_extracted
+        )
         if result.status in {ParseStatus.SUCCESS, ParseStatus.PARTIAL}:
             exact = result.canonical_sections_mapped
             semantic_only = result.semantic_only_sections
@@ -301,6 +325,12 @@ def parse_downloaded_filings(
         f"({summary.completeness_rate:.1f}%)"
     )
     printer(f"Native sections:       {summary.native_sections_extracted}")
+    printer(
+        "Native outline coverage: "
+        f"{summary.native_outline_entries_extracted}/"
+        f"{summary.native_outline_entries_detected} "
+        f"({summary.native_outline_coverage:.1f}%)"
+    )
     printer(f"Exact mappings:        {summary.canonical_sections_mapped}")
     printer(f"Semantic-only:         {summary.semantic_only_sections}")
     printer(f"Unmapped sections:     {summary.unmapped_sections}")

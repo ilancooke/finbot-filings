@@ -1,8 +1,45 @@
 # finbot-filings
 
-`finbot-filings` discovers public SEC 10-K and 10-Q filings, stores each filing's original primary HTML document, and deterministically extracts top-level filing sections from usable Table of Contents links. It is a standalone Python 3.12+ package in the Finbot workspace.
+`finbot-filings` acquires public SEC 10-K and 10-Q filings and turns them into two inspectable derived datasets: document-native text sections and normalized XBRL facts. It stores the original primary HTML and SEC-generated XBRL inputs so every derived artifact can be traced back to the downloaded source. It is a standalone Python 3.12+ package in the Finbot workspace.
 
-The package intentionally keeps raw acquisition separate from derived section output. Section parsing uses internal TOC anchors only. Heading-based fallback, semantic summarization, XBRL processing, feature generation, LLMs, databases, AWS, and S3 remain out of scope.
+The package intentionally keeps raw acquisition separate from derived section and fact output. Section discovery is driven by the filing's native linked outline; headings cannot independently create an outline and are used only by a constrained repair for a recognized TOC row with a broken target. Taxonomy-driven canonical fact selection, ratio calculation, semantic summarization, feature generation, LLMs, databases, AWS, and S3 remain out of scope.
+
+## Workflow overview
+
+```text
+SEC ticker map + submissions metadata
+  -> discover                     inspect filing metadata without writing files
+  -> download                     acquire one complete raw filing bundle
+       |
+       +-> parse-sections          write native section text + manifest
+       |
+       +-> inspect-xbrl            validate and inventory raw XBRL inputs
+       +-> extract-xbrl            write normalized facts.parquet + metadata
+              -> show-xbrl         inspect or export selected normalized facts
+```
+
+The workflows have distinct responsibilities:
+
+- **Discovery** resolves a ticker to its SEC CIK and finds exact-form filings from official SEC submissions metadata. It is read-only; `download` performs the same discovery internally before acquisition.
+- **Acquisition** writes durable raw inputs for each accession: primary filing HTML, filing metadata, and SEC XBRL package/instance files when available. `download-xbrl` is a maintenance workflow for backfilling or repairing XBRL inputs on filings already stored locally.
+- **Section extraction** uses the filing's own top-level outline to divide the large HTML document into complete native sections. Canonical IDs and semantic categories are optional routing annotations; they do not control whether source text is retained.
+- **XBRL extraction** inventories every fact in the SEC-generated instance document and writes a versioned Parquet dataset without choosing preferred accounting concepts or calculating ratios.
+- **Inspection** commands expose filing discovery results, raw XBRL inventory, and normalized facts for human review or downstream development.
+
+Section extraction and XBRL extraction are independent branches from the same raw filing bundle. You can run either branch, rerun derived processing without redownloading, or process both before downstream feature generation.
+
+### Typical end-to-end run
+
+Acquire three annual filings for one company, derive their sections and XBRL facts, and inspect selected facts:
+
+```bash
+.venv/bin/finbot-filings download AAPL --form 10-K --count 3
+.venv/bin/finbot-filings parse-sections --form 10-K
+.venv/bin/finbot-filings extract-xbrl AAPL --form 10-K
+.venv/bin/finbot-filings show-xbrl AAPL --form 10-K --concept Assets
+```
+
+`parse-sections` scans every locally downloaded filing matching the form; `extract-xbrl` can target one ticker as shown or omit the ticker to process every matching local filing. Both derived workflows skip existing outputs unless `--overwrite` is supplied.
 
 ## Installation
 
@@ -23,11 +60,12 @@ cp .env.example .env
 ```dotenv
 DOWNLOAD_FOLDER=/absolute/path/to/finbot/data/raw/filings/
 SECTION_FOLDER=/absolute/path/to/finbot/data/filings/sections/
+XBRL_FOLDER=/absolute/path/to/finbot/data/filings/xbrl/
 SEC_USER_AGENT=Finbot your-email@example.com
 SEC_CIK_OVERRIDES=EXAMPLE:123456
 ```
 
-Replace the download folder, section folder, and User-Agent dummy values with real values. Remove the optional example CIK override unless you need a ticker-continuity override. The package reads `SEC_USER_AGENT` from `.env` automatically. A process environment variable with the same name takes precedence. The package has no fabricated fallback identity and exits with a configuration error if this setting is absent. Requests use a 30-second timeout and are limited to at most 10 starts per second by default.
+Replace the download folder, section folder, XBRL folder, and User-Agent dummy values with real values. Remove the optional example CIK override unless you need a ticker-continuity override. The package reads `SEC_USER_AGENT` from `.env` automatically. A process environment variable with the same name takes precedence. The package has no fabricated fallback identity and exits with a configuration error if this setting is absent. Requests use a 30-second timeout and are limited to at most 10 starts per second by default.
 
 ## Discovery
 
@@ -56,11 +94,14 @@ The package-level `.env` configures the download directory and SEC identity:
 ```dotenv
 DOWNLOAD_FOLDER=/Users/ilan/workspace/finbot/data/raw/filings/
 SECTION_FOLDER=/Users/ilan/workspace/finbot/data/filings/sections/
+XBRL_FOLDER=/Users/ilan/workspace/finbot/data/filings/xbrl/
 SEC_USER_AGENT=Finbot your-real-email@example.com
 SEC_CIK_OVERRIDES=XOM:34088
 ```
 
-Process environment variables take precedence over the config file. `--download-folder PATH` can override the configured download path for one command. Existing `filing.html` files are skipped by default. `--overwrite` explicitly replaces both the original document and its metadata. `.env` is ignored by Git; `.env.example` contains only dummy values and is safe to commit.
+Process environment variables take precedence over the config file. `--download-folder PATH` can override the configured download path for one command. `download` acquires a complete filing bundle when SEC XBRL inputs are available: it downloads the accession ZIP and generated instance, copies the ZIP member named by SEC `primaryDocument` to `filing.html`, and retains the original ZIP. This avoids a redundant primary-document request. If no XBRL package exists or the package omits the primary member, it falls back to the official primary-document URL.
+
+A complete existing HTML/XBRL bundle is skipped by default. Partial local state is repaired: existing HTML is preserved while missing XBRL inputs are backfilled, and missing HTML can be recovered from an existing local package. `--overwrite` explicitly reacquires and replaces the complete bundle. `.env` is ignored by Git; `.env.example` contains only dummy values and is safe to commit.
 
 Files use this predictable layout:
 
@@ -70,14 +111,22 @@ Files use this predictable layout:
     ├── 10-K/
     │   └── 0000320193-25-000079/
     │       ├── filing.html
-    │       └── metadata.json
+    │       ├── metadata.json
+    │       └── xbrl/
+    │           ├── package.zip
+    │           ├── instance.xml
+    │           └── metadata.json
     └── 10-Q/
         └── 0000320193-26-000020/
             ├── filing.html
-            └── metadata.json
+            ├── metadata.json
+            └── xbrl/
+                ├── package.zip
+                ├── instance.xml
+                └── metadata.json
 ```
 
-`filing.html` contains the exact response bytes returned by the primary-document URL. `metadata.json` records the company, CIK, form, filing and report dates, accession number, SEC index and document URLs, primary filename, and UTC download time.
+For XBRL-enabled filings, `filing.html` contains the exact primary-document member bytes from `package.zip`. Otherwise it contains the exact primary-document response bytes. `metadata.json` records the company, CIK, form, filing and report dates, accession number, SEC URLs, primary filename, acquisition method, optional package member, and UTC download time.
 
 Only the `TICKER/FORM/ACCESSION` hierarchy is read. The earlier
 `TICKER/ACCESSION` layout is intentionally not migrated or supported; clear the
@@ -96,13 +145,89 @@ JPM
 WMT
 ```
 
-Run the package script from any directory:
+From the package root, run:
 
 ```bash
-repos/finbot-filings/scripts/download_tickers.sh tickers.txt 10-K 3
+scripts/download_tickers.sh tickers.txt 10-K 3
 ```
 
+The script can also be invoked from another directory when both the script and ticker-file paths are adjusted accordingly; it still resolves the package executable and `.env` relative to the script location.
+
 The positional arguments are the ticker file, exact form, and filings per ticker. Form defaults to `10-K` and count defaults to `3`. The script continues when an individual ticker fails, prints a final success/failure summary, and exits nonzero if any ticker failed.
+
+## XBRL package backfill
+
+New `download` operations acquire XBRL automatically. Use `download-xbrl` to backfill filings created by older package versions or to repair only raw XBRL inputs:
+
+```bash
+.venv/bin/finbot-filings download-xbrl --form 10-K
+.venv/bin/finbot-filings download-xbrl --form 10-Q
+.venv/bin/finbot-filings download-xbrl AAPL --form 10-K
+```
+
+The ticker is optional. Without one, the command scans every locally stored filing matching `--form` under `DOWNLOAD_FOLDER`. For each filing, it reads the official SEC accession-directory `index.json`, finds the SEC-generated `-xbrl.zip` package and `_htm.xml` instance, and downloads both. It does not scrape filing pages.
+
+Each package is stored beside its primary filing:
+
+```text
+data/raw/filings/
+└── AAPL/
+    └── 10-Q/
+        └── 0000320193-26-000020/
+            ├── filing.html
+            ├── metadata.json
+            └── xbrl/
+                ├── package.zip
+                ├── instance.xml
+                └── metadata.json
+```
+
+The package contains the Inline XBRL filing and its taxonomy/linkbase resources. The SEC-generated instance is a separate accession-directory file, stored locally as `instance.xml`. Acquisition metadata records both original SEC filenames and URLs, SHA-256 checksums, byte and member counts, and the UTC download time. The archive is validated but preserved unmodified.
+
+Do not manually unzip the archive for normal processing. Inventory and future taxonomy/linkbase enrichment read members directly from `package.zip` so the extracted files are not duplicated on disk.
+
+Complete package/instance/metadata sets are skipped by default. Existing downloads created before `instance.xml` support are repaired by rerunning the command; `--overwrite` is not required. Use `--overwrite` to download a complete set again, or `--download-folder PATH` to override `DOWNLOAD_FOLDER`. A filing for which the SEC lists no `-xbrl.zip` is reported as `NO-XBRL` and does not fail the batch; invalid metadata, SEC request errors, invalid archives, and invalid instance XML do.
+
+## XBRL fact extraction
+
+Inspect raw XBRL inputs without writing derived data:
+
+```bash
+.venv/bin/finbot-filings inspect-xbrl AAPL --form 10-K
+```
+
+Normalize one company or every matching local filing into Parquet:
+
+```bash
+.venv/bin/finbot-filings extract-xbrl AAPL --form 10-K
+.venv/bin/finbot-filings extract-xbrl --form 10-Q
+```
+
+The extractor reads `DOWNLOAD_FOLDER` and writes `facts.parquet` plus `metadata.json` beneath `XBRL_FOLDER`:
+
+```text
+data/filings/xbrl/
+└── AAPL/
+    └── 10-K/
+        └── 0000320193-25-000079/
+            ├── facts.parquet
+            └── metadata.json
+```
+
+The versioned fact schema captures every standard or filer-extension concept dynamically. It preserves exact value text, concept QName, entity, instant or duration period, unit, explicit or typed dimensions, decimals/precision, nil status, language, document order, and source provenance. Numeric values remain exact strings rather than floating-point values. Equivalent duplicate facts receive stable group IDs and counts but are not discarded or preferred automatically.
+
+Existing complete outputs are skipped unless `--overwrite` is supplied. `--download-folder` and `--output-folder` provide one-command overrides.
+
+Inspect or export normalized facts without converting the durable dataset:
+
+```bash
+.venv/bin/finbot-filings show-xbrl AAPL --form 10-K --concept Assets
+.venv/bin/finbot-filings show-xbrl AAPL --form 10-K --concept Assets --format json
+.venv/bin/finbot-filings show-xbrl AAPL --form 10-K --concept Assets \
+  --format csv --output /tmp/aapl-assets.csv
+```
+
+`--concept` accepts a local name such as `Assets` or a prefixed name such as `us-gaap:Assets`. Use `--accession` to select one filing and `--limit` to bound diagnostic output. Canonical concept mapping and ratio construction belong in `finbot-features`, where the desired period, dimensions, and accounting meaning are known.
 
 ## Deterministic section extraction
 
@@ -130,24 +255,26 @@ The command reads `DOWNLOAD_FOLDER` and writes to `SECTION_FOLDER`. Explicit pat
 
 Existing manifests are skipped unless `--overwrite` is supplied. A batch exits nonzero when at least one processed filing fails.
 Run with `--overwrite` once after upgrading so each filing receives a
-schema-version 3 section-only manifest. Overwrite also removes any `chunks/`
+schema-version 4 section-only manifest with native-outline coverage. Overwrite also removes any `chunks/`
 directories produced by the retired schema-version 2 workflow.
 
 ### Parsing method
 
-The `native-toc-v1` parser:
+The `native-toc-v2` parser:
 
-1. Locates the filing's primary table-based outline using forward internal links. Ordinary Item and note cross-references elsewhere in the filing are excluded.
+1. Locates the filing's primary table-based outline using forward internal links, then reads every row in that selected table so unlinked Part I/Part II markers are retained as structural context. Ordinary Item and note cross-references elsewhere in the filing are excluded.
 2. Preserves each outline entry's document-native title, anchor, and physical order. Item labels such as `Item 1 C.` are normalized only for stable IDs and optional mappings.
-3. Supports both conventional SEC Item outlines and topic-oriented outlines such as Intel's. Multiple native sections in one row or nonstandard Items such as AAL Items 8A and 8B remain separate.
-4. Requires each accepted link to resolve to an exact, forward HTML `id` target.
-5. Resolves conflicting Item links using destination and link-text evidence, without treating page-number links as independent section definitions.
+3. Supports both conventional SEC Item outlines and topic-oriented outlines such as Intel's. Structurally valid native Items are extracted even without a canonical definition; multiple native sections in one row and nonstandard Items such as AAL 10-Q Items 1A/1B and 10-K Items 8A/8B remain separate.
+4. Requires each accepted link to resolve to an exact, forward HTML `id` target. When a recognized TOC target is missing, a constrained repair may use a unique exact Item-and-caption heading only when that heading has an ID or is immediately preceded by an empty ID-bearing anchor; the recovery is recorded in diagnostics.
+5. Resolves conflicting Item links using destination Item/caption evidence and link-text evidence. A leading `Table of Contents` label at the destination is treated as presentation text, and page-number links do not independently define sections.
 6. Sorts resolved targets by physical DOM position and extracts normalized visible text from each target to the next physical target.
 7. Adds a canonical SEC section ID only when the Item/Part mapping is deterministic. Otherwise it may add conservative semantic categories while retaining the native section unchanged.
 
 If standard TOC discovery finds no region, a 10-K-only fallback can recognize rows that omit the word `Item`, such as `1 Business`. The fallback activates only when one table contains at least eight distinct canonical sections including Items 1, 1A, 7, and 8; every accepted row must begin with a valid Item token, have a compatible canonical caption, end with a numeric page reference, and link forward to a destination beginning with the exact expected Item heading. Successful use is recorded as `itemless_toc_fallback_used` in diagnostics.
 
-The parser does not inspect headings as a fallback and does not invoke an LLM.
+The parser does not use headings to discover a filing outline and does not invoke
+an LLM. Exact headings are considered only to repair a missing target from an
+already recognized TOC row under the constraints above.
 Canonical mapping completeness is not a condition of successful source extraction.
 
 Materially complex filing layouts and possible deterministic or LLM-assisted recovery paths are tracked in [Complex Filing Layouts and Recovery Registry](docs/parser-limitations.md).
@@ -156,10 +283,15 @@ Materially complex filing layouts and possible deterministic or LLM-assisted rec
 
 Source extraction and canonical mapping are reported independently:
 
-- `success` means the primary outline was extracted with no unresolved accepted anchors.
-- `partial` means usable native sections were written but one or more accepted anchors could not be resolved.
+- `success` means every recognized native section in the primary outline has a resolved boundary. A broken redundant link fragment remains visible in diagnostics but is nonfatal when another link in the same TOC row resolves that section.
+- `partial` means usable native sections were written but one or more recognized sections have no resolvable anchor candidate.
 - `failure` means the parser could not establish a credible source outline.
 - Canonical mapping is separately `complete`, `partial`, or `none` and never changes a successful source extraction into a failure.
+
+Schema-version 4 manifests also report every detected top-level native outline
+entry as extracted or skipped with a reason. Complete extraction requires 100%
+native-outline coverage; semantic or canonical mapping completeness is not part
+of that decision.
 
 At least six native sections are required for a 10-Q and eight for a 10-K. These
 minimums reject incidental link clusters; they do not require a fixed canonical
@@ -185,6 +317,7 @@ Skipped:              0
 Native extraction rate: 66.7%
 Complete files:        2/3 (66.7%)
 Native sections:       35
+Native outline coverage: 35/35 (100.0%)
 Exact mappings:        11
 Semantic-only:         7
 Unmapped sections:     17
@@ -209,9 +342,10 @@ data/filings/sections/
             └── manifest.json
 ```
 
-Schema-version 3 manifests contain source provenance, parser version, extraction
-status, native titles and IDs, anchors, physical ordering, optional canonical IDs,
-semantic categories, explicit registrant-caption evidence, and section files.
+Schema-version 4 manifests contain source provenance, parser version, extraction
+status, native-outline coverage and row dispositions, native titles and IDs,
+anchors, physical ordering, optional canonical IDs, semantic categories,
+explicit registrant-caption evidence, and section files.
 Failed filings receive a diagnostic manifest but no fabricated text.
 
 Downstream feature code should read the manifest, select relevant native sections
@@ -235,8 +369,10 @@ The normal test suite uses fake SEC responses and does not require network acces
 - Only exact forms `10-K` and `10-Q` are supported.
 - There is no date-range filtering.
 - Local filesystem storage is the only storage implementation.
-- Section parsing requires a distinguishable TOC region with usable internal anchors and fails instead of falling back to headings.
+- Section parsing requires a distinguishable TOC region with usable internal anchors. Headings cannot create an outline; they can only repair a recognized missing TOC target under the unique exact-heading rule.
 - Some filings contain ambiguous duplicate links, backward-only cross-links, missing anchor targets, or no link-based TOC and will fail deliberately.
+- Material without its own top-level outline entry is still retained between adjacent boundaries. Trailing material such as signatures is therefore included in the final native section, and an unlinked or noncontiguous appendix may not be assigned to its semantic owner.
 - Noncontiguous canonical Item reconstruction is not attempted; native topic sections remain available instead. Complex cases are documented in [the parser limitations registry](docs/parser-limitations.md).
 - Section text is normalized for readability but tables are flattened to text; semantic table reconstruction is not attempted.
+- XBRL facts are normalized from the SEC-generated instance, but taxonomy labels, presentation networks, calculation relationships, and canonical financial-concept selection are not yet materialized.
 - Feature extraction, LLM calls, and semantic summarization are intentionally out of scope.

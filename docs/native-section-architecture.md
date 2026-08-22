@@ -41,9 +41,14 @@ Each section records:
 - zero or more conservative `semantic_categories`;
 - a registrant name only when the section caption explicitly supplies it.
 
-AAL Items 8A and 8B therefore remain two independent source sections. Their
-captions provide registrant-name evidence, but this package does not infer
-`registrant_role` or choose a ticker-default section.
+Extraction eligibility is structural, not canonical. Every top-level entry in
+the selected native outline must either produce a section or receive an explicit
+skipped disposition in the manifest. Canonical IDs and semantic categories are
+best-effort routing annotations and never determine whether source text is kept.
+
+AAL 10-Q Items 1A and 1B and 10-K Items 8A and 8B therefore remain independent
+source sections. Their captions provide registrant-name evidence, but this
+package does not infer `registrant_role` or choose a ticker-default section.
 
 ## Deferred splitting
 

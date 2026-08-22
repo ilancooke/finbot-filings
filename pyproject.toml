@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.12,<5",
     "lxml>=5,<7",
+    "pyarrow>=15",
     "requests>=2.32,<3",
 ]
 

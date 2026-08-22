@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Mapping
 
 from finbot_filings.layout import filing_directory
 from finbot_filings.models import Filing
@@ -52,15 +52,26 @@ class LocalFilingStorage:
     def exists(self, filing: Filing) -> bool:
         return self.paths_for(filing).document.exists()
 
+    def is_complete(self, filing: Filing) -> bool:
+        paths = self.paths_for(filing)
+        return paths.document.exists() and paths.metadata.exists()
+
     def store(
-        self, filing: Filing, document_bytes: bytes, *, overwrite: bool = False
+        self,
+        filing: Filing,
+        document_bytes: bytes,
+        *,
+        overwrite: bool = False,
+        metadata_updates: Mapping[str, Any] | None = None,
     ) -> StoreResult:
         paths = self.paths_for(filing)
-        if paths.document.exists() and not overwrite:
+        if paths.document.exists() and paths.metadata.exists() and not overwrite:
             return StoreResult(paths=paths, written=False)
 
         paths.directory.mkdir(parents=True, exist_ok=True)
         metadata = filing.to_dict()
+        if metadata_updates:
+            metadata.update(metadata_updates)
         metadata["downloaded_at"] = self._now().astimezone(timezone.utc).isoformat()
 
         document_temp = paths.directory / ".filing.html.tmp"

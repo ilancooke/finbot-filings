@@ -7,17 +7,22 @@ import logging
 from pathlib import Path
 from typing import NoReturn, Sequence
 
+from finbot_filings.acquisition import download_filing_bundle
 from finbot_filings.config import (
     ConfigurationError,
     download_folder,
     sec_cik_overrides,
     section_folder,
+    xbrl_folder,
 )
 from finbot_filings.models import Filing
 from finbot_filings.parsing.batch import parse_downloaded_filings
 from finbot_filings.sec.client import SECClient, SECError
 from finbot_filings.sec.filings import discover_filings, validate_count, validate_form
 from finbot_filings.storage.local import LocalFilingStorage
+from finbot_filings.xbrl.download import download_xbrl_packages
+from finbot_filings.xbrl.extract import extract_xbrl_filings, inspect_xbrl_filings
+from finbot_filings.xbrl.query import show_xbrl_facts
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_COUNT = 5
@@ -71,6 +76,46 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parse_command.add_argument("--form", type=_supported_form)
     parse_command.add_argument("--overwrite", action="store_true")
+    xbrl_command = subparsers.add_parser(
+        "download-xbrl",
+        help="download SEC XBRL packages and generated instances",
+    )
+    xbrl_command.add_argument("ticker", nargs="?")
+    xbrl_command.add_argument(
+        "--download-folder",
+        type=Path,
+        help="download root (default: DOWNLOAD_FOLDER)",
+    )
+    xbrl_command.add_argument("--form", type=_supported_form)
+    xbrl_command.add_argument("--overwrite", action="store_true")
+    inspect_command = subparsers.add_parser(
+        "inspect-xbrl",
+        help="validate and inventory downloaded XBRL inputs",
+    )
+    inspect_command.add_argument("ticker", nargs="?")
+    inspect_command.add_argument("--form", type=_supported_form)
+    inspect_command.add_argument("--download-folder", type=Path)
+    extract_command = subparsers.add_parser(
+        "extract-xbrl",
+        help="normalize downloaded XBRL instances into Parquet facts",
+    )
+    extract_command.add_argument("ticker", nargs="?")
+    extract_command.add_argument("--form", type=_supported_form)
+    extract_command.add_argument("--download-folder", type=Path)
+    extract_command.add_argument("--output-folder", type=Path)
+    extract_command.add_argument("--overwrite", action="store_true")
+    show_command = subparsers.add_parser(
+        "show-xbrl",
+        help="display or export normalized XBRL facts",
+    )
+    show_command.add_argument("ticker")
+    show_command.add_argument("--form", type=_supported_form)
+    show_command.add_argument("--accession")
+    show_command.add_argument("--concept")
+    show_command.add_argument("--format", choices=("table", "json", "csv"), default="table")
+    show_command.add_argument("--limit", type=_positive_count, default=50)
+    show_command.add_argument("--output", type=Path)
+    show_command.add_argument("--xbrl-folder", type=Path)
     return parser
 
 
@@ -103,6 +148,49 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 1 if summary.failed else 0
 
+        if args.command == "download-xbrl":
+            summary = download_xbrl_packages(
+                client=SECClient(),
+                download_root=args.download_folder or download_folder(),
+                form_type=args.form,
+                ticker=args.ticker,
+                overwrite=args.overwrite,
+            )
+            return 1 if summary.failed else 0
+
+        if args.command == "inspect-xbrl":
+            inspected = inspect_xbrl_filings(
+                download_root=args.download_folder or download_folder(),
+                ticker=args.ticker,
+                form_type=args.form,
+            )
+            if inspected == 0:
+                print("No matching downloaded XBRL filings found.")
+            return 0
+
+        if args.command == "extract-xbrl":
+            summary = extract_xbrl_filings(
+                download_root=args.download_folder or download_folder(),
+                output_root=args.output_folder or xbrl_folder(),
+                ticker=args.ticker,
+                form_type=args.form,
+                overwrite=args.overwrite,
+            )
+            return 1 if summary.failed else 0
+
+        if args.command == "show-xbrl":
+            shown = show_xbrl_facts(
+                xbrl_root=args.xbrl_folder or xbrl_folder(),
+                ticker=args.ticker,
+                form_type=args.form,
+                accession_number=args.accession,
+                concept=args.concept,
+                output_format=args.format,
+                limit=args.limit,
+                output_path=args.output,
+            )
+            return 0 if shown else 1
+
         client = SECClient()
         ticker = args.ticker.strip().upper()
         company, filings = discover_filings(
@@ -125,21 +213,25 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         storage = LocalFilingStorage(args.download_folder or download_folder())
         for filing in filings:
-            if storage.exists(filing) and not args.overwrite:
-                print("Skipped existing:")
-                print(
-                    f"{filing.ticker} {filing.form} filed "
-                    f"{filing.filing_date.isoformat()}"
-                )
-                continue
-            document = client.get_bytes(filing.document_url)
-            result = storage.store(filing, document, overwrite=args.overwrite)
-            print("Downloaded:")
+            result = download_filing_bundle(
+                client=client,
+                filing=filing,
+                storage=storage,
+                overwrite=args.overwrite,
+            )
+            if result.skipped:
+                print("Skipped complete filing bundle:")
+            else:
+                print("Acquired filing bundle:")
             print(
                 f"{filing.ticker} {filing.form} filed "
                 f"{filing.filing_date.isoformat()}"
             )
-            print(result.paths.document)
+            print(
+                f"HTML: {result.document_acquisition_method} — "
+                f"{result.paths.document}"
+            )
+            print(f"XBRL: {result.xbrl_status}")
         return 0
     except (ConfigurationError, SECError, OSError, ValueError) as exc:
         LOGGER.error("%s", exc)

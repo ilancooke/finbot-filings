@@ -77,12 +77,25 @@ class ParseDiagnostics:
     internal_links_inspected: int = 0
     item_links_classified: int = 0
     valid_anchor_targets: int = 0
+    native_outline_entries_detected: int = 0
+    native_outline_entries_extracted: int = 0
+    native_outline_entries_skipped: list[dict[str, str]] = field(default_factory=list)
+    recovered_anchor_targets: list[dict[str, str]] = field(default_factory=list)
     unresolved_anchor_ids: list[str] = field(default_factory=list)
     unresolved_section_ids: list[str] = field(default_factory=list)
     non_forward_anchor_ids: list[str] = field(default_factory=list)
     ambiguous_item_classifications: list[str] = field(default_factory=list)
     caption_based_part_assignments: list[str] = field(default_factory=list)
     unmapped_reference_sections: list[str] = field(default_factory=list)
+
+    @property
+    def native_outline_coverage(self) -> float:
+        if self.native_outline_entries_detected == 0:
+            return 0.0
+        return (
+            self.native_outline_entries_extracted
+            / self.native_outline_entries_detected
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +104,11 @@ class ParseDiagnostics:
             "internal_links_inspected": self.internal_links_inspected,
             "item_links_classified": self.item_links_classified,
             "valid_anchor_targets": self.valid_anchor_targets,
+            "native_outline_entries_detected": self.native_outline_entries_detected,
+            "native_outline_entries_extracted": self.native_outline_entries_extracted,
+            "native_outline_entries_skipped": self.native_outline_entries_skipped,
+            "native_outline_coverage": self.native_outline_coverage,
+            "recovered_anchor_targets": self.recovered_anchor_targets,
             "unresolved_anchor_ids": self.unresolved_anchor_ids,
             "unresolved_section_ids": self.unresolved_section_ids,
             "non_forward_anchor_ids": self.non_forward_anchor_ids,

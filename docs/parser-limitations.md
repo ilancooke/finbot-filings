@@ -26,9 +26,18 @@ its input section IDs and ranges, model, prompt version, method, and review stat
 
 ## Active source-extraction cases
 
-There are no active failures in the current sample corpus. This is not evidence
-that every SEC filing layout is supported; new failures should be added here only
-after their structure has been inspected.
+### Celestica trailing financial-statement appendix
+
+- **Ticker:** `CLS`
+- **Accession:** `0001030894-25-000014`
+- **Native outline:** Complete — 23 linked Items
+- **Section assignment:** Incomplete
+
+Item 8 contains a linked index of financial statements, while the actual F-pages
+appear after Item 16 and the signature material without another top-level TOC
+boundary. The text is retained but is currently absorbed into Item 16. This is a
+separate noncontiguous/trailing-material problem; 100% linked-outline coverage
+does not prove that an unlinked appendix is assigned to its semantic owner.
 
 ## Deferred canonical reconstruction
 
@@ -70,14 +79,49 @@ Both are preserved with their native IDs and caption-derived registrant names.
 Neither is falsely aliased to canonical Item 8, combined, assigned a registrant
 role, or designated as the ticker default.
 
+### American Airlines combined Form 10-Q
+
+- **Ticker:** `AAL`
+- **Accessions:** `0000006201-25-000052`, `0000006201-26-000032`, `0000006201-26-000052`
+- **Source extraction:** Resolved — 9 native sections each
+- **Canonical mapping:** Partial — 7 exact and 2 semantic-only sections each
+
+Each filing uses Part I Item 1A for American Airlines Group Inc. financial
+statements and Part I Item 1B for American Airlines, Inc. financial statements.
+The native parser reads unlinked Part markers from the selected TOC table and
+retains both structurally valid noncanonical Items. Their direct anchors define
+exact boundaries, their titles supply registrant-name evidence, and both receive
+the `financial_statements` semantic category without being forced into canonical
+Part I Item 1.
+
 Other resolved layout variations enforced by tests include:
 
 - conflicting numeric-only TOC links, as seen in AMD;
 - filing-body cross-references mistaken for TOC links, as seen in Walmart and Exxon;
 - split Item suffixes and fragmented link text, as seen in Tesla and JPM;
+- split TOC rows whose Item fragment points elsewhere while the title/page links
+  reach the correct destination, including destination headings prefixed by
+  `Table of Contents`, as seen in Nike and Tesla;
+- broken redundant link fragments when a sibling link in the same row still
+  resolves the section; the broken IDs remain recorded in diagnostics;
 - explanatory TOC prose that mentions an Item, as seen in Nike;
 - Item-less but strongly validated TOCs, as seen in Johnson & Johnson;
 - two-column topic outlines with multiple independent links per row, as seen in JPM.
+
+### AMC broken Item 1A TOC targets
+
+- **Ticker:** `AMC`
+- **Accessions:** `0001411579-25-000073`, `0001411579-26-000059`
+- **Source extraction:** Resolved — 11 native sections each
+- **Canonical mapping:** Complete
+
+Both filings link the Item 1A TOC row to `#Item1ARiskFactors`, but omit that ID
+from the document body. Each body contains one exact `Item 1A. Risk Factors`
+heading immediately preceded by a unique opaque empty anchor. The constrained
+missing-target recovery uses that anchor and records the broken ID, recovered ID,
+section ID, and recovery method in `recovered_anchor_targets` diagnostics. It
+does not activate when headings are non-exact, lack an adjacent anchor, or produce
+more than one candidate.
 
 ## Case template
 
@@ -109,13 +153,10 @@ Required provenance or review:
 
 ## Current corpus snapshot
 
-As of 2026-08-21, the downloaded development corpus produces:
-
-- 15 of 15 successful 10-Q source extractions, totaling 153 native sections.
-- 29 of 29 successful 10-K source extractions, totaling 689 native sections.
-- No partial or failed source extractions.
-
-The 10-K native sections include 573 exact canonical mappings, 20 semantic-only
-annotations, and 96 unmapped sections. These annotation counts are intentionally
-reported separately from source-extraction success. This small corpus is a
-regression sample, not an estimate of performance across all SEC filings.
+As of 2026-08-22, all 113 filings in the downloaded development corpus complete
+source extraction with 100% native-outline coverage, totaling 1,896 native
+sections. The outputs contain 1,654 exact canonical mappings, 59 semantic-only
+annotations, and 183 unmapped
+sections. These annotation counts are intentionally reported separately from
+source-extraction success. This small corpus is a regression sample, not an
+estimate of performance across all SEC filings.
