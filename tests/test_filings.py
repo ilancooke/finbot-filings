@@ -108,6 +108,68 @@ def test_parse_recent_rejects_misaligned_parallel_arrays(company: Company) -> No
         parse_recent_filings(company, payload)
 
 
+def test_discovery_ignores_empty_primary_document_on_unrequested_form(
+    company: Company,
+) -> None:
+    submissions_url = SUBMISSIONS_URL_TEMPLATE.format(cik=company.cik)
+    payload = recent_payload()
+    payload["accessionNumber"].append("0000320193-00-000001")
+    payload["filingDate"].append("2000-05-09")
+    payload["reportDate"].append("")
+    payload["form"].append("SC 13G")
+    payload["primaryDocument"].append("")
+    client = StubClient(
+        {
+            TICKER_MAPPING_URL: {
+                "0": {"cik_str": company.cik, "ticker": "AAPL", "title": company.name}
+            },
+            submissions_url: {"name": company.name, "filings": {"recent": payload}},
+        }
+    )
+
+    _, filings = discover_filings(client, "AAPL", "10-K", 1)
+
+    assert len(filings) == 1
+    assert filings[0].form == "10-K"
+
+
+def test_cik_override_keeps_ticker_and_uses_submission_company_name() -> None:
+    override_cik = 34088
+    submissions_url = SUBMISSIONS_URL_TEMPLATE.format(cik=override_cik)
+    client = StubClient(
+        {
+            TICKER_MAPPING_URL: {
+                "0": {
+                    "cik_str": 2115436,
+                    "ticker": "XOM",
+                    "title": "ExxonMobil Holdings Corp",
+                }
+            },
+            submissions_url: {
+                "name": "EXXON MOBIL CORP",
+                "filings": {
+                    "recent": {
+                        "accessionNumber": ["0000034088-26-000045"],
+                        "filingDate": ["2026-02-18"],
+                        "reportDate": ["2025-12-31"],
+                        "form": ["10-K"],
+                        "primaryDocument": ["xom-20251231.htm"],
+                    }
+                },
+            },
+        }
+    )
+
+    company, filings = discover_filings(
+        client, "XOM", "10-K", 1, cik_override=override_cik
+    )
+
+    assert company == Company("XOM", "EXXON MOBIL CORP", override_cik)
+    assert filings[0].ticker == "XOM"
+    assert filings[0].company_name == "EXXON MOBIL CORP"
+    assert filings[0].cik == override_cik
+
+
 def test_exact_10k_selection_excludes_amendment_and_sorts_by_filing_date(
     company: Company,
 ) -> None:

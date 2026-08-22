@@ -90,7 +90,9 @@ def historical_submissions_url(filename: str) -> str:
     return f"{SUBMISSIONS_BASE_URL}/{quote(normalized, safe='._-')}"
 
 
-def resolve_company(client: SECClient, ticker: str) -> Company:
+def resolve_company(
+    client: SECClient, ticker: str, *, cik_override: int | None = None
+) -> Company:
     normalized_ticker = normalize_ticker(ticker)
     payload = client.get_json(TICKER_MAPPING_URL)
     if not isinstance(payload, Mapping):
@@ -105,7 +107,7 @@ def resolve_company(client: SECClient, ticker: str) -> Company:
                 return Company(
                     ticker=mapped_ticker,
                     name=str(raw_company["title"]).strip(),
-                    cik=int(raw_company["cik_str"]),
+                    cik=cik_override or int(raw_company["cik_str"]),
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 raise SECDataError(
@@ -119,6 +121,7 @@ def parse_filing_arrays(
     filing_arrays: Mapping[str, Any],
     *,
     source: str,
+    requested_form: str | None = None,
 ) -> list[Filing]:
     """Convert SEC column-oriented filing arrays into typed filing records."""
     required_columns = (
@@ -141,12 +144,14 @@ def parse_filing_arrays(
 
     filings: list[Filing] = []
     for index in range(next(iter(lengths), 0)):
+        form = str(columns["form"][index]).strip()
+        if requested_form is not None and form != requested_form:
+            continue
         try:
             accession = str(columns["accessionNumber"][index]).strip()
             filing_date = date.fromisoformat(str(columns["filingDate"][index]))
             report_date_text = str(columns["reportDate"][index]).strip()
             report_date = date.fromisoformat(report_date_text) if report_date_text else None
-            form = str(columns["form"][index]).strip()
             primary_document = str(columns["primaryDocument"][index]).strip()
             filings.append(
                 Filing(
@@ -232,22 +237,39 @@ def select_filings(filings: Sequence[Filing], form: str, count: int) -> list[Fil
 
 
 def discover_filings(
-    client: SECClient, ticker: str, form: str, count: int = 5
+    client: SECClient,
+    ticker: str,
+    form: str,
+    count: int = 5,
+    *,
+    cik_override: int | None = None,
 ) -> tuple[Company, list[Filing]]:
     """Return filings, loading referenced history only when recent data is short."""
     requested_form = validate_form(form)
     validate_count(count)
-    company = resolve_company(client, ticker)
+    company = resolve_company(client, ticker, cik_override=cik_override)
     payload = client.get_json(SUBMISSIONS_URL_TEMPLATE.format(cik=company.cik))
     if not isinstance(payload, Mapping):
         raise SECDataError("SEC submissions response must be a JSON object")
+    submission_name = str(payload.get("name", "")).strip()
+    if submission_name:
+        company = Company(
+            ticker=company.ticker,
+            name=submission_name,
+            cik=company.cik,
+        )
     filings_object = payload.get("filings")
     if not isinstance(filings_object, Mapping):
         raise SECDataError("SEC submissions response is missing filings")
     recent = filings_object.get("recent")
     if not isinstance(recent, Mapping):
         raise SECDataError("SEC submissions response is missing filings.recent")
-    discovered = parse_recent_filings(company, recent)
+    discovered = parse_filing_arrays(
+        company,
+        recent,
+        source="filings.recent",
+        requested_form=requested_form,
+    )
     selected = select_filings(discovered, requested_form, count)
     if len(selected) >= count:
         return company, selected
@@ -265,6 +287,7 @@ def discover_filings(
                 company,
                 historical_payload,
                 source=reference.name,
+                requested_form=requested_form,
             )
         )
         discovered = _deduplicate_filings(discovered)

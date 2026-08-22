@@ -4,11 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "finbot-filings"
-version = "0.1.0"
-description = "Discover and download public SEC filings for Finbot"
+version = "0.2.0"
+description = "Discover, download, and deterministically parse public SEC filings"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "beautifulsoup4>=4.12,<5",
+    "lxml>=5,<7",
     "requests>=2.32,<3",
 ]
 
@@ -25,4 +27,3 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-

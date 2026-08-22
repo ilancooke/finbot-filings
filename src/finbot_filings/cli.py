@@ -7,8 +7,15 @@ import logging
 from pathlib import Path
 from typing import NoReturn, Sequence
 
-from finbot_filings.config import ConfigurationError, download_folder
+from finbot_filings.config import (
+    ConfigurationError,
+    download_folder,
+    sec_cik_overrides,
+    section_folder,
+)
 from finbot_filings.models import Filing
+from finbot_filings.parsing.batch import parse_downloaded_filings
+from finbot_filings.parsing.chunking import DEFAULT_MAX_CHARS, DEFAULT_OVERLAP_CHARS
 from finbot_filings.sec.client import SECClient, SECError
 from finbot_filings.sec.filings import discover_filings, validate_count, validate_form
 from finbot_filings.storage.local import LocalFilingStorage
@@ -49,6 +56,34 @@ def build_parser() -> argparse.ArgumentParser:
                 help="override DOWNLOAD_FOLDER from the package config file",
             )
             command.add_argument("--overwrite", action="store_true")
+    parse_command = subparsers.add_parser(
+        "parse-sections",
+        help="extract top-level sections using internal TOC anchors",
+    )
+    parse_command.add_argument(
+        "--input-folder",
+        type=Path,
+        help="download root (default: DOWNLOAD_FOLDER)",
+    )
+    parse_command.add_argument(
+        "--output-folder",
+        type=Path,
+        help="section output root (default: SECTION_FOLDER)",
+    )
+    parse_command.add_argument("--form", type=_supported_form)
+    parse_command.add_argument("--overwrite", action="store_true")
+    parse_command.add_argument(
+        "--max-chunk-chars",
+        type=_positive_count,
+        default=DEFAULT_MAX_CHARS,
+        help="maximum characters per oversized section chunk",
+    )
+    parse_command.add_argument(
+        "--chunk-overlap-chars",
+        type=int,
+        default=DEFAULT_OVERLAP_CHARS,
+        help="overlapping characters between adjacent chunks",
+    )
     return parser
 
 
@@ -72,10 +107,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
     try:
+        if args.command == "parse-sections":
+            summary = parse_downloaded_filings(
+                input_root=args.input_folder or download_folder(),
+                output_root=args.output_folder or section_folder(),
+                form_type=args.form,
+                overwrite=args.overwrite,
+                max_chunk_chars=args.max_chunk_chars,
+                chunk_overlap_chars=args.chunk_overlap_chars,
+            )
+            return 1 if summary.failed else 0
+
         client = SECClient()
+        ticker = args.ticker.strip().upper()
         company, filings = discover_filings(
-            client, args.ticker, form=args.form, count=args.count
+            client,
+            ticker,
+            form=args.form,
+            count=args.count,
+            cik_override=sec_cik_overrides().get(ticker),
         )
+        if not filings:
+            LOGGER.error(
+                "No exact %s filings found for %s after searching available SEC history.",
+                args.form,
+                ticker,
+            )
+            return 1
         if args.command == "discover":
             _print_discovery(company.name, company.ticker, filings)
             return 0
@@ -98,7 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(result.paths.document)
         return 0
-    except (ConfigurationError, SECError, OSError) as exc:
+    except (ConfigurationError, SECError, OSError, ValueError) as exc:
         LOGGER.error("%s", exc)
         return 1
 
