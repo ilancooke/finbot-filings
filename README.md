@@ -28,6 +28,25 @@ The workflows have distinct responsibilities:
 
 Section extraction and XBRL extraction are independent branches from the same raw filing bundle. You can run either branch, rerun derived processing without redownloading, or process both before downstream feature generation.
 
+## Design tenets and package boundaries
+
+- **Data completeness and quality are the primary objective; cost reduction is secondary.** Prefer deterministic extraction when it is reliable, but expose difficult cases for targeted LLM or human review rather than silently losing source material.
+- **Use official public SEC sources and retain provenance.** Raw HTML, XBRL packages, generated instances, SEC URLs, accessions, and hashes remain the audit trail for every derived artifact. This package does not use filing-submission APIs, search-result scraping, or third-party EDGAR services.
+- **Preserve the filing before classifying it.** Native section titles and filer-defined XBRL structures are durable outputs. Canonical IDs, semantic categories, and statement-kind candidates are optional routing aids and never determine whether source content is kept.
+- **Use narrative and structured sources together.** Native HTML sections are the appropriate input for narrative analysis. XBRL facts and taxonomy relationships are the preferred source for exact financial values when available.
+- **Do not optimize for one filing template or taxonomy year.** Parsers must retain unfamiliar sections, roles, concepts, namespaces, and relationships; support valid packaging variations; and report uncertainty explicitly.
+- **Defer model-specific work.** This package does not further split native sections, decide which evidence a feature needs, select final accounting concepts or contexts, calculate ratios, or invoke an LLM.
+
+The responsibility boundary is concise: `finbot-filings` describes **what a
+filing contains and how the filer organized it**; a downstream feature package
+decides **what that evidence means for a particular feature**. Downstream results
+should record the section IDs, statement roles, concepts, fact contexts, and
+source ranges used in every calculation or model call.
+
+See [ROADMAP.md](ROADMAP.md) for the planned XBRL taxonomy enrichment, logical
+statement inventory, downstream retrieval contract, and the rationale behind
+their sequencing.
+
 ### Typical end-to-end run
 
 Acquire three annual filings for one company, derive their sections and XBRL facts, and inspect selected facts:
