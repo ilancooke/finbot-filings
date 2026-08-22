@@ -11,12 +11,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from finbot_filings.layout import filing_directory, form_directory
 from finbot_filings.parsing.definitions import FORM_DEFINITIONS
-from finbot_filings.parsing.chunking import (
-    DEFAULT_MAX_CHARS,
-    DEFAULT_OVERLAP_CHARS,
-    chunk_sections,
-)
 from finbot_filings.parsing.models import (
     FailureReason,
     FilingParseResult,
@@ -25,7 +21,7 @@ from finbot_filings.parsing.models import (
 )
 from finbot_filings.parsing.toc import parse_filing_sections
 
-MANIFEST_SCHEMA_VERSION = 2
+MANIFEST_SCHEMA_VERSION = 3
 PARSER_VERSION = "native-toc-v1"
 
 
@@ -42,7 +38,6 @@ class BatchParseSummary:
     canonical_sections_mapped: int = 0
     semantic_only_sections: int = 0
     unmapped_sections: int = 0
-    chunks_written: int = 0
     failure_reasons: Counter[str] = field(default_factory=Counter)
 
     @property
@@ -67,7 +62,6 @@ def _result_manifest(
     source_metadata: dict[str, Any],
     source_sha256: str,
     section_files: dict[str, str],
-    chunks: list[dict[str, Any]],
 ) -> dict[str, Any]:
     manifest: dict[str, Any] = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -117,7 +111,6 @@ def _result_manifest(
             }
             for section in result.sections
         ],
-        "chunks": chunks,
     }
     if result.failure_reason is not None:
         manifest["failure_reason"] = result.failure_reason.value
@@ -132,18 +125,23 @@ def write_parse_result(
     source_metadata: dict[str, Any],
     source_sha256: str,
     output_root: Path,
-    max_chunk_chars: int = DEFAULT_MAX_CHARS,
-    chunk_overlap_chars: int = DEFAULT_OVERLAP_CHARS,
     replace_existing: bool = False,
 ) -> Path:
     """Write section text files and a filing-level diagnostic manifest."""
     ticker = str(source_metadata.get("ticker", "UNKNOWN")).strip().upper() or "UNKNOWN"
     accession = str(source_metadata.get("accession_number", result.file.parent.name))
-    output_directory = output_root / ticker / accession
+    output_directory = filing_directory(
+        output_root,
+        ticker=ticker,
+        form=result.form_type,
+        accession_number=accession,
+    )
     output_directory.mkdir(parents=True, exist_ok=True)
     if replace_existing:
         for old_file in output_directory.glob("*.txt"):
             old_file.unlink()
+        # Remove both current section output and any chunk directories created
+        # by the retired schema-v2 workflow.
         for generated_directory in ("sections", "chunks"):
             path = output_directory / generated_directory
             if path.is_dir():
@@ -158,36 +156,11 @@ def write_parse_result(
         section_files[section.source_section_id] = relative_path
         _atomic_write_text(sections_directory / filename, section.text + "\n")
 
-    chunk_manifest: list[dict[str, Any]] = []
-    for chunk in chunk_sections(
-        result.sections,
-        max_chars=max_chunk_chars,
-        overlap_chars=chunk_overlap_chars,
-    ):
-        chunk_directory = output_directory / "chunks" / chunk.source_section_id
-        chunk_directory.mkdir(parents=True, exist_ok=True)
-        filename = f"{chunk.chunk_order:03d}.txt"
-        relative_path = str(Path("chunks") / chunk.source_section_id / filename)
-        _atomic_write_text(chunk_directory / filename, chunk.text + "\n")
-        chunk_manifest.append(
-            {
-                "chunk_id": chunk.chunk_id,
-                "source_section_id": chunk.source_section_id,
-                "chunk_order": chunk.chunk_order,
-                "start_character": chunk.start_character,
-                "end_character": chunk.end_character,
-                "character_count": chunk.character_count,
-                "estimated_tokens": chunk.estimated_tokens,
-                "text_file": relative_path,
-            }
-        )
-
     manifest = _result_manifest(
         result,
         source_metadata=source_metadata,
         source_sha256=source_sha256,
         section_files=section_files,
-        chunks=chunk_manifest,
     )
     manifest_path = output_directory / "manifest.json"
     _atomic_write_text(
@@ -214,23 +187,14 @@ def parse_downloaded_filings(
     output_root: Path,
     form_type: str | None = None,
     overwrite: bool = False,
-    max_chunk_chars: int = DEFAULT_MAX_CHARS,
-    chunk_overlap_chars: int = DEFAULT_OVERLAP_CHARS,
     printer: Callable[[str], None] = print,
 ) -> BatchParseSummary:
     """Parse downloaded filings in stable path order and persist inspectable results."""
     normalized_form = form_type.strip().upper() if form_type else None
     if normalized_form is not None and normalized_form not in FORM_DEFINITIONS:
         raise ValueError("form_type must be 10-Q or 10-K")
-    if max_chunk_chars <= 0:
-        raise ValueError("max_chunk_chars must be positive")
-    if chunk_overlap_chars < 0 or chunk_overlap_chars >= max_chunk_chars:
-        raise ValueError(
-            "chunk_overlap_chars must be non-negative and smaller than max_chunk_chars"
-        )
-
     summary = BatchParseSummary()
-    metadata_paths = sorted(input_root.glob("*/*/metadata.json"))
+    metadata_paths = sorted(input_root.glob("*/*/*/metadata.json"))
     for metadata_path in metadata_paths:
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -251,9 +215,24 @@ def parse_downloaded_filings(
         summary.files_found += 1
         ticker = str(metadata.get("ticker", "UNKNOWN")).strip().upper() or "UNKNOWN"
         accession = str(metadata.get("accession_number", metadata_path.parent.name))
+        directory_form = metadata_path.parent.parent.name
+        if directory_form != form_directory(filing_form):
+            printer(f"[FAIL] {metadata_path} — storage_layout_mismatch")
+            summary.processed += 1
+            summary.failed += 1
+            summary.failure_reasons[
+                FailureReason.STORAGE_LAYOUT_MISMATCH.value
+            ] += 1
+            continue
         document_path = metadata_path.parent / "filing.html"
-        manifest_path = output_root / ticker / accession / "manifest.json"
-        label = f"{ticker}/{accession}/{document_path.name}"
+        output_directory = filing_directory(
+            output_root,
+            ticker=ticker,
+            form=filing_form,
+            accession_number=accession,
+        )
+        manifest_path = output_directory / "manifest.json"
+        label = f"{ticker}/{filing_form}/{accession}/{document_path.name}"
         if manifest_path.exists() and not overwrite:
             printer(f"[SKIP] {label} — manifest already exists")
             summary.skipped += 1
@@ -278,8 +257,6 @@ def parse_downloaded_filings(
             source_metadata=metadata,
             source_sha256=source_sha256,
             output_root=output_root,
-            max_chunk_chars=max_chunk_chars,
-            chunk_overlap_chars=chunk_overlap_chars,
             replace_existing=overwrite,
         )
         if result.status in {ParseStatus.SUCCESS, ParseStatus.PARTIAL}:
@@ -299,13 +276,6 @@ def parse_downloaded_filings(
             summary.canonical_sections_mapped += exact
             summary.semantic_only_sections += semantic_only
             summary.unmapped_sections += result.unmapped_sections
-            summary.chunks_written += len(
-                chunk_sections(
-                    result.sections,
-                    max_chars=max_chunk_chars,
-                    overlap_chars=chunk_overlap_chars,
-                )
-            )
         else:
             reason = (
                 result.failure_reason.value
@@ -334,7 +304,6 @@ def parse_downloaded_filings(
     printer(f"Exact mappings:        {summary.canonical_sections_mapped}")
     printer(f"Semantic-only:         {summary.semantic_only_sections}")
     printer(f"Unmapped sections:     {summary.unmapped_sections}")
-    printer(f"Oversized chunks:      {summary.chunks_written}")
     if summary.failure_reasons:
         printer("")
         printer("Failure reasons:")

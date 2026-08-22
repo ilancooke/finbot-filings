@@ -10,7 +10,7 @@ from finbot_filings.storage.local import LocalFilingStorage
 
 def test_local_path_construction(tmp_path: Path, filing: Filing) -> None:
     paths = LocalFilingStorage(tmp_path).paths_for(filing)
-    expected = tmp_path / "AAPL" / "0000320193-25-000079"
+    expected = tmp_path / "AAPL" / "10-K" / "0000320193-25-000079"
     assert paths.directory == expected
     assert paths.document == expected / "filing.html"
     assert paths.metadata == expected / "metadata.json"

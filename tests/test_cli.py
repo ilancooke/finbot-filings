@@ -57,18 +57,12 @@ def test_cli_accepts_parse_section_folders_and_form(tmp_path) -> None:
             "--form",
             "10-q",
             "--overwrite",
-            "--max-chunk-chars",
-            "12000",
-            "--chunk-overlap-chars",
-            "500",
         ]
     )
     assert args.input_folder == tmp_path
     assert args.output_folder == output_path
     assert args.form == "10-Q"
     assert args.overwrite is True
-    assert args.max_chunk_chars == 12000
-    assert args.chunk_overlap_chars == 500
 
 
 def test_cli_reports_no_matching_filings_as_failure(

@@ -15,7 +15,6 @@ from finbot_filings.config import (
 )
 from finbot_filings.models import Filing
 from finbot_filings.parsing.batch import parse_downloaded_filings
-from finbot_filings.parsing.chunking import DEFAULT_MAX_CHARS, DEFAULT_OVERLAP_CHARS
 from finbot_filings.sec.client import SECClient, SECError
 from finbot_filings.sec.filings import discover_filings, validate_count, validate_form
 from finbot_filings.storage.local import LocalFilingStorage
@@ -72,18 +71,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parse_command.add_argument("--form", type=_supported_form)
     parse_command.add_argument("--overwrite", action="store_true")
-    parse_command.add_argument(
-        "--max-chunk-chars",
-        type=_positive_count,
-        default=DEFAULT_MAX_CHARS,
-        help="maximum characters per oversized section chunk",
-    )
-    parse_command.add_argument(
-        "--chunk-overlap-chars",
-        type=int,
-        default=DEFAULT_OVERLAP_CHARS,
-        help="overlapping characters between adjacent chunks",
-    )
     return parser
 
 
@@ -113,8 +100,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_root=args.output_folder or section_folder(),
                 form_type=args.form,
                 overwrite=args.overwrite,
-                max_chunk_chars=args.max_chunk_chars,
-                chunk_overlap_chars=args.chunk_overlap_chars,
             )
             return 1 if summary.failed else 0
 

@@ -67,12 +67,22 @@ Files use this predictable layout:
 ```text
 /Users/ilan/workspace/finbot/data/raw/filings/
 └── AAPL/
-    └── 0000320193-25-000079/
-        ├── filing.html
-        └── metadata.json
+    ├── 10-K/
+    │   └── 0000320193-25-000079/
+    │       ├── filing.html
+    │       └── metadata.json
+    └── 10-Q/
+        └── 0000320193-26-000020/
+            ├── filing.html
+            └── metadata.json
 ```
 
 `filing.html` contains the exact response bytes returned by the primary-document URL. `metadata.json` records the company, CIK, form, filing and report dates, accession number, SEC index and document URLs, primary filename, and UTC download time.
+
+Only the `TICKER/FORM/ACCESSION` hierarchy is read. The earlier
+`TICKER/ACCESSION` layout is intentionally not migrated or supported; clear the
+old sample directories before redownloading if you do not want both layouts on
+disk.
 
 ### Batch downloads
 
@@ -119,22 +129,9 @@ The command reads `DOWNLOAD_FOLDER` and writes to `SECTION_FOLDER`. Explicit pat
 ```
 
 Existing manifests are skipped unless `--overwrite` is supplied. A batch exits nonzero when at least one processed filing fails.
-Run with `--overwrite` once after upgrading from the earlier canonical-only output
-layout so each filing receives a schema-version 2 native-section manifest.
-
-Oversized sections can be split into deterministic, overlapping chunks without
-crossing a source-section boundary:
-
-```bash
-.venv/bin/finbot-filings parse-sections \
-  --form 10-K \
-  --max-chunk-chars 24000 \
-  --chunk-overlap-chars 1000 \
-  --overwrite
-```
-
-Sections at or below the maximum remain available as whole section files and do
-not receive redundant chunk files.
+Run with `--overwrite` once after upgrading so each filing receives a
+schema-version 3 section-only manifest. Overwrite also removes any `chunks/`
+directories produced by the retired schema-version 2 workflow.
 
 ### Parsing method
 
@@ -173,9 +170,9 @@ Stable failure codes include `unknown_form_type`, `no_toc_found`, `no_recognized
 Example output:
 
 ```text
-[PASS] AAPL/0000320193-26-000020/filing.html — 11 native sections; 11 exact mappings; 0 semantic-only
-[PASS] INTC/0000050863-26-000011/filing.html — 24 native sections; 0 exact mappings; 7 semantic-only
-[FAIL] EXAMPLE/0000000000-26-000001/filing.html — no_toc_found
+[PASS] AAPL/10-Q/0000320193-26-000020/filing.html — 11 native sections; 11 exact mappings; 0 semantic-only
+[PASS] INTC/10-K/0000050863-26-000011/filing.html — 24 native sections; 0 exact mappings; 7 semantic-only
+[FAIL] EXAMPLE/10-K/0000000000-26-000001/filing.html — no_toc_found
 
 Parsing summary
 ---------------
@@ -191,7 +188,6 @@ Native sections:       35
 Exact mappings:        11
 Semantic-only:         7
 Unmapped sections:     17
-Oversized chunks:      0
 
 Failure reasons:
   no_toc_found: 1
@@ -204,26 +200,24 @@ Each filing receives an isolated derived-data directory:
 ```text
 data/filings/sections/
 └── AAPL/
-    └── 0000320193-26-000020/
-        ├── sections/
-        │   ├── 01_part1_item1.txt
-        │   ├── 02_part1_item2.txt
-        │   └── ...
-        ├── chunks/
-        │   └── part1_item1/
-        │       ├── 001.txt
-        │       └── 002.txt
-        └── manifest.json
+    └── 10-Q/
+        └── 0000320193-26-000020/
+            ├── sections/
+            │   ├── 01_part1_item1.txt
+            │   ├── 02_part1_item2.txt
+            │   └── ...
+            └── manifest.json
 ```
 
-Schema-version 2 manifests contain source provenance, parser version, extraction
+Schema-version 3 manifests contain source provenance, parser version, extraction
 status, native titles and IDs, anchors, physical ordering, optional canonical IDs,
-semantic categories, explicit registrant-caption evidence, section files, and chunk
-offsets. Chunk offsets always refer to one source section; chunks never combine
-sections. Failed filings receive a diagnostic manifest but no fabricated text.
+semantic categories, explicit registrant-caption evidence, and section files.
+Failed filings receive a diagnostic manifest but no fabricated text.
 
 Downstream feature code should read the manifest, select relevant native sections
-or chunks, and record exactly which inputs were sent to a model. Registrant roles,
+and record exactly which section inputs were sent to a model. Any additional
+splitting or model-specific token budgeting belongs in that downstream step.
+Registrant roles,
 ticker-default policy, feature selection, and LLM calls belong downstream rather
 than in this acquisition/extraction package. See [Native Section Architecture](docs/native-section-architecture.md).
 

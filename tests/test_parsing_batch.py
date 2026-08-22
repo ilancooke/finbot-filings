@@ -17,7 +17,7 @@ def create_download(
     fixture: str,
     form: str = "10-Q",
 ) -> Path:
-    directory = root / ticker / accession
+    directory = root / ticker / form / accession
     directory.mkdir(parents=True)
     document = directory / "filing.html"
     shutil.copyfile(FIXTURES / fixture, document)
@@ -61,7 +61,7 @@ def test_batch_writes_section_files_and_inspection_manifest(tmp_path: Path) -> N
         printer=output.append,
     )
 
-    manifest_path = output_root / "TEST" / accession / "manifest.json"
+    manifest_path = output_root / "TEST" / "10-Q" / accession / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert summary.succeeded == 1
     assert summary.failed == 0
@@ -70,7 +70,7 @@ def test_batch_writes_section_files_and_inspection_manifest(tmp_path: Path) -> N
     assert summary.canonical_sections_mapped == 11
     assert summary.semantic_only_sections == 0
     assert summary.completeness_rate == 100.0
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert manifest["parser"] == "native_toc"
     assert manifest["status"] == "success"
     assert manifest["source_filing_path"] == str(document)
@@ -84,6 +84,9 @@ def test_batch_writes_section_files_and_inspection_manifest(tmp_path: Path) -> N
         for section in manifest["sections"]
     )
     assert any(line.startswith("[PASS]") for line in output)
+    assert any(
+        f"TEST/10-Q/{accession}/filing.html" in line for line in output
+    )
 
 
 def test_batch_summary_reports_native_extraction_and_mapping_counts(
@@ -125,6 +128,66 @@ def test_batch_summary_reports_native_extraction_and_mapping_counts(
     assert "Exact mappings:        18" in output
 
 
+def test_batch_partitions_same_ticker_by_form(tmp_path: Path) -> None:
+    input_root = tmp_path / "raw"
+    output_root = tmp_path / "sections"
+    ten_q_accession = "0000123456-26-000020"
+    ten_k_accession = "0000123456-26-000021"
+    create_download(
+        input_root,
+        ticker="SAME",
+        accession=ten_q_accession,
+        fixture="normal_10q.html",
+        form="10-Q",
+    )
+    create_download(
+        input_root,
+        ticker="SAME",
+        accession=ten_k_accession,
+        fixture="normal_10k.html",
+        form="10-K",
+    )
+
+    summary = parse_downloaded_filings(
+        input_root=input_root,
+        output_root=output_root,
+        printer=lambda _: None,
+    )
+
+    assert summary.succeeded == 2
+    assert (
+        output_root / "SAME" / "10-Q" / ten_q_accession / "manifest.json"
+    ).is_file()
+    assert (
+        output_root / "SAME" / "10-K" / ten_k_accession / "manifest.json"
+    ).is_file()
+
+
+def test_batch_rejects_metadata_in_the_wrong_form_directory(tmp_path: Path) -> None:
+    input_root = tmp_path / "raw"
+    output_root = tmp_path / "sections"
+    accession = "0000123456-26-000022"
+    document = create_download(
+        input_root,
+        ticker="WRONG",
+        accession=accession,
+        fixture="normal_10q.html",
+        form="10-Q",
+    )
+    wrong_directory = input_root / "WRONG" / "10-K" / accession
+    wrong_directory.parent.mkdir(parents=True, exist_ok=True)
+    document.parent.rename(wrong_directory)
+
+    summary = parse_downloaded_filings(
+        input_root=input_root,
+        output_root=output_root,
+        printer=lambda _: None,
+    )
+
+    assert summary.failed == 1
+    assert summary.failure_reasons["storage_layout_mismatch"] == 1
+
+
 def test_partial_extraction_is_not_reported_as_complete(tmp_path: Path) -> None:
     input_root = tmp_path / "raw"
     output_root = tmp_path / "sections"
@@ -158,7 +221,7 @@ def test_batch_failure_writes_only_diagnostic_manifest_and_then_skips(
     input_root = tmp_path / "raw"
     output_root = tmp_path / "sections"
     accession = "0000123456-26-000002"
-    directory = input_root / "FAIL" / accession
+    directory = input_root / "FAIL" / "10-Q" / accession
     directory.mkdir(parents=True)
     (directory / "filing.html").write_text(
         "<html><body><h2>Item 1 without a TOC link</h2></body></html>",
@@ -181,7 +244,7 @@ def test_batch_failure_writes_only_diagnostic_manifest_and_then_skips(
     first = parse_downloaded_filings(
         input_root=input_root, output_root=output_root, printer=lambda _: None
     )
-    output_directory = output_root / "FAIL" / accession
+    output_directory = output_root / "FAIL" / "10-Q" / accession
     manifest = json.loads((output_directory / "manifest.json").read_text())
     second = parse_downloaded_filings(
         input_root=input_root, output_root=output_root, printer=lambda _: None
@@ -195,33 +258,31 @@ def test_batch_failure_writes_only_diagnostic_manifest_and_then_skips(
     assert second.processed == 0
 
 
-def test_batch_writes_section_local_chunks_with_provenance(tmp_path: Path) -> None:
+def test_overwrite_removes_retired_chunk_output(tmp_path: Path) -> None:
     input_root = tmp_path / "raw"
     output_root = tmp_path / "sections"
     accession = "0000123456-26-000003"
     create_download(
         input_root,
-        ticker="CHUNK",
+        ticker="TEST",
         accession=accession,
         fixture="normal_10q.html",
     )
+    retired_chunk = (
+        output_root / "TEST" / "10-Q" / accession / "chunks" / "item7" / "001.txt"
+    )
+    retired_chunk.parent.mkdir(parents=True)
+    retired_chunk.write_text("retired chunk", encoding="utf-8")
 
-    summary = parse_downloaded_filings(
+    parse_downloaded_filings(
         input_root=input_root,
         output_root=output_root,
         form_type="10-Q",
-        max_chunk_chars=20,
-        chunk_overlap_chars=5,
+        overwrite=True,
         printer=lambda _: None,
     )
 
-    output_directory = output_root / "CHUNK" / accession
+    output_directory = output_root / "TEST" / "10-Q" / accession
     manifest = json.loads((output_directory / "manifest.json").read_text())
-    assert summary.chunks_written == len(manifest["chunks"])
-    assert summary.chunks_written > 0
-    assert all(
-        (output_directory / chunk["text_file"]).is_file()
-        for chunk in manifest["chunks"]
-    )
-    section_ids = {section["source_section_id"] for section in manifest["sections"]}
-    assert {chunk["source_section_id"] for chunk in manifest["chunks"]} <= section_ids
+    assert not (output_directory / "chunks").exists()
+    assert "chunks" not in manifest

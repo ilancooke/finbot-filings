@@ -22,7 +22,7 @@ Recovery proceeds in explicit tiers:
 4. **Human review** — Require review when identity, ownership, boundaries, or ordering remain uncertain.
 
 The parser does not silently invoke an LLM. Any downstream recovery should record
-its input section or chunk IDs, model, prompt version, method, and review status.
+its input section IDs and ranges, model, prompt version, method, and review status.
 
 ## Active source-extraction cases
 

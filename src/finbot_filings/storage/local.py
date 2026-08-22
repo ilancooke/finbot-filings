@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from finbot_filings.layout import filing_directory
 from finbot_filings.models import Filing
 
 
@@ -36,7 +37,12 @@ class LocalFilingStorage:
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     def paths_for(self, filing: Filing) -> FilingPaths:
-        directory = self.download_folder / filing.ticker / filing.accession_number
+        directory = filing_directory(
+            self.download_folder,
+            ticker=filing.ticker,
+            form=filing.form,
+            accession_number=filing.accession_number,
+        )
         return FilingPaths(
             directory=directory,
             document=directory / "filing.html",

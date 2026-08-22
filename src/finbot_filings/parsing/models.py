@@ -28,6 +28,7 @@ class FailureReason(StrEnum):
     AMBIGUOUS_PART_ASSIGNMENT = "ambiguous_part_assignment"
     AMBIGUOUS_ITEM_LINKS = "ambiguous_item_links"
     INSUFFICIENT_SECTION_ANCHORS = "insufficient_section_anchors"
+    STORAGE_LAYOUT_MISMATCH = "storage_layout_mismatch"
     PARSE_ERROR = "parse_error"
 
 
@@ -67,18 +68,6 @@ class ExtractedSection:
     semantic_categories: tuple[str, ...] = ()
     registrant_name: str | None = None
     registrant_identity_source: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SectionChunk:
-    chunk_id: str
-    source_section_id: str
-    chunk_order: int
-    start_character: int
-    end_character: int
-    character_count: int
-    estimated_tokens: int
-    text: str
 
 
 @dataclass(slots=True)
