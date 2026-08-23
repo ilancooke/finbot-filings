@@ -1,6 +1,11 @@
 # finbot-filings
 
-`finbot-filings` acquires public SEC 10-K and 10-Q filings and turns them into two inspectable derived datasets: document-native text sections and normalized XBRL facts. It stores the original primary HTML and SEC-generated XBRL inputs so every derived artifact can be traced back to the downloaded source. It is a standalone Python 3.12+ package in the Finbot workspace.
+`finbot-filings` acquires public SEC 10-K and 10-Q filings and turns them into
+inspectable document-native sections, normalized XBRL facts, and source-shaped
+XBRL label and presentation datasets. It stores the original primary HTML and
+SEC-generated XBRL inputs so every derived artifact can be traced back to the
+downloaded source. It is a standalone Python 3.12+ package in the Finbot
+workspace.
 
 The package intentionally keeps raw acquisition separate from derived section and fact output. Section discovery is driven by the filing's native linked outline; headings cannot independently create an outline and are used only by a constrained repair for a recognized TOC row with a broken target. Taxonomy-driven canonical fact selection, ratio calculation, semantic summarization, feature generation, LLMs, databases, AWS, and S3 remain out of scope.
 
@@ -14,6 +19,8 @@ SEC ticker map + submissions metadata
        +-> parse-sections          write native section text + manifest
        |
        +-> inspect-xbrl            validate and inventory raw XBRL inputs
+       +-> inventory-taxonomy      write a local taxonomy inventory manifest
+       +-> extract-taxonomy        write label + presentation Parquet tables
        +-> extract-xbrl            write normalized facts.parquet + metadata
               -> show-xbrl         inspect or export selected normalized facts
 ```
@@ -24,9 +31,16 @@ The workflows have distinct responsibilities:
 - **Acquisition** writes durable raw inputs for each accession: primary filing HTML, filing metadata, and SEC XBRL package/instance files when available. `download-xbrl` is a maintenance workflow for backfilling or repairing XBRL inputs on filings already stored locally.
 - **Section extraction** uses the filing's own top-level outline to divide the large HTML document into complete native sections. Canonical IDs and semantic categories are optional routing annotations; they do not control whether source text is retained.
 - **XBRL extraction** inventories every fact in the SEC-generated instance document and writes a versioned Parquet dataset without choosing preferred accounting concepts or calculating ratios.
+- **Taxonomy inventory** securely discovers local schemas and standalone or embedded linkbases, records roles and relationship counts, and identifies external dependencies without fetching them.
+- **Taxonomy extraction** materializes every filed label resource and
+  presentation relationship into versioned Parquet tables, retaining source
+  roles, endpoint URIs, ordering, attributes, resolution status, and diagnostics.
 - **Inspection** commands expose filing discovery results, raw XBRL inventory, and normalized facts for human review or downstream development.
 
-Section extraction and XBRL extraction are independent branches from the same raw filing bundle. You can run either branch, rerun derived processing without redownloading, or process both before downstream feature generation.
+Section, fact, and taxonomy extraction are independent branches from the same
+raw filing bundle. You can rerun any derived processing without redownloading.
+`inventory-taxonomy` is a compact diagnostic workflow, not a prerequisite for
+`extract-taxonomy`; both securely read the same local package.
 
 ## Design tenets and package boundaries
 
@@ -43,22 +57,27 @@ decides **what that evidence means for a particular feature**. Downstream result
 should record the section IDs, statement roles, concepts, fact contexts, and
 source ranges used in every calculation or model call.
 
-See [ROADMAP.md](ROADMAP.md) for the planned XBRL taxonomy enrichment, logical
-statement inventory, downstream retrieval contract, and the rationale behind
+See [ROADMAP.md](ROADMAP.md) for planned official-taxonomy resolution, logical
+statement inventory, downstream retrieval contracts, and the rationale behind
 their sequencing.
 
 ### Typical end-to-end run
 
-Acquire three annual filings for one company, derive their sections and XBRL facts, and inspect selected facts:
+Acquire three annual filings for one company, derive their sections, XBRL facts,
+and taxonomy tables, and inspect selected facts:
 
 ```bash
 .venv/bin/finbot-filings download AAPL --form 10-K --count 3
 .venv/bin/finbot-filings parse-sections --form 10-K
 .venv/bin/finbot-filings extract-xbrl AAPL --form 10-K
+.venv/bin/finbot-filings extract-taxonomy AAPL --form 10-K
 .venv/bin/finbot-filings show-xbrl AAPL --form 10-K --concept Assets
 ```
 
-`parse-sections` scans every locally downloaded filing matching the form; `extract-xbrl` can target one ticker as shown or omit the ticker to process every matching local filing. Both derived workflows skip existing outputs unless `--overwrite` is supplied.
+`parse-sections` scans every locally downloaded filing matching the form;
+`extract-xbrl` and `extract-taxonomy` can target one ticker as shown or omit the
+ticker to process every matching local filing. Derived workflows skip current
+outputs unless `--overwrite` is supplied.
 
 ## Installation
 
@@ -203,9 +222,116 @@ data/raw/filings/
 
 The package contains the Inline XBRL filing and its taxonomy/linkbase resources. The SEC-generated instance is a separate accession-directory file, stored locally as `instance.xml`. Acquisition metadata records both original SEC filenames and URLs, SHA-256 checksums, byte and member counts, and the UTC download time. The archive is validated but preserved unmodified.
 
-Do not manually unzip the archive for normal processing. Inventory and future taxonomy/linkbase enrichment read members directly from `package.zip` so the extracted files are not duplicated on disk.
+Do not manually unzip the archive for normal processing. The taxonomy inventory
+and extraction workflows read members directly from `package.zip` so the
+extracted files are not duplicated on disk.
 
 Complete package/instance/metadata sets are skipped by default. Existing downloads created before `instance.xml` support are repaired by rerunning the command; `--overwrite` is not required. Use `--overwrite` to download a complete set again, or `--download-folder PATH` to override `DOWNLOAD_FOLDER`. A filing for which the SEC lists no `-xbrl.zip` is reported as `NO-XBRL` and does not fail the batch; invalid metadata, SEC request errors, invalid archives, and invalid instance XML do.
+
+## XBRL taxonomy inventory
+
+Inventory the taxonomy resources already stored in `package.zip`:
+
+```bash
+.venv/bin/finbot-filings inventory-taxonomy AAPL --form 10-K
+.venv/bin/finbot-filings inventory-taxonomy --form 10-Q
+.venv/bin/finbot-filings inventory-taxonomy AAPL --form 10-K \
+  --accession 0000320193-25-000079
+```
+
+This is a local, no-network workflow. It securely reads XML members directly
+from the ZIP, discovers resources by XML content, supports conventional
+standalone linkbases and linkbases embedded inside a filing XSD, and inventories
+schema imports/includes/redefines, linkbase references, role and arcrole types,
+labels, locators, resources, and relationships. External URLs are recorded as
+dependencies but are never fetched by XML parsing.
+
+The command writes a compact manifest alongside other derived XBRL output:
+
+```text
+data/filings/xbrl/
+└── AAPL/
+    └── 10-K/
+        └── 0000320193-25-000079/
+            ├── facts.parquet               # present after extract-xbrl
+            ├── metadata.json               # present after extract-xbrl
+            └── taxonomy_inventory.json
+```
+
+The inventory contains source hashes, resource metadata, schema references,
+complete role/arcrole definitions, relationship and label counts, resolution
+statuses, external dependencies, security limits, warnings, and failure details.
+It intentionally does not duplicate every label or relationship. Use
+`extract-taxonomy` to materialize complete label and presentation-relationship
+Parquet tables from this validated source graph.
+
+Existing inventories are skipped only when the source package hash, inventory
+schema version, and parser version still match. Stale inventories are rebuilt
+automatically, while `--overwrite` forces regeneration. `--download-folder` and
+`--output-folder` override configured roots. The optional ticker, form, and
+accession filters support either targeted or corpus-wide processing. Failures
+write a diagnostic manifest when filing identity is available and cause a
+nonzero batch exit.
+
+## XBRL label and presentation extraction
+
+Materialize label resources and presentation networks already stored in each
+local `package.zip`:
+
+```bash
+.venv/bin/finbot-filings extract-taxonomy AAPL --form 10-K
+.venv/bin/finbot-filings extract-taxonomy --form 10-Q
+.venv/bin/finbot-filings extract-taxonomy AAPL --form 10-K \
+  --accession 0000320193-25-000079
+```
+
+The command writes an atomic accession-level bundle beneath `XBRL_FOLDER`:
+
+```text
+data/filings/xbrl/
+└── AAPL/
+    └── 10-K/
+        └── 0000320193-25-000079/
+            ├── concept_labels.parquet
+            ├── presentation_roles.parquet
+            ├── presentation_relationships.parquet
+            └── taxonomy_metadata.json
+```
+
+- `concept_labels.parquet` preserves every filed label relationship and exact
+  label resource, including language, label role, source XML, arbitrary
+  attributes, and explicitly marked orphan resources or locators.
+- `presentation_roles.parquet` preserves every presentation extended-link
+  occurrence and its filer-defined role definition and `usedOn` declarations
+  when locally available.
+- `presentation_relationships.parquet` preserves every presentation arc,
+  parent/child source references, exact filed order, preferred-label role,
+  arbitrary attributes, and endpoint-resolution status.
+- `taxonomy_metadata.json` is the completion marker. It records schemas, row and
+  source counts, package and parser versions, endpoint coverage, orphan and
+  duplicate diagnostics, warnings, and generation time.
+
+The workflow is local and never fetches an external taxonomy. Locally defined
+concept endpoints receive authoritative QNames. Standard-taxonomy endpoints
+whose schemas are external retain their complete source URI and resolution
+status with a null QName; the parser does not guess QNames from fragment text.
+Official versioned taxonomy resolution remains a future roadmap milestone.
+
+Output rows are deterministically ordered, source XML numeric attributes remain
+exact strings, duplicate arcs are retained, and locator labels are scoped to
+their own extended link. Existing bundles are skipped only when all expected
+files exist and their source hash, table schema, and parser version are current.
+Incomplete or stale bundles rebuild automatically; `--overwrite` forces a
+rebuild. The optional ticker, `--form`, `--accession`, `--download-folder`, and
+`--output-folder` filters match `inventory-taxonomy`. Filing failures write
+diagnostic metadata, processing continues, and any failure makes the batch exit
+nonzero.
+
+`[WARNING]` still means the complete output bundle was published. It indicates
+retained source diagnostics, such as a presentation locator declared inside an
+otherwise empty role but unused by any arc. Inspect `warnings` and the associated
+diagnostic records in `taxonomy_metadata.json`; `[FAIL]` is reserved for a filing
+whose output bundle could not be completed.
 
 ## XBRL fact extraction
 
@@ -393,5 +519,5 @@ The normal test suite uses fake SEC responses and does not require network acces
 - Material without its own top-level outline entry is still retained between adjacent boundaries. Trailing material such as signatures is therefore included in the final native section, and an unlinked or noncontiguous appendix may not be assigned to its semantic owner.
 - Noncontiguous canonical Item reconstruction is not attempted; native topic sections remain available instead. Complex cases are documented in [the parser limitations registry](docs/parser-limitations.md).
 - Section text is normalized for readability but tables are flattened to text; semantic table reconstruction is not attempted.
-- XBRL facts are normalized from the SEC-generated instance, but taxonomy labels, presentation networks, calculation relationships, and canonical financial-concept selection are not yet materialized.
+- XBRL labels and presentation networks are materialized, but official standard-taxonomy concept metadata, definition/dimensional networks, calculation networks, and ordered statement views are not yet available. Canonical financial-concept selection remains downstream.
 - Feature extraction, LLM calls, and semantic summarization are intentionally out of scope.

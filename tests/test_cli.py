@@ -147,6 +147,136 @@ def test_cli_accepts_xbrl_extract_and_show_options(tmp_path) -> None:
     assert show.limit == 3
 
 
+def test_cli_accepts_taxonomy_inventory_options(tmp_path) -> None:
+    args = build_parser().parse_args(
+        [
+            "inventory-taxonomy",
+            "aapl",
+            "--form",
+            "10-k",
+            "--accession",
+            "0000320193-25-000079",
+            "--download-folder",
+            str(tmp_path / "raw"),
+            "--output-folder",
+            str(tmp_path / "derived"),
+            "--overwrite",
+        ]
+    )
+
+    assert args.ticker == "aapl"
+    assert args.form == "10-K"
+    assert args.accession == "0000320193-25-000079"
+    assert args.overwrite is True
+
+
+def test_cli_dispatches_taxonomy_inventory_without_sec_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    captured = {}
+
+    class Summary:
+        failed = 0
+
+    def fail_client():
+        raise AssertionError("taxonomy inventory must not construct SECClient")
+
+    def fake_inventory(**kwargs):
+        captured.update(kwargs)
+        return Summary()
+
+    monkeypatch.setattr(cli, "SECClient", fail_client)
+    monkeypatch.setattr(cli, "inventory_taxonomy_filings", fake_inventory)
+
+    exit_code = cli.main(
+        [
+            "inventory-taxonomy",
+            "AAPL",
+            "--form",
+            "10-K",
+            "--download-folder",
+            str(tmp_path / "raw"),
+            "--output-folder",
+            str(tmp_path / "derived"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured == {
+        "download_root": tmp_path / "raw",
+        "output_root": tmp_path / "derived",
+        "ticker": "AAPL",
+        "form_type": "10-K",
+        "accession_number": None,
+        "overwrite": False,
+    }
+
+
+def test_cli_accepts_taxonomy_extract_options(tmp_path) -> None:
+    args = build_parser().parse_args(
+        [
+            "extract-taxonomy",
+            "aapl",
+            "--form",
+            "10-q",
+            "--accession",
+            "0000320193-26-000020",
+            "--download-folder",
+            str(tmp_path / "raw"),
+            "--output-folder",
+            str(tmp_path / "derived"),
+            "--overwrite",
+        ]
+    )
+
+    assert args.ticker == "aapl"
+    assert args.form == "10-Q"
+    assert args.accession == "0000320193-26-000020"
+    assert args.overwrite is True
+
+
+def test_cli_dispatches_taxonomy_extract_without_sec_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    captured = {}
+
+    class Summary:
+        failed = 0
+
+    def fail_client():
+        raise AssertionError("taxonomy extraction must not construct SECClient")
+
+    def fake_extract(**kwargs):
+        captured.update(kwargs)
+        return Summary()
+
+    monkeypatch.setattr(cli, "SECClient", fail_client)
+    monkeypatch.setattr(cli, "extract_taxonomy_filings", fake_extract)
+
+    exit_code = cli.main(
+        [
+            "extract-taxonomy",
+            "AAPL",
+            "--form",
+            "10-K",
+            "--download-folder",
+            str(tmp_path / "raw"),
+            "--output-folder",
+            str(tmp_path / "derived"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured == {
+        "download_root": tmp_path / "raw",
+        "output_root": tmp_path / "derived",
+        "ticker": "AAPL",
+        "form_type": "10-K",
+        "accession_number": None,
+        "overwrite": False,
+    }
+
+
 def test_cli_reports_no_matching_filings_as_failure(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

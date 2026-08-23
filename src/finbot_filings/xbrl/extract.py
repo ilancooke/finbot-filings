@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Callable
 
 import pyarrow as pa
@@ -17,6 +15,12 @@ import pyarrow.parquet as pq
 
 from finbot_filings.layout import filing_directory, form_directory
 from finbot_filings.xbrl.instance import InstanceParseResult, parse_instance_document
+from finbot_filings.xbrl.source import (
+    XBRLExtractionError,
+    XBRLSource,
+    inventory_xbrl_source,
+    read_json_object,
+)
 
 FACT_SCHEMA_VERSION = 1
 EXTRACTION_METADATA_SCHEMA_VERSION = 1
@@ -62,23 +66,6 @@ FACT_SCHEMA = pa.schema(
 )
 
 
-class XBRLExtractionError(ValueError):
-    """Raised when downloaded XBRL inputs fail integrity or layout checks."""
-
-
-@dataclass(frozen=True, slots=True)
-class XBRLSource:
-    filing_directory: Path
-    package_path: Path
-    instance_path: Path
-    filing_metadata: dict[str, Any]
-    acquisition_metadata: dict[str, Any]
-    package_members: tuple[str, ...]
-    package_sha256: str
-    instance_sha256: str
-    instance_bytes: bytes
-
-
 @dataclass(frozen=True, slots=True)
 class XBRLDerivedPaths:
     directory: Path
@@ -97,69 +84,8 @@ class XBRLExtractionSummary:
     failure_reasons: Counter[str] = field(default_factory=Counter)
 
 
-def _sha256(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
 def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise XBRLExtractionError(f"cannot read {path}: {exc}") from exc
-    if not isinstance(value, dict):
-        raise XBRLExtractionError(f"expected a JSON object in {path}")
-    return value
-
-
-def _safe_package_members(package_path: Path) -> tuple[str, ...]:
-    try:
-        with zipfile.ZipFile(package_path) as archive:
-            corrupt_member = archive.testzip()
-            if corrupt_member is not None:
-                raise XBRLExtractionError(
-                    f"package contains corrupt member {corrupt_member!r}"
-                )
-            names = archive.namelist()
-    except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
-        raise XBRLExtractionError(f"invalid XBRL package {package_path}") from exc
-    for name in names:
-        member = PurePosixPath(name)
-        if member.is_absolute() or ".." in member.parts:
-            raise XBRLExtractionError(f"unsafe archive member {name!r}")
-    return tuple(names)
-
-
-def inventory_xbrl_source(filing_directory: Path) -> XBRLSource:
-    """Validate one raw package and its separately downloaded instance."""
-    filing_metadata = _read_json(filing_directory / "metadata.json")
-    xbrl_directory = filing_directory / "xbrl"
-    acquisition_metadata = _read_json(xbrl_directory / "metadata.json")
-    package_path = xbrl_directory / "package.zip"
-    instance_path = xbrl_directory / "instance.xml"
-    try:
-        package_bytes = package_path.read_bytes()
-        instance_bytes = instance_path.read_bytes()
-    except OSError as exc:
-        raise XBRLExtractionError(
-            "XBRL package is incomplete; rerun download-xbrl to fetch instance.xml"
-        ) from exc
-    package_sha256 = _sha256(package_bytes)
-    instance_sha256 = _sha256(instance_bytes)
-    if package_sha256 != acquisition_metadata.get("sha256"):
-        raise XBRLExtractionError("package.zip checksum does not match metadata")
-    if instance_sha256 != acquisition_metadata.get("instance_sha256"):
-        raise XBRLExtractionError("instance.xml checksum does not match metadata")
-    return XBRLSource(
-        filing_directory=filing_directory,
-        package_path=package_path,
-        instance_path=instance_path,
-        filing_metadata=filing_metadata,
-        acquisition_metadata=acquisition_metadata,
-        package_members=_safe_package_members(package_path),
-        package_sha256=package_sha256,
-        instance_sha256=instance_sha256,
-        instance_bytes=instance_bytes,
-    )
+    return read_json_object(path)
 
 
 def _derived_paths(output_root: Path, metadata: dict[str, Any]) -> XBRLDerivedPaths:

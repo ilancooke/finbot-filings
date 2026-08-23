@@ -23,6 +23,10 @@ from finbot_filings.storage.local import LocalFilingStorage
 from finbot_filings.xbrl.download import download_xbrl_packages
 from finbot_filings.xbrl.extract import extract_xbrl_filings, inspect_xbrl_filings
 from finbot_filings.xbrl.query import show_xbrl_facts
+from finbot_filings.xbrl.taxonomy import (
+    extract_taxonomy_filings,
+    inventory_taxonomy_filings,
+)
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_COUNT = 5
@@ -104,6 +108,26 @@ def build_parser() -> argparse.ArgumentParser:
     extract_command.add_argument("--download-folder", type=Path)
     extract_command.add_argument("--output-folder", type=Path)
     extract_command.add_argument("--overwrite", action="store_true")
+    taxonomy_command = subparsers.add_parser(
+        "inventory-taxonomy",
+        help="inventory local taxonomy resources without network access",
+    )
+    taxonomy_command.add_argument("ticker", nargs="?")
+    taxonomy_command.add_argument("--form", type=_supported_form)
+    taxonomy_command.add_argument("--accession")
+    taxonomy_command.add_argument("--download-folder", type=Path)
+    taxonomy_command.add_argument("--output-folder", type=Path)
+    taxonomy_command.add_argument("--overwrite", action="store_true")
+    taxonomy_extract_command = subparsers.add_parser(
+        "extract-taxonomy",
+        help="materialize local XBRL labels and presentation relationships",
+    )
+    taxonomy_extract_command.add_argument("ticker", nargs="?")
+    taxonomy_extract_command.add_argument("--form", type=_supported_form)
+    taxonomy_extract_command.add_argument("--accession")
+    taxonomy_extract_command.add_argument("--download-folder", type=Path)
+    taxonomy_extract_command.add_argument("--output-folder", type=Path)
+    taxonomy_extract_command.add_argument("--overwrite", action="store_true")
     show_command = subparsers.add_parser(
         "show-xbrl",
         help="display or export normalized XBRL facts",
@@ -174,6 +198,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_root=args.output_folder or xbrl_folder(),
                 ticker=args.ticker,
                 form_type=args.form,
+                overwrite=args.overwrite,
+            )
+            return 1 if summary.failed else 0
+
+        if args.command == "inventory-taxonomy":
+            summary = inventory_taxonomy_filings(
+                download_root=args.download_folder or download_folder(),
+                output_root=args.output_folder or xbrl_folder(),
+                ticker=args.ticker,
+                form_type=args.form,
+                accession_number=args.accession,
+                overwrite=args.overwrite,
+            )
+            return 1 if summary.failed else 0
+
+        if args.command == "extract-taxonomy":
+            summary = extract_taxonomy_filings(
+                download_root=args.download_folder or download_folder(),
+                output_root=args.output_folder or xbrl_folder(),
+                ticker=args.ticker,
+                form_type=args.form,
+                accession_number=args.accession,
                 overwrite=args.overwrite,
             )
             return 1 if summary.failed else 0

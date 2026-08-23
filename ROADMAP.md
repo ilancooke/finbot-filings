@@ -83,11 +83,20 @@ The following capabilities are implemented:
   extraction;
 - complete normalization of SEC-generated instance facts into Parquet while
   preserving values, contexts, units, dimensions, document order, and duplicates;
+- secure, no-network taxonomy inventory with content-based discovery, standalone
+  and embedded linkbase support, source-aware freshness, external-dependency and
+  local-resolution diagnostics, and success/failure manifests;
+- complete, versioned Parquet materialization of filed label resources,
+  presentation roles, and presentation relationships with exact source
+  attributes, authoritative local endpoint resolution, external endpoint
+  identity, coverage diagnostics, and source-aware freshness;
 - human-readable inspection and export of normalized facts.
 
-The current derived XBRL fact table is intentionally not a reconstructed
-financial statement. It does not yet provide filer labels, presentation
-membership, statement line order, full schema metadata, or relationship graphs.
+The current XBRL outputs are intentionally not reconstructed financial
+statements. They preserve facts plus the filer label and presentation graphs,
+but do not yet provide official standard-concept metadata, flattened statement
+line order, dimensional networks, calculation networks, or feature-specific
+fact selection.
 
 ## Corpus evidence guiding the roadmap
 
@@ -108,8 +117,8 @@ An offline inventory of the current 113-package development corpus found:
   schema, so complete datatype, period, and balance metadata requires exact,
   versioned official taxonomy resources.
 
-These observations make labels and presentation relationships a high-value
-offline increment, while a controlled taxonomy cache is required for complete
+These observations justified the implemented label and presentation datasets,
+while a controlled taxonomy cache remains necessary for complete
 standard-concept metadata. They also prove that linkbase discovery cannot rely
 only on `_lab.xml`, `_pre.xml`, `_def.xml`, and `_cal.xml` filenames.
 
@@ -123,54 +132,35 @@ should not be rewritten merely to add a new enrichment table. Schema or path
 changes require README, tests, and metadata updates, and the shared Finbot
 catalog should be refreshed after material datasets are produced.
 
-## Milestone 1: Taxonomy reader and source inventory
+## Milestone 3: Versioned official taxonomy cache and concept metadata
 
 **Status:** Planned
 
-**Why:** Later enrichment is only trustworthy if all valid packaging variations
-are discovered and unresolved dependencies are visible. Microsoft already embeds
-linkbases in XSDs, and future filers may introduce other valid arrangements.
+**Why:** Filing ZIPs define filer extensions but reference standard US-GAAP, SEC,
+and XBRL schemas externally. Without the exact imported taxonomy versions, most
+standard concepts lack authoritative identity, datatype, period type, balance,
+and substitution-group metadata. This resolution must precede fact-linked
+statement views rather than relying on conventions embedded in fragment IDs.
 
-Implement a secure, no-network XML inventory layer that:
+Add controlled retrieval and caching of exact imported resources from official
+FASB, SEC, and XBRL.org URLs. The cache must:
 
-- reads members directly from `package.zip` without manually extracting them;
-- discovers schemas and linkbases by namespace and XML content;
-- supports standalone and schema-embedded linkbases;
-- inventories schema imports, linkbase references, role types, arcroles, labels,
-  locators, resources, and arcs;
-- rejects unsafe archive paths and disables DTD/entity/network resolution;
-- records unresolved locators and imports rather than dropping them;
-- ties every inventory record to the package hash and accession.
+- resolve the URI referenced by the filing rather than substituting the newest
+  taxonomy;
+- preserve source URL, namespace, taxonomy version, retrieval time, and hash;
+- support offline reuse and deterministic reprocessing;
+- validate XML securely and detect changed content for an existing URI;
+- retain unknown namespaces instead of rejecting future taxonomies.
 
-Completion requires fixtures for both standalone and embedded linkbases plus
-corrupt, unsafe, missing, and unfamiliar-resource cases.
+Then produce `concepts.parquet` with QName, namespace, local name, source schema,
+standard-versus-extension status, datatype, period type, balance, abstract/nillable
+flags, and other source metadata where available.
 
-## Milestone 2: Labels and presentation relationships
+Completion requires tests across every taxonomy version represented in the
+corpus and an explicit unresolved-metadata state when an official dependency is
+unavailable.
 
-**Status:** Planned
-
-**Why:** Raw concept names are often opaque, especially filer extensions.
-Filer-supplied labels and presentation networks provide the human meaning,
-statement membership, hierarchy, neighbors, and line ordering needed for a
-downstream calculator to find candidate inputs efficiently.
-
-Produce versioned, joinable outputs such as:
-
-- `concept_labels.parquet` — concept QName, label role, language, and exact label;
-- `presentation_roles.parquet` — role URI, filer definition, and source location;
-- `presentation_relationships.parquet` — role URI, parent and child concepts,
-  source order, preferred-label role, and relationship provenance.
-
-Preserve every label role and presentation network. Do not select one global
-label, discard disclosure roles, or force role definitions into a fixed statement
-taxonomy. Optional candidate classifications must include their evidence and
-method.
-
-Completion requires complete relationship-endpoint resolution for the current
-corpus, explicit coverage metrics, stable output ordering, and sidecar metadata
-with schemas, counts, versions, hashes, and warnings.
-
-## Milestone 3: Statement inventory and ordered concept views
+## Milestone 4: Statement inventory and ordered concept views
 
 **Status:** Planned
 
@@ -196,33 +186,6 @@ flattened traversal can always be audited.
 Completion requires deterministic traversal, cycle and multi-parent diagnostics,
 no loss of source relationships, and checks against rendered primary statements
 in a representative filing corpus.
-
-## Milestone 4: Versioned official taxonomy cache and concept metadata
-
-**Status:** Planned
-
-**Why:** Filing ZIPs define filer extensions but reference standard US-GAAP, SEC,
-and XBRL schemas externally. Without the exact imported taxonomy versions, most
-standard concepts lack authoritative datatype, period type, balance, and
-substitution-group metadata.
-
-Add controlled retrieval and caching of exact imported resources from official
-FASB, SEC, and XBRL.org URLs. The cache must:
-
-- resolve the URI referenced by the filing rather than substituting the newest
-  taxonomy;
-- preserve source URL, namespace, taxonomy version, retrieval time, and hash;
-- support offline reuse and deterministic reprocessing;
-- validate XML securely and detect changed content for an existing URI;
-- retain unknown namespaces instead of rejecting future taxonomies.
-
-Then produce `concepts.parquet` with QName, namespace, local name, source schema,
-standard-versus-extension status, datatype, period type, balance, abstract/nillable
-flags, and other source metadata where available.
-
-Completion requires tests across every taxonomy version represented in the
-corpus and an explicit unresolved-metadata state when an official dependency is
-unavailable.
 
 ## Milestone 5: Definition and dimensional relationships
 
