@@ -4,16 +4,17 @@ This package captures the current design for the SEC document discovery and down
 
 The documents are intentionally scoped to **v0**. They preserve extension points for future scale and new downstream consumers, but avoid building distributed infrastructure before it is needed.
 
-## Implementation status: Phase 2
+## Implementation status: Phase 3
 
 `finbot_ingestion` provides domain contracts, configuration validation, SEC URL
-construction, submissions parsing, shared SEC transport, and package enumeration.
+construction, submissions parsing, shared SEC transport, package enumeration,
+and durable DynamoDB repositories/checkpoints with indexed recovery access.
 It coexists with the existing
 `finbot_filings` package and `finbot-filings` CLI, whose behavior is unchanged.
 See [README-legacy.md](README-legacy.md) for those local workflows.
 
 The distribution is still named `finbot-filings`; both Python namespaces are
-installed from this repository. No new runtime dependencies are required.
+installed from this repository. Phase 3 adds Boto3 for the AWS persistence adapters.
 
 ```bash
 python3.12 -m venv .venv
@@ -34,6 +35,11 @@ The new code is organized as follows:
 - `ingestion/retry_policy.py`: centralized retry timing.
 - `config.py`: `IngestionConfig`, reading process environment or an injected
   mapping. It does not load `.env` automatically or require legacy output paths.
+- `repositories/`: async company/calendar/filing/artifact protocols, typed pages,
+  persistence errors, and `PackageCheckpoint` for durable child creation.
+- `repositories/dynamodb/`: low-level Boto3 adapters, serialization, isolated AWS
+  configuration, and bounded SDK execution. No clients are created on import.
+- `domain/checkpoints.py`: filing enumeration/failure facts separate from `Filing`.
 
 For example, parse a local submissions fixture without contacting SEC:
 
@@ -150,15 +156,124 @@ jitter; `Retry-After` seconds/dates influence delay up to the configured cap.
 Redirects are restricted to official HTTPS SEC hosts and each hop consumes budget.
 Failures and retry recovery use standard Python logging with structured extra fields.
 
-AWS persistence/storage/publication, recovery orchestration, calendar, scheduling,
+S3 storage/SNS publication, recovery orchestration, calendar synchronization, scheduling,
 continuous runtime, Docker/CDK, and deployment remain later phases. There is no
 `finbot_ingestion.main` runtime yet. Legacy source and shared data remain intact.
 
+## DynamoDB persistence and recovery
+
+Phase 3 implements four separate tables; it does not provision them. See
+[LLD section 6.5](docs/LLD.md#65-phase-3-concrete-schema-and-access-patterns) for the
+table/index contract that future CDK must implement. Adapter operations assume
+those tables and indexes already exist; missing resources fail explicitly.
+
+Configure `DynamoDBConfig.from_env()` separately from SEC settings:
+
+| Variable | Default / requirement |
+| --- | --- |
+| `AWS_REGION` | Required |
+| `COMPANIES_TABLE` | Required |
+| `CALENDAR_TABLE` | Required |
+| `FILINGS_TABLE` | Required |
+| `ARTIFACTS_TABLE` | Required; all four table names must differ |
+| `DYNAMODB_CONNECT_TIMEOUT_SECONDS` | `5`, finite and positive |
+| `DYNAMODB_READ_TIMEOUT_SECONDS` | `10`, finite and positive |
+| `DYNAMODB_MAX_ATTEMPTS` | `3` total SDK attempts, standard retry mode |
+| `DYNAMODB_PAGE_SIZE` | `100`, integer from 1 to 1000 |
+| `DYNAMODB_MAX_WORKERS` | `4`, positive integer |
+| `DYNAMODB_CAS_ATTEMPTS` | `4`, positive integer |
+| `DYNAMODB_MAX_CALENDAR_RANGE_DAYS` | `366`, positive integer |
+
+Parsing configuration never resolves credentials or contacts AWS. Existing SEC
+configuration and the legacy CLI do not require any of these new settings.
+
+The following wiring example contacts AWS **only when repository methods run**;
+client construction explicitly opts into the normal AWS credential chain. It is
+not a test or a provisioning command:
+
+```python
+from finbot_ingestion.repositories.dynamodb import (
+    DynamoDBConfig, DynamoDBExecution, DynamoDBFilingRepository,
+    DynamoDBArtifactRepository,
+)
+from finbot_ingestion.repositories.package_checkpoint import PackageCheckpoint
+
+config = DynamoDBConfig.from_env()
+# Share one execution/client across repositories and one application event loop.
+with DynamoDBExecution.from_config(config) as execution:
+    filings = DynamoDBFilingRepository(execution)
+    artifacts = DynamoDBArtifactRepository(execution)
+    checkpoint = PackageCheckpoint(filings, artifacts)
+    # Inside the caller's async context:
+    # await filings.create_if_absent(filing)
+    # await checkpoint.persist(
+    #     filing, package.artifacts(filing, discovered_at=discovered_at),
+    #     primary_document_name=package.primary_document_name,
+    #     completed_at=completed_at,
+    # )
+```
+
+Repository calls offload blocking Boto3 I/O to a bounded executor. Close the shared
+execution after awaited work finishes; it owns its default executor and closes the
+client. Inject a client/executor for tests or future runtime wiring.
+
+Filing/artifact creation uses conditional writes. Compatible duplicates return
+`False` and preserve original observations, ticker, and checkpoints; incompatible
+source identity/provenance raises `RepositoryConflict`. Artifact creation accepts
+only newly discovered records. `PackageCheckpoint.persist()` verifies parent and
+child identities and confirms every child with a strong base-table read before
+committing completion. `mark_enumerated()` is the low-level commit primitive;
+future discovery callers must use the helper rather than call it prematurely.
+
+First enumeration completion timestamp, resolved primary name, and snapshot count
+are retained. Replaying a later validated snapshot can add missing children through
+the helper without changing those first-completion facts. Completion is an observed
+snapshot, not proof that SEC will never add files; automatic recheck policy is later
+orchestration. Existing accessions must not suppress unfinished enumeration.
+
+`mark_stored()` records URI/time/content metadata together and transitions pending
+work from `ACQUIRE` to `PUBLISH`. Compatible repeats preserve the first timestamp;
+different URI/content metadata raises a conflict. `mark_published()` requires
+storage, preserves the first publication timestamp, and removes pending keys.
+These methods validate database checkpoints; they do not verify S3/SNS calls.
+The Phase 4 worker remains responsible for external commit ordering.
+
+`list_pending()`, `list_for_filing()`, and `list_enabled()` return `Page(items,
+next_token)`. Tokens are opaque SDK continuations scoped to the region, table, index,
+query, and page size. Continue until `next_token is None`, even if `items` is
+empty. Pages are bounded by **candidate** count before base-record validation.
+Recovery has no discovery-age cutoff or TTL and does not depend on a company
+remaining enabled. GSIs are eventually consistent; stale candidates are checked
+with strong base reads. Repeat complete passes later to catch delayed entries.
+A single empty query cannot establish that all work is complete.
+
+Failure recording uses strictly increasing, aware attempt timestamps. Retry one
+logical failure-recording operation with the same timestamp/error. Equal repeats
+and older failures do not increment the counter; an equal timestamp with a
+different error conflicts. Error text is bounded to 2048 characters. Retry counts
+are chronological operational diagnostics, not an exact concurrent audit ledger.
+Failures after completion cannot resurrect pending work.
+
+Calendar upserts are per-row and reject equal-sync-time conflicting observations;
+older syncs cannot replace newer records. `get_events(start, end)` selects the
+inclusive UTC **dates** containing those aware datetimes, not intraday event times,
+and queries/paginates each date. Date moves/cancellations and provider successful-
+sync tracking remain Phase 5. Company upserts intentionally replace mutable
+curated configuration, including enabled status.
+
+Persistence schema version `1` uses fixed-width microsecond UTC timestamps,
+omitted optional fields, validated integer counters, and a reversible JSON string
+for raw calendar diagnostic payloads. Event schema `1.0` is unchanged. Oversized
+items, overlong UTF-8 index keys, and malformed records fail explicitly; there are
+no document bytes/hashes. Source identities are never truncated to fit indexes.
+Normal tests block network access, inject dummy credentials, and use Stubber or
+mocked SDK calls. No live SEC or AWS validation has been performed.
+
 ## Migration status
 
-Phases 1 and 2 are complete. See [the migration plan](docs/MIGRATION_PLAN.md) for
-acceptance criteria and validation. Next: Phase 3 — durable DynamoDB repositories
-and recovery access patterns.
+Phases 1–3 are complete. See [the migration plan](docs/MIGRATION_PLAN.md) for
+acceptance criteria and validation. Next: Phase 4 — restart-safe S3/SNS acquisition
+and publication. It has not started.
 
 ## Documents
 

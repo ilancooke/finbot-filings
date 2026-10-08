@@ -165,6 +165,55 @@ Configuration adds positive finite connection/read timeouts (10/30 seconds),
 positive maximum attempts (3), positive base/cap backoff (1/30 seconds), and a
 nonnegative redirect limit (5). See README for environment names.
 
+### 2.3 Phase 3 implementation notes
+
+Async repository protocols now have DynamoDB adapters for companies, calendar
+expectations, filings, and artifacts. The four-table contract below is concrete;
+resource creation/CDK remains Phase 8. Boto3 is the only added runtime dependency.
+No S3/SNS clients, discovery service, recovery orchestrator, calendar provider,
+scheduler, or main runtime are introduced.
+
+The low-level SDK client is deliberately used instead of shared Boto3 resources:
+the client supports bounded executor use and direct Stubber validation, whereas
+resources/sessions are not thread-safe. AttributeValue conversion stays inside
+`repositories/dynamodb/serialization.py`. `DynamoDBExecution` shares the client,
+limits executor admission, awaits in-flight SDK calls on cancellation, and has
+explicit close/context-manager lifecycle. One execution belongs to one event loop;
+close it after repository work finishes. Client construction is explicit through
+`from_config()` or injection; importing modules/configuration does not create one.
+
+Persistence configuration is a separate `DynamoDBConfig`; Phase 1–2 SEC settings
+retain their original requirements. See README for exact environment names.
+Standard SDK retries have finite total attempts/timeouts. Conditional compare-and-
+set retries have a separate finite limit and recompute against durable facts.
+Other SDK errors propagate; they are not converted into missing records or success.
+
+`FilingCheckpoint` holds enumeration and failure facts separately from immutable
+`Filing`. Existing domain/event fields and identity rules are unchanged. Timestamp
+storage uses `YYYY-MM-DDTHH:MM:SS.ffffffZ`, supporting chronological string ordering
+including subsecond differences. Event serialization retains its original format.
+Schema version `1`, omitted optional fields (rather than NULL checkpoints), strict
+integer conversion, validated identities, and a conservative 400-KB item-size
+guard make malformed persistence explicit. Calendar raw payloads use a reversible
+JSON string, accepting finite JSON floats without leaking DynamoDB Decimal types.
+UTF-8 partition/sort-key limits (2048/1024 bytes) are checked without truncating
+identities; unusually long source filenames fail explicitly at persistence.
+
+`PackageCheckpoint.persist(filing, artifacts, primary_document_name=...,
+completed_at=...)` operates on typed validated snapshots, not raw SEC metadata.
+It validates the canonical parent, primary membership and unique child identities,
+creates/rechecks each child, and only then calls `mark_enumerated()`. GSI results
+never prove child durability. Newly created children use the original parent ticker
+so `ArtifactReady.from_artifact()` keeps its matching-metadata requirement even
+after a ticker alias changes. Child records created independently with a conflicting
+parent ticker fail the helper explicitly rather than silently breaking event creation.
+
+The first completed snapshot's timestamp, primary name and count are retained.
+Later validated snapshots may idempotently add children through this helper;
+automatic reconciliation cadence remains later orchestration. No package-wide
+transaction or embedded unbounded manifest is needed: children are immutable,
+application repositories do not delete them, and incomplete parents stay indexed.
+
 ## 3. Core domain models
 
 Use typed Python models/dataclasses/Pydantic models as appropriate. Avoid exposing raw provider/SEC response structures outside adapters.
@@ -483,7 +532,131 @@ Attributes:
 - last_error;
 - last_error_at.
 
-Potential future GSIs can support accession-number or company/time queries, but only add them when a concrete access pattern exists.
+The concrete Phase 3 GSIs below support accession-child queries and recovery.
+Company/time analytical indexes remain deferred until there is an access pattern.
+
+### 6.5 Phase 3 concrete schema and access patterns
+
+All base and GSI keys below have DynamoDB type `S`. All four table names are
+configured separately. Index names are fixed adapter contracts for future CDK:
+
+| Table | Base partition / sort key | GSI | Index partition / sort key | Projection |
+| --- | --- | --- | --- | --- |
+| Companies | `cik` / none | `EnabledCompanies` | `enabled_marker` / `cik` | KEYS_ONLY |
+| Calendar | `expected_date` / `cik` | none | — | — |
+| Filings | `accession_number` / none | `PendingFilingEnumeration` | `pending_work_kind` / `pending_work_sort` | KEYS_ONLY |
+| Artifacts | `artifact_id` / none | `PendingArtifactWork` | `pending_work_kind` / `pending_work_sort` | KEYS_ONLY |
+| Artifacts | same | `ArtifactsByAccession` | `accession_number` / `filename` | KEYS_ONLY |
+
+`repository_schema_version=1` is present on every record. Filings/artifacts also
+carry numeric `revision=0` initially. Successful guarded updates increment revision
+with the durable facts in one atomic `UpdateItem`; no transient state is added.
+
+Companies contain the section 6.1 fields and `enabled_marker="ENABLED"` only while
+enabled. Upserts deliberately replace mutable company configuration. `list_enabled`
+queries the sparse index, then strongly reads the base rows to discard stale entries.
+
+Calendar contains section 6.2 fields; optional diagnostic payload is stored as
+`raw_provider_payload_json`. Upserts are per-row conditional PutItem operations:
+absent row or strictly newer `synced_at`. Equal-time identical repeats succeed
+without replacement; equal-time conflicts raise; older observations are ignored.
+No batch-wide atomicity is claimed. `get_events(start, end)` uses inclusive UTC
+calendar dates containing the aware datetimes, queries each date partition, and
+paginates it. The configured maximum date span defaults to 366 days. Moved-date/
+cancellation reconciliation and last successful provider sync remain Phase 5.
+
+Filings retain section 6.3 metadata and add:
+
+- `retry_count`, paired optional `last_error`/`last_error_at`;
+- paired enumeration completion facts: `enumeration_completed_at`,
+  `resolved_primary_document_name`, `enumerated_artifact_count` (positive integer);
+- `pending_work_kind="ENUMERATE"` and `pending_work_sort` until enumeration completes.
+
+Artifacts retain section 6.4 metadata and add internal revision/pending attributes:
+
+- no storage: `pending_work_kind="ACQUIRE"`;
+- stored without publication: `pending_work_kind="PUBLISH"`;
+- published: pending-work attributes are removed.
+
+`pending_work_sort` is the fixed-width original discovery timestamp followed by
+`/` and accession/artifact identity. It never advances on retries. Sparse keys
+are created/transitioned/removed in the same write as their checkpoint. They
+represent durable work eligibility, not queue membership or `downloading` state.
+No TTL or discovery-age lower bound is used for recovery.
+
+Concrete queries:
+
+| Repository operation | API/access path | Consistency |
+| --- | --- | --- |
+| Company/filing/artifact get; filing checkpoint get | GetItem by full base key | Strong |
+| Enabled-company page | Query EnabledCompanies, marker equality | Eventual; strong hydration |
+| Calendar range | Query base expected_date equality for each selected day | Strong |
+| Pending filing page | Query PendingFilingEnumeration, ENUMERATE equality | Eventual; strong hydration |
+| Pending artifact page | Query PendingArtifactWork, ACQUIRE or PUBLISH equality | Eventual; strong hydration |
+| Child artifact page | Query ArtifactsByAccession, accession equality | Eventual; strong hydration |
+
+Queries use SDK paginators, no FilterExpression or Scan. `PageSize` and `MaxItems`
+bound candidates per public Page (default 100, configurable to 1000). Tokens wrap
+the SDK continuation with region/query/table/index/page-size scope; they are opaque to
+callers, not raw LastEvaluatedKey dictionaries. Empty actionable pages can retain
+a next token after stale/missing candidates are discarded. Continue to token None.
+There is no snapshot isolation across query pages; callers must repeat complete
+passes to pick up delayed GSI entries or work inserted earlier in the ordering.
+Future workers should continue a pass rather than repeatedly restart at the oldest
+failed row. A single empty pass cannot prove the absence of pending work.
+
+The work-class partitions are deliberately low cardinality for v0's single
+ingestion task. No throughput/cost guarantee is inferred from the SEC HTTP ceiling;
+packages can fan out to many DynamoDB writes. Write sharding requires measured
+need and a future additive index migration. PITR, deletion protection, retention,
+capacity, encryption and monitoring are Phase 8 infrastructure decisions; Phase 3
+does not create/change resources. Streams/outbox publication is not introduced;
+the approved S3 → DynamoDB → SNS worker ordering remains Phase 4.
+
+### 6.6 Conditional creation and checkpoint semantics
+
+Filing/artifact PutItem requires `attribute_not_exists(primary_key)`. A conditional
+failure triggers a strong read: compatible repeats return False; incompatible CIK,
+form/source provenance, or artifact identity raises RepositoryConflict. Optional
+primary/document types only conflict when both are populated differently. Later
+ticker/discovery metadata never replaces original values. Artifact creation accepts
+only unprocessed discovery records; checkpoints must use guarded updates.
+
+Every processing update requires `attribute_exists(primary_key)` and matching
+`revision`. Missing rows raise RepositoryNotFound, without phantom upserts. A
+bounded CAS loop re-reads on conflicts and evaluates the intended transition anew;
+exhaustion raises RepositoryBusy. ReturnValues ALL_NEW validates committed results.
+
+`mark_stored` atomically writes URI/time/content metadata and PUBLISH eligibility.
+Repeated matching URI/content-type/byte-count checkpoints preserve the first time;
+incompatible metadata conflicts. `mark_published` requires paired storage, records
+the first publication time, and removes pending keys. Low-level `mark_enumerated`
+retains the first snapshot checkpoint and removes pending keys; the package helper
+is mandatory to establish child durability before calling it. Lost acknowledgments
+are resolved by retrying against durable facts. No S3/SNS verification or exactly-
+once external publication is claimed by these database methods.
+
+Failure updates compare revisions and chronological attempt timestamps. Reuse the
+same aware timestamp/error when retrying one logical failure operation. Equal
+repeats and older attempts are no-ops; equal timestamps with different errors
+conflict. Newer attempts increment retry_count exactly once through CAS, with
+error text truncated to 2048 characters. The counter is chronological diagnostics,
+not an exact concurrent audit ledger. Completed work ignores late failure writes
+and never regains pending eligibility. No terminal/DLQ state is introduced yet.
+
+Current AWS guidance consulted through aws-mcp:
+
+- [Conditional writes and idempotence](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithItems.html)
+- [Sparse index membership](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-indexes-general-sparse-indexes.html)
+- [GSI eventual consistency](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html)
+- [Query pagination](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.Pagination.html)
+- [Python SDK concurrency/configuration](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/programming-with-python.html)
+- [BatchWriteItem lacks conditions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/BestPractices_ConditionalBatchUpdate.html)
+
+The SDK skill's example suggesting direct float serialization conflicts with the
+[Boto3 serializer](https://docs.aws.amazon.com/boto3/latest/_modules/boto3/dynamodb/types.html),
+which rejects floats. Adapters follow SDK behavior. Generic Streams/outbox and live
+benchmark recommendations are outside this approved phase and architecture.
 
 ## 7. Calendar synchronization
 
@@ -576,6 +749,11 @@ For each due company:
 8. create artifact records if absent;
 9. enqueue/download artifacts.
 
+Phase 3 clarification: an existing accession is not evidence that enumeration is
+complete. The Phase 4 discovery service must inspect FilingCheckpoint, finish
+pending enumeration through PackageCheckpoint, and only then dispatch acquisition.
+PackageCheckpoint never enqueues, downloads, stores, or publishes content.
+
 Relevant forms:
 
 ```text
@@ -613,7 +791,10 @@ On startup:
 4. for records with `stored_at` but no `published_at`, retry SNS publication;
 5. completed records require no action.
 
-Recovery queries should be bounded to a practical recent time window or supported through a deliberate DynamoDB access pattern; avoid unbounded table scans.
+Phase 3 implements the deliberate sparse-index access pattern in section 6.5.
+Recovery queries are bounded by paginated candidate count, without a recent-age
+cutoff. Old unfinished filings and artifacts remain indexed; avoid table scans.
+The recovery orchestrator and repeat-pass cadence remain Phase 4+.
 
 ## 13. Retry and failure behavior
 

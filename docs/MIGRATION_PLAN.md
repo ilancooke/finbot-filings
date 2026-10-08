@@ -209,7 +209,7 @@ and delayed package availability. Normal tests must make no live SEC calls.
 
 ### Phase 3 — Implement durable DynamoDB repositories and access patterns
 
-**Status: NOT STARTED.**
+**Status: COMPLETE.**
 
 **Goal:** Persist identity, metadata, and durable progress with atomic idempotency
 and deliberate bounded recovery access patterns.
@@ -235,18 +235,55 @@ partial enumeration, and recovery of pending work older than a convenient recent
 window. Test that discovery of an existing accession does not suppress unfinished
 enumeration.
 
-**Acceptance criteria:**
+**Acceptance criteria — all satisfied:**
 
-- Conditional writes produce one logical filing/artifact per identity without
+- [x] Conditional writes produce one logical filing/artifact per identity without
   replacing original publication/discovery facts.
-- A crash after filing creation or partial child creation leaves recoverable work.
+- [x] A crash after filing creation or partial child creation leaves recoverable work.
   Enumeration completes only after all discovered child records are durable.
-- Recovery uses explicit paginated/indexed access rather than unbounded scans;
+- [x] Recovery uses explicit paginated/indexed access rather than unbounded scans;
   old incomplete work remains discoverable instead of silently aging out.
-- Durable checkpoints drive restart inference; no `downloading` or per-queue-move
+- [x] Durable checkpoints drive restart inference; no `downloading` or per-queue-move
   state is persisted.
-- Repository failure and regression tests pass; schema/access-pattern additions
+- [x] Repository failure and regression tests pass; schema/access-pattern additions
   are documented before dependent services rely on them.
+
+**Concrete delivered choices:** Four separate tables and fixed KEYS_ONLY indexes
+for enabled companies, pending enumeration, pending artifact acquisition/publication,
+and accession-child listing. Strong base reads validate eventual GSI candidates.
+Recovery pages have scoped SDK continuation tokens, with no age cutoff or TTL.
+Conditional creates and bounded revision-guarded updates preserve first provenance.
+FilingCheckpoint keeps enumeration/failure facts separate from immutable Filing;
+PackageCheckpoint confirms every child through primary-key reads before completion.
+Completed snapshots retain their first timestamp/count/primary; later observed
+snapshots can add children without overwriting those facts. No package-wide
+transaction, BatchWriteItem, scans, document bytes, or hashes are introduced.
+
+Async adapters share an injected low-level Boto3 client and bounded executor.
+Separate DynamoDBConfig leaves SEC/legacy configuration requirements unchanged.
+Schema version 1 uses fixed UTC timestamps, strict numeric/identity checks,
+omitted optionals, JSON-encoded raw calendar payloads and size/key guards. Calendar
+upserts protect newer synced_at observations; date-range queries paginate explicit
+UTC dates. Company configuration remains mutable. Boto3 is the new runtime dependency.
+
+**Limitations:** GSI visibility is eventual, so future recovery must repeat whole
+passes. Enumeration completion only describes an observed snapshot. Retry counts
+are chronological diagnostics, not an exact concurrent audit ledger. Low-level
+mark_enumerated is used through PackageCheckpoint; database checkpoint methods do
+not verify external S3/SNS commits. Reconciliation cadence, terminal/DLQ handling,
+calendar date-move/cancellation logic and runtime orchestration remain later phases.
+Low-cardinality work-class partitions are a deliberate v0 tradeoff, without a
+production throughput or pricing claim. Future CDK must provision the documented
+tables/indexes; this phase does not create or inspect AWS resources.
+
+**Validation (2026-10-08):** 340 tests pass (270 prior tests plus 70 new Phase 3
+tests); compilation and diff checks pass. SDK Stubber validates wire requests;
+stateful mocked SDK boundaries exercise conditional races, lost acknowledgments,
+partial child creation/parent commit, old work, pagination and stale/delayed GSIs.
+Integration tests block network and use dummy credentials. Executor tests verify
+event-loop responsiveness, bounded concurrency and cancellation cleanup. No live
+AWS/SEC validation, resource changes, shared-data mutations or legacy removal.
+README/LLD/example environment record the implementation and AWS guidance choices.
 
 ### Phase 4 — Deliver restart-safe acquisition and publication
 
@@ -458,7 +495,7 @@ image builds. Any live SEC smoke test remains explicitly manual.
 
 ## 4. Current migration status
 
-**Phases 1–2: COMPLETE. Phases 3–8: NOT STARTED.**
+**Phases 1–3: COMPLETE. Phases 4–8: NOT STARTED.**
 
 Phase 1 delivered typed contracts, deterministic identities, UTC timestamp
 validation, offline submissions parsing, and configuration validation while
@@ -483,7 +520,7 @@ Phase 2 delivered:
 - README, LLD, and example environment updates; no legacy code removal, AWS calls,
   scheduler/runtime, or shared-data changes.
 
-**Implementation choices:** Reused `requests` and BeautifulSoup; no dependencies
+**Phase 2 implementation choices:** Reused `requests` and BeautifulSoup; no dependencies
 were added. One in-flight HTTP attempt avoids unsafe concurrent session access and
 keeps dispatch admission atomic. The future async runtime must use a bounded
 executor. Slow responses can reduce throughput; this implementation does not
@@ -491,26 +528,33 @@ promise the five-request/second maximum will always be achieved. Package
 completeness means a consistent observed snapshot, not proof against later SEC
 additions. Incomplete snapshots raise explicitly for caller-driven retry.
 
-**Validation (2026-10-08):** 270 tests pass, including the existing legacy suite;
+**Historical Phase 2 validation (2026-10-08):** 270 tests passed, including the existing legacy suite;
 compilation and diff checks pass. Tests use fake transports/clocks and block live
 network access in ingestion unit/replay tests. No live SEC or AWS validation was
 performed. Phase 2 did not change the approved architecture; concrete interface
 adjustments and limitations are recorded in LLD section 2.2.
 
+Phase 3 delivered durable repositories, enumeration/checkpoint coordination,
+bounded paginated/indexed recovery, isolated DynamoDB configuration, Boto3 adapters,
+and 70 offline unit/integration tests. See the Phase 3 section and LLD sections
+2.3/6.5/6.6 for concrete contracts and limitations. Latest validation: 340 tests
+pass, compilation/diff checks pass; no live AWS or SEC operations were performed.
+
 ## 5. Next milestone
 
-**NEXT: Phase 3 — Implement durable DynamoDB repositories and access patterns.**
+**NEXT: Phase 4 — Deliver restart-safe acquisition and publication.**
 
-Build the repository protocols and DynamoDB adapters described in the Phase 3
-section. Preserve immutable provenance with conditional writes, track durable
-package-enumeration progress, and use deliberate paginated/indexed recovery access
-patterns that retain old unfinished work. Discovery of an existing filing must not
-suppress incomplete enumeration or missing child creation.
+Build immutable conditional S3 storage, SNS publication and the recovery/discovery
+worker described in Phase 4. Reuse PackageCheckpoint for unfinished enumeration
+even when an accession already exists; hydrate canonical filing/artifact metadata.
+Use pending-work pages until token None, including empty actionable pages, and
+repeat complete passes for eventual GSI visibility. Preserve S3 → DynamoDB → SNS
+ordering and first checkpoint provenance after lost acknowledgments.
 
-Start by inspecting the working tree, Phase 1 domain contracts, Phase 2
-`FilingIndex.artifacts()` output, and the persistence/recovery design. Use mocked
-AWS boundaries. Do not start S3/SNS acquisition, calendar, or service orchestration
-until their phases are authorized. Phase 3 has not started.
+Start by inspecting the working tree, repository protocols/adapter semantics,
+PackageCheckpoint and the documented table/index contract. Mock all AWS boundaries
+for routine tests. Phase 4 has not started and requires separate authorization;
+do not begin calendar providers, continuous runtime, cutover or CDK deployment.
 
 ## 6. Remaining unresolved external inputs
 
@@ -519,7 +563,7 @@ until their phases are authorized. Phase 3 has not started.
 | Free earnings-calendar provider and available access | TBD | Production provider adapter in Phase 5 |
 | Authoritative approximately 500-company universe with ticker/CIK/name/enabled fields | TBD | Production universe seeding; the legacy sample ticker list is insufficient |
 
-**Neither input blocks Phase 3.** Use fixture companies and mocked SEC responses
+**Neither input blocked Phase 3 or blocks Phase 4.** Use fixture companies and mocked SEC responses
 for development. Do not invent a provider or silently choose a production universe.
 Exact windows, safety cadence, retry constants, and alarm thresholds remain
 configurable implementation choices within the approved design.

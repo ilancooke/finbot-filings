@@ -3,7 +3,8 @@
 from .artifact import Artifact
 from .calendar import ExpectedEarningsEvent
 from .company import Company
+from .checkpoints import FilingCheckpoint
 from .events import ArtifactReady
 from .filing import Filing
 
-__all__ = ["Artifact", "ArtifactReady", "Company", "ExpectedEarningsEvent", "Filing"]
+__all__ = ["Artifact", "ArtifactReady", "Company", "ExpectedEarningsEvent", "Filing", "FilingCheckpoint"]
