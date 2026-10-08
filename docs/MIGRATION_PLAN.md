@@ -151,7 +151,7 @@ implicitly. These details are recorded in LLD section 2.1.
 
 ### Phase 2 — Implement shared SEC transport and complete package discovery
 
-**Status: NEXT — not started.**
+**Status: COMPLETE.**
 
 **Goal:** Provide fresh SEC responses, a single reliable outbound request budget,
 and complete filing-package enumeration independent of XBRL availability.
@@ -458,77 +458,59 @@ image builds. Any live SEC smoke test remains explicitly manual.
 
 ## 4. Current migration status
 
-**Phase 1: COMPLETE. Phases 2–8: NOT STARTED.**
+**Phases 1–2: COMPLETE. Phases 3–8: NOT STARTED.**
 
-Phase 1 delivered:
+Phase 1 delivered typed contracts, deterministic identities, UTC timestamp
+validation, offline submissions parsing, and configuration validation while
+preserving the legacy CLI. Its historical validation was 224 tests, including
+144 legacy tests.
 
-- Typed domain models.
-- Deterministic filing/artifact identities and SEC URL construction.
-- `ArtifactReady` serialization.
-- Offline submissions parsing for all six supported forms.
-- Strict UTC timestamp handling.
-- Configuration validation capped at five SEC requests/second.
-- Packaging, README, LLD, and example-configuration updates.
-- Legacy CLI preserved.
-- No AWS integration, network transport, scheduling, or runtime added.
-- **224 tests passing**, including all 144 legacy tests.
-- **Compilation and diff checks passing**; independent package imports and legacy
-  CLI help also verified.
+Phase 2 delivered:
 
-All twelve Phase 1 acceptance criteria in section 3 are satisfied. These are the
-recorded implementation validation results, not a claim that tests were rerun for
-this documentation-only handoff. No material architectural deviation was made in
-Phase 1; concrete contract choices are recorded in LLD section 2.1.
+- Synchronous `SecClient` with reused sessions and an explicitly shared limiter.
+- Serialized dispatch, conservative pacing, and rolling-window enforcement for
+  submissions, indexes, downloads, retries, and manually followed redirects.
+- Validated timeout/retry/redirect configuration, typed errors, bounded jittered
+  retries, per-attempt failure logs, and recovery logs.
+- Fresh responses with no permanent JSON cache.
+- Pure HTML/directory package reconciliation, complete observed-file enumeration,
+  primary resolution, available document types, safe links/names, and explicit
+  incomplete-package failures.
+- Exact response-content bytes and deterministic artifact construction.
+- Offline unit tests and synthetic SEC-shaped package replay, including concurrent
+  mixed operations and delayed package availability. These fixtures are synthetic,
+  not represented as captured historical SEC responses.
+- README, LLD, and example environment updates; no legacy code removal, AWS calls,
+  scheduler/runtime, or shared-data changes.
 
-**NEXT: Phase 2 — Implement shared SEC transport and complete package discovery.**
+**Implementation choices:** Reused `requests` and BeautifulSoup; no dependencies
+were added. One in-flight HTTP attempt avoids unsafe concurrent session access and
+keeps dispatch admission atomic. The future async runtime must use a bounded
+executor. Slow responses can reduce throughput; this implementation does not
+promise the five-request/second maximum will always be achieved. Package
+completeness means a consistent observed snapshot, not proof against later SEC
+additions. Incomplete snapshots raise explicitly for caller-driven retry.
+
+**Validation (2026-10-08):** 270 tests pass, including the existing legacy suite;
+compilation and diff checks pass. Tests use fake transports/clocks and block live
+network access in ingestion unit/replay tests. No live SEC or AWS validation was
+performed. Phase 2 did not change the approved architecture; concrete interface
+adjustments and limitations are recorded in LLD section 2.2.
 
 ## 5. Next milestone
 
-**NEXT: Phase 2 — Implement shared SEC transport and complete package discovery**
+**NEXT: Phase 3 — Implement durable DynamoDB repositories and access patterns.**
 
-**Goal:** Build the SEC access layer and reliable complete-package discovery on
-the Phase 1 contracts. Do not start AWS persistence or service orchestration.
+Build the repository protocols and DynamoDB adapters described in the Phase 3
+section. Preserve immutable provenance with conditional writes, track durable
+package-enumeration progress, and use deliberate paginated/indexed recovery access
+patterns that retain old unfinished work. Discovery of an existing filing must not
+suppress incomplete enumeration or missing child creation.
 
-**Starting scope:** `sec/client.py`, `sec/rate_limiter.py`, `sec/filing_index.py`,
-`sec/errors.py`, centralized retry policy, transport configuration, and offline
-unit/package replay fixtures. Reuse `sec/submissions.py`, `sec/urls.py`, domain
-identities, legacy client policies, and generic accession-directory parsing.
-Inspect current source/tests and design documents before editing.
-
-**Important design note:** The requirement is a centralized SEC request budget
-and reliable package discovery. Asynchronous HTTP is not an architectural
-requirement. Synchronous or asynchronous transport is acceptable if its concurrency
-behavior is justified, all outbound attempts share the budget, and it can fit the
-later runtime without blocking scheduling. Document the selected approach and
-any interface adjustment; do not assume a new HTTP library is required.
-
-**Tests to implement:**
-
-- Concurrent request scheduling with a fake monotonic clock across submissions,
-  indexes, document downloads, retries, and followed redirects.
-- Configured lower rates and the five-request/second ceiling, without bursts that
-  violate a rolling one-second window.
-- Identifying headers, reused connections, timeouts, retryable network/HTTP errors,
-  bounded backoff/jitter, and failure/recovery logging.
-- Repeated submissions and package reads returning changed data rather than
-  permanent cached JSON.
-- Complete package enumeration for non-XBRL filings, many exhibits, PDFs, duplicate
-  links, missing primary names, unsafe names, and temporarily incomplete indexes.
-- Exact response-byte preservation and stable artifact identity across retries.
-
-**Milestone acceptance:** All SEC requests use one centralized budget; concurrency
-never exceeds the configured ceiling or five starts in a rolling second; fresh
-responses reveal new filings/documents; complete packages yield the primary and
-all attached documents with original names/types where available and no duplicate
-logical artifacts. There is no EX-99.1-only filter, XBRL prerequisite, content
-interpretation, hashing, AWS integration, scheduling, or runtime addition. New
-offline tests and legacy regressions pass, and the transport/interface choice is
-documented. See the full Phase 2 section for the complete phase contract.
-
-**Plan clarification:** The earlier proposed sequence suggested async transport.
-The approved handoff explicitly makes HTTP transport style an implementation
-choice; centralized rate control and reliable discovery remain mandatory. Phase 2
-has not started as part of this documentation task.
+Start by inspecting the working tree, Phase 1 domain contracts, Phase 2
+`FilingIndex.artifacts()` output, and the persistence/recovery design. Use mocked
+AWS boundaries. Do not start S3/SNS acquisition, calendar, or service orchestration
+until their phases are authorized. Phase 3 has not started.
 
 ## 6. Remaining unresolved external inputs
 
@@ -537,7 +519,7 @@ has not started as part of this documentation task.
 | Free earnings-calendar provider and available access | TBD | Production provider adapter in Phase 5 |
 | Authoritative approximately 500-company universe with ticker/CIK/name/enabled fields | TBD | Production universe seeding; the legacy sample ticker list is insufficient |
 
-**Neither input blocks Phase 2.** Use fixture companies and mocked SEC responses
+**Neither input blocks Phase 3.** Use fixture companies and mocked SEC responses
 for development. Do not invent a provider or silently choose a production universe.
 Exact windows, safety cadence, retry constants, and alarm thresholds remain
 configurable implementation choices within the approved design.

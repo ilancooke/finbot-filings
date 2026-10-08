@@ -1,1 +1,1 @@
-"""Offline SEC adapters. HTTP transport is not implemented in Phase 1."""
+"""SEC transport and pure metadata adapters."""

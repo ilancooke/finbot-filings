@@ -13,8 +13,7 @@ from finbot_ingestion.domain.validation import utc_datetime
 from .urls import filing_index_url
 
 
-class SECDataError(ValueError):
-    """Malformed or incomplete SEC metadata; callers must not checkpoint it as complete."""
+from .errors import SECDataError
 
 
 def parse_filing_arrays(

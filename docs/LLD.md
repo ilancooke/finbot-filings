@@ -107,6 +107,64 @@ Concrete Phase 1 contract choices:
   and a finite SEC request ceiling in `(0, 5]`, defaulting to `5`. AWS/calendar
   settings and actual request-budget enforcement are implemented in later phases.
 
+### 2.2 Phase 2 implementation notes
+
+`sec/client.py` now implements synchronous `SecClient` using the existing
+`requests` dependency. Its public contracts are:
+
+```python
+get_company_submissions(company: Company, *, discovered_at=None) -> list[Filing]
+get_filing_index(filing: Filing) -> FilingIndex
+download_document(url: str) -> DownloadedDocument
+```
+
+These replace the illustrative async SEC signatures below for the current
+implementation. Provider payloads stay inside the client/pure parsers. The future
+async runtime must use a bounded executor; it must not call blocking HTTP on the
+scheduler event loop. No runtime/executor orchestration is added in Phase 2.
+
+The caller explicitly supplies one shared `SECRateLimiter`. All clients using it
+share a dispatch lock held from admission through HTTP response receipt. Requests
+are paced without burst credit, with an additional rolling-one-second guard;
+configured lower rates impose longer spacing. One in-flight attempt is an accepted
+v0 tradeoff: slow responses reduce throughput. Backoff occurs outside the lock.
+Sessions are reused, automatic HTTP retries/redirects are disabled, and every manual
+retry/redirect consumes the same budget. Clients are context managers; closing one
+closes its session, not the shared limiter. Successful responses are never cached.
+
+`ingestion/retry_policy.py` centralizes bounded exponential full-jitter timing.
+Connection/timeouts, 403/429/5xx and package metadata 404 are retried; other HTTP
+errors fail immediately. Redirect chains have a separate finite hop bound.
+Retry-After supports seconds/dates and is bounded by the configured delay cap.
+Failures and successful recovery emit logging records with operation/attempt/error
+fields and company/accession context when available. Logging timestamps come from
+the standard LogRecord; production JSON formatting remains Phase 6.
+
+`sec/filing_index.py` reconciles HTML document tables and directory JSON. It
+validates accession paths and filenames, resolves inline-viewer document links,
+preserves document types when present, collapses duplicate references, rejects
+conflicting types, and enumerates all directory files except recognized index
+infrastructure. No extension/form/exhibit-specific acquisition cutoff is used.
+Missing primary names are resolved only when one document has the filing form.
+`FilingIndex.documents` is a deterministic filename-sorted tuple; `artifacts()`
+constructs domain artifacts using an explicitly supplied discovery timestamp.
+
+Empty, missing, or inconsistent package metadata raises
+`SECIncompletePackageError`, a `SECDataError` subtype. The caller must retry the
+whole fresh snapshot later and must not mark enumeration complete. Malformed or
+unsafe metadata also fails explicitly. Successful enumeration validates the
+observed snapshot; it cannot prove no future documents will appear. Durable child
+creation, enumeration checkpoints, and subsequent reconciliation remain Phase 3+.
+The Phase 1 `sec.submissions.SECDataError` import remains compatible.
+
+`DownloadedDocument` carries response-content bytes, content type, final source
+URL, and computed byte length. HTTP content decoding follows requests semantics;
+there is no text transcoding, document parsing, hashing, or storage.
+
+Configuration adds positive finite connection/read timeouts (10/30 seconds),
+positive maximum attempts (3), positive base/cap backoff (1/30 seconds), and a
+nonnegative redirect limit (5). See README for environment names.
+
 ## 3. Core domain models
 
 Use typed Python models/dataclasses/Pydantic models as appropriate. Avoid exposing raw provider/SEC response structures outside adapters.

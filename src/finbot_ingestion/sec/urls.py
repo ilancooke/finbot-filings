@@ -28,3 +28,7 @@ def filing_index_url(cik: str | int, accession_number: str) -> str:
 def document_url(cik: str | int, accession_number: str, filename: str) -> str:
     name = quote(validate_filename(filename), safe="._-")
     return f"{accession_directory_url(cik, accession_number)}/{name}"
+
+
+def accession_index_json_url(cik: str | int, accession_number: str) -> str:
+    return f"{accession_directory_url(cik, accession_number)}/index.json"

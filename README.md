@@ -4,10 +4,11 @@ This package captures the current design for the SEC document discovery and down
 
 The documents are intentionally scoped to **v0**. They preserve extension points for future scale and new downstream consumers, but avoid building distributed infrastructure before it is needed.
 
-## Implementation status: Phase 1
+## Implementation status: Phase 2
 
-`finbot_ingestion` provides offline domain contracts, configuration validation,
-SEC URL construction, and submissions parsing. It coexists with the existing
+`finbot_ingestion` provides domain contracts, configuration validation, SEC URL
+construction, submissions parsing, shared SEC transport, and package enumeration.
+It coexists with the existing
 `finbot_filings` package and `finbot-filings` CLI, whose behavior is unchanged.
 See [README-legacy.md](README-legacy.md) for those local workflows.
 
@@ -28,6 +29,9 @@ The new code is organized as follows:
 - `sec/submissions.py`: pure parsing of supplied SEC JSON, adapted from the
   legacy submissions parser, without requests, ticker lookup, or a count limit.
 - `sec/urls.py`: official submissions, filing-index, and document URLs.
+- `sec/client.py`, `sec/rate_limiter.py`: shared transport and request budgeting.
+- `sec/filing_index.py`: pure package parsing and artifact enumeration.
+- `ingestion/retry_policy.py`: centralized retry timing.
 - `config.py`: `IngestionConfig`, reading process environment or an injected
   mapping. It does not load `.env` automatically or require legacy output paths.
 
@@ -74,7 +78,7 @@ the record, not an actual storage commit; the future worker must enforce the
 S3 → DynamoDB → SNS ordering. Artifact storage checkpoints require `s3_uri` and
 `stored_at` together, and publication requires a storage checkpoint.
 
-Phase 1 configuration:
+SEC configuration:
 
 | Environment variable | Requirement |
 | --- | --- |
@@ -83,21 +87,78 @@ Phase 1 configuration:
 
 Export these variables before calling `IngestionConfig.from_env()`, or pass a
 mapping directly. `.env.example` retains legacy settings and documents the new
-ceiling. This validates the future service's ceiling; it does not change the
-legacy client's throttling or implement a rate limiter yet.
+ceiling. The new SEC client enforces this ceiling through an explicitly shared limiter.
+The legacy client's throttling remains unchanged.
 
-HTTP transport/rate limiting, filing-package enumeration, AWS repositories and
-storage, SNS publication, recovery, calendar synchronization, scheduling,
-observability, Docker/CDK, and CI/deployment remain later phases. There is no
-`finbot_ingestion.main` runtime yet. The legacy source and existing data have not
-been migrated or removed. Phase 1 unit tests block network connections and use
-local fixtures only.
+## SEC transport and package discovery
+
+```python
+from finbot_ingestion.config import IngestionConfig
+from finbot_ingestion.sec.client import SecClient
+from finbot_ingestion.sec.rate_limiter import SECRateLimiter
+
+config = IngestionConfig.from_env()
+# Construct once and share across every SEC client/caller in the service.
+limiter = SECRateLimiter(config.sec_max_requests_per_second)
+with SecClient(config, limiter=limiter) as client:
+    filings = client.get_company_submissions(company)
+    for filing in filings:
+        package = client.get_filing_index(filing)
+        for document in package.documents:
+            downloaded = client.download_document(document.sec_url)
+            # downloaded.content: original response-content bytes; no text conversion.
+```
+
+This example contacts SEC when run; routine tests use fake transports only.
+`company` is a domain `Company` with a curated CIK. Submissions returns typed
+`Filing` records, package discovery returns `FilingIndex`, and downloads return
+`DownloadedDocument` (`content`, `content_type`, `source_url`, `size_bytes`).
+`package.artifacts(filing, discovered_at=...)` creates deterministic domain records
+without marking them stored or published.
+
+The synchronous `requests` client reuses a session and serializes HTTP attempts
+under the shared limiter. Later async runtime callers must use a bounded executor.
+There is one in-flight HTTP attempt at a time; slow responses can reduce throughput
+below five requests/second. Retries and manually followed redirects use the same
+budget. No successful JSON response is permanently cached.
+
+Package discovery reconciles HTML document tables with accession-directory JSON.
+It includes every directory file except recognized index/navigation files, retains
+original names and available document types, and requires a resolvable primary
+filing. Raw XML, images, and other auxiliary files are included without interpretation.
+Missing/inconsistent metadata raises `SECIncompletePackageError`; unsafe or malformed
+metadata raises `SECDataError`. The caller must retry the complete package snapshot
+later, never checkpoint the error as success. A validated snapshot cannot guarantee
+that SEC will not subsequently add another file. Durable reconciliation is Phase 3+.
+
+Additional exported environment variables:
+
+| Variable | Default |
+| --- | --- |
+| `SEC_CONNECT_TIMEOUT_SECONDS` | `10` |
+| `SEC_READ_TIMEOUT_SECONDS` | `30` |
+| `SEC_MAX_ATTEMPTS` | `3` |
+| `SEC_BACKOFF_BASE_SECONDS` | `1` |
+| `SEC_BACKOFF_CAP_SECONDS` | `30` |
+| `SEC_MAX_REDIRECTS` | `5` |
+
+Timeouts/backoff must be finite and positive; the cap must be at least the base.
+Attempts must be a positive integer and redirects a nonnegative integer.
+Timeouts/connection failures, HTTP 403/429/5xx, and package-index 404 responses
+receive bounded retries. Other HTTP errors fail immediately. Backoff uses full
+jitter; `Retry-After` seconds/dates influence delay up to the configured cap.
+Redirects are restricted to official HTTPS SEC hosts and each hop consumes budget.
+Failures and retry recovery use standard Python logging with structured extra fields.
+
+AWS persistence/storage/publication, recovery orchestration, calendar, scheduling,
+continuous runtime, Docker/CDK, and deployment remain later phases. There is no
+`finbot_ingestion.main` runtime yet. Legacy source and shared data remain intact.
 
 ## Migration status
 
-Phase 1 is complete. See [the migration plan](docs/MIGRATION_PLAN.md) for the
-full eight-phase execution roadmap, acceptance criteria, validation record, and
-next milestone: Phase 2 — shared SEC transport and complete package discovery.
+Phases 1 and 2 are complete. See [the migration plan](docs/MIGRATION_PLAN.md) for
+acceptance criteria and validation. Next: Phase 3 — durable DynamoDB repositories
+and recovery access patterns.
 
 ## Documents
 
