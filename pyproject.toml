@@ -9,7 +9,7 @@ description = "SEC ingestion foundations alongside legacy local filing workflows
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "boto3>=1.34,<2",
+    "boto3>=1.43.110,<2",
     "beautifulsoup4>=4.12,<5",
     "lxml>=5,<7",
     "pyarrow>=15",

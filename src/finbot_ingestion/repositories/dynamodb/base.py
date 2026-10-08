@@ -5,6 +5,7 @@ import json
 
 from .serialization import decode, encode, integer, MAX_ERROR_CHARS, timestamp
 from ..errors import RepositoryBusy, RepositoryConflict, RepositoryDataError, RepositoryNotFound
+from finbot_ingestion.domain.checkpoints import STAGE_COUNTERS
 
 
 class DynamoDBRepository:
@@ -92,6 +93,51 @@ class DynamoDBRepository:
                 return None
             return ({"retry_count": integer(item.get("retry_count", 0), "retry_count") + 1,
                      "last_error": error, "last_error_at": at}, ())
+        await self._update(key, decide, validate)
+
+    async def _stage_failure(self, key, stage, error, at, *, max_failures, error_type,
+                             terminal, validate, current_stage):
+        """Count one failed workflow attempt and atomically decide terminal work."""
+        if stage not in STAGE_COUNTERS or type(max_failures) is not int or max_failures < 1:
+            raise ValueError("valid stage and positive max_failures required")
+        if not isinstance(error, str) or not error or not isinstance(error_type, str) or not error_type:
+            raise ValueError("nonempty failure details required")
+        if type(terminal) is not bool:
+            raise ValueError("terminal must be boolean")
+        error, error_type, at = error[:MAX_ERROR_CHARS], error_type[:MAX_ERROR_CHARS], timestamp(at)
+
+        def decide(item):
+            if "terminal_at" in item or current_stage(item) != stage:
+                return None
+            old_at = item.get("failure_at")
+            if old_at is not None and old_at >= at:
+                if old_at == at and (item["failure_error"], item["failure_stage"]) != (error, stage):
+                    raise RepositoryConflict("different stage failures share a timestamp")
+                return None
+            counter = STAGE_COUNTERS[stage]
+            count = integer(item.get(counter, 0), counter) + 1
+            sets = {counter: count, "failure_stage": stage, "failure_error": error, "failure_at": at}
+            # Phase 3 diagnostic observations may be newer than an incoming stage
+            # observation; the separate stage budget must not rewind that history.
+            if item.get("last_error_at") is None or item["last_error_at"] < at:
+                sets.update(retry_count=integer(item.get("retry_count", 0), "retry_count") + 1,
+                            last_error=error, last_error_at=at)
+            if terminal or count >= max_failures:
+                sets.update(terminal_stage=stage, terminal_error=error,
+                            terminal_error_type=error_type, terminal_at=at,
+                            pending_work_kind="DEAD_LETTER")
+            return sets, ()
+        await self._update(key, decide, validate)
+
+    async def _mark_dead_lettered(self, key, at, validate):
+        at = timestamp(at)
+
+        def decide(item):
+            if "terminal_at" not in item:
+                raise RepositoryConflict("dead-letter checkpoint requires terminal work")
+            if "dead_lettered_at" in item:
+                return None
+            return {"dead_lettered_at": at}, ("pending_work_kind", "pending_work_sort")
         await self._update(key, decide, validate)
 
     async def _query(self, *, index=None, partition, value,

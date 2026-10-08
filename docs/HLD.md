@@ -272,9 +272,22 @@ s3_uri/stored_at exists, no published_at
 
 published_at exists
     -> complete
+
+terminal observation exists, dead-letter send not checkpointed
+    -> retry operational dead-letter send
+
+terminal observation and dead-letter checkpoint exist
+    -> operator investigation; no normal worker redrive
 ```
 
 The same filing/artifact may be encountered repeatedly without creating duplicate logical records.
+
+Phase 4 implements this ordering with conditional S3 creation and inspected
+original object provenance. It also recovers unfinished filing enumeration before
+acquiring children. SNS and operational dead-letter delivery are at least once;
+consumers deduplicate by stable artifact/failure identity. Explicit recovery passes
+are implemented; continuous scheduling remains a later runtime phase. Normal v0
+acquisition is bounded to 64 MiB per artifact; larger documents fail explicitly.
 
 ## 9. Failure handling
 

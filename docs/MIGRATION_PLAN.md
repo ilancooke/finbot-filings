@@ -287,7 +287,7 @@ README/LLD/example environment record the implementation and AWS guidance choice
 
 ### Phase 4 — Deliver restart-safe acquisition and publication
 
-**Status: NOT STARTED.**
+**Status: COMPLETE.**
 
 **Goal:** Complete the acquisition-to-event path with immutable storage,
 idempotency, and recovery across every durable boundary.
@@ -320,21 +320,72 @@ SNS failures, duplicate discovery, amendments, terminal work, and DLQ-send failu
 
 **Acceptance criteria:**
 
-- Raw objects are created conditionally (for example, `If-None-Match: *`) and
+- [x] Raw objects are created conditionally (for example, `If-None-Match: *`) and
   never replaced on retry. Deterministic keys alone do not enforce immutability.
-- If S3 succeeds before the metadata checkpoint, recovery inspects the existing
+- [x] If S3 succeeds before the metadata checkpoint, recovery inspects the existing
   object and repairs metadata without replacing bytes or inventing new provenance.
-- Stored artifacts are not downloaded again merely because SNS publication fails.
-- If SNS succeeds before `published_at` is saved, recovery may republish the same
+- [x] Stored artifacts are not downloaded again merely because SNS publication fails.
+- [x] If SNS succeeds before `published_at` is saved, recovery may republish the same
   logical event. Document at-least-once delivery and consumer deduplication by
   `artifact_id`; do not claim exactly-once delivery.
-- Restart finishes incomplete filing enumeration and artifact acquisition.
+- [x] Restart finishes incomplete filing enumeration and artifact acquisition.
   Amendments retain separate immutable records and objects.
-- Events contain references/metadata only and are published only after S3 and
+- [x] Events contain references/metadata only and are published only after S3 and
   DynamoDB success. Completed records require no recovery action.
-- Terminal failures before artifact creation are also representable; failed
+- [x] Terminal failures before artifact creation are also representable; failed
   dead-letter sends do not silently discard work.
-- Failure/restart integration tests and legacy regressions pass.
+- [x] Failure/restart integration tests and legacy regressions pass.
+
+**Concrete delivered choices:** Low-level S3 conditional PUT and HEAD inspection
+with versioned ASCII canonical provenance; HEAD LastModified supplies the original
+stored_at for first commit and repair. SNS receives unchanged ArtifactReady 1.0
+JSON after the strong database storage checkpoint; ambiguous acknowledgments may
+duplicate logical events. Operational SQS receives stable metadata-only terminal
+envelopes; database terminal facts precede the send, and the first successful send
+checkpoint removes pending membership. Four tables and existing GSI definitions
+remain unchanged; DEAD_LETTER is an additional pending-work partition value.
+
+ProcessingCheckpoint/ArtifactCheckpoint add separate persisted workflow stage
+budgets, terminal observations and dead-letter checkpoints without changing source
+Artifact or event fields. FilingCheckpoint covers terminal enumeration before
+child creation. CAS guards stop late failures from terminalizing advanced work.
+Partially created children defer until successful enumeration; a terminal parent's
+envelope covers its blocked package. Submissions failures surface without success
+watermarks and are retried on a later poll; shared credential/permission/resource
+errors propagate. No invented pre-filing identity or extra failure table is used.
+
+Discovery, acquisition/publication and explicit RecoveryService.run_pass reuse
+Phase 2 transport and Phase 3 repositories/PackageCheckpoint. Known new children
+are dispatched by identity/strong reads, not immediate GSI visibility. Recovery
+continues all candidate pages, including empty token-bearing pages and failed or
+deferred oldest rows. Shared bounded executors preserve event-loop responsiveness
+and retain admission through repeated cancellation; SDK and workflow attempt logs
+record failures/recovery. Per-identity locks and two whole artifact slots bound
+local overlap and retained bytes.
+
+**Implementation limits:** Default/maximum artifact size is 64 MiB, configurable
+downward, enforced by streaming decoded SEC bytes. Larger artifacts fail visibly
+without an unsafe multipart fallback. There is no application content hash, so
+compatibility checks rely on canonical metadata and inspected object attributes.
+At-least-once SNS/SQS delivery requires stable-ID deduplication. No automated
+terminal redrive command, completed-package reconciliation cadence, continuous
+recovery loop, calendar provider, main runtime or infrastructure is introduced.
+An operator redrive contract remains future work; normal workers do not reset
+terminal facts. A terminal package's partial children can remain deferred index
+candidates. GSI visibility remains eventual and a single pass cannot prove global
+completion. Cloud permissions, encryption/retention and conditional-write policies
+must be supplied by future infrastructure. Boto3 minimum raised to 1.43.110, whose
+conditional-PUT model was verified locally; no new dependency is added.
+
+**Validation (2026-10-08):** See current Phase 4 validation below. Tests use SDK
+Stubber/stateful mocked boundaries and block network access. They replay the
+complete submissions/parser/package/SEC-byte/S3/database/SNS path, all durable
+acknowledgment/checkpoint losses, separate restart-persistent budgets, terminal
+enumeration/acquisition/publication, failed/lost DLQ sends, pagination/old/disabled
+company work, amendments, canonical ticker aliases, Unicode filenames, limits,
+permission failures and cancellation. No live AWS/SEC calls, AWS changes,
+shared-data writes or legacy removal. README/LLD/example environment document
+the delivered contracts; accepted ADR architecture remains unchanged.
 
 ### Phase 5 — Add earnings-calendar synchronization
 
@@ -495,7 +546,7 @@ image builds. Any live SEC smoke test remains explicitly manual.
 
 ## 4. Current migration status
 
-**Phases 1–3: COMPLETE. Phases 4–8: NOT STARTED.**
+**Phases 1–4: COMPLETE. Phases 5–8: NOT STARTED.**
 
 Phase 1 delivered typed contracts, deterministic identities, UTC timestamp
 validation, offline submissions parsing, and configuration validation while
@@ -537,24 +588,35 @@ adjustments and limitations are recorded in LLD section 2.2.
 Phase 3 delivered durable repositories, enumeration/checkpoint coordination,
 bounded paginated/indexed recovery, isolated DynamoDB configuration, Boto3 adapters,
 and 70 offline unit/integration tests. See the Phase 3 section and LLD sections
-2.3/6.5/6.6 for concrete contracts and limitations. Latest validation: 340 tests
+2.3/6.5/6.6 for concrete contracts and limitations. Historical Phase 3 validation: 340 tests
 pass, compilation/diff checks pass; no live AWS or SEC operations were performed.
+
+Phase 4 delivered the S3/SNS/SQS adapters, restart-safe discovery/acquisition workers,
+durable stage budgets/terminal checkpoints and explicit paginated recovery passes.
+See Phase 4 above and LLD sections 2.4/6.7 for contracts and limitations.
+
+**Current Phase 4 validation (2026-10-08):** 414 tests pass (340 prior tests plus
+74 new tests), using the repository-local Python 3.14 environment. Compilation
+(`.venv/bin/python -m compileall -q src tests`) and `git diff --check` pass.
+The installed Boto3/Botocore conditional-write model is 1.43.110. All integration
+boundaries are mocked and network-blocked. No live AWS/SEC operations, shared-data
+changes or legacy removals occurred. No container jobs or infrastructure deployment
+were run; production runtime/container cutover remains Phase 7.
 
 ## 5. Next milestone
 
-**NEXT: Phase 4 — Deliver restart-safe acquisition and publication.**
+**NEXT: Phase 5 — Add earnings-calendar synchronization.**
 
-Build immutable conditional S3 storage, SNS publication and the recovery/discovery
-worker described in Phase 4. Reuse PackageCheckpoint for unfinished enumeration
-even when an accession already exists; hydrate canonical filing/artifact metadata.
-Use pending-work pages until token None, including empty actionable pages, and
-repeat complete passes for eventual GSI visibility. Preserve S3 → DynamoDB → SNS
-ordering and first checkpoint provenance after lost acknowledgments.
+Select the free calendar provider with the user and implement its normalized
+adapter, durable successful-sync tracking and safe moved/cancelled-event
+reconciliation. Inspect CalendarRepository and its per-date key/update semantics;
+do not erase expectations after failed or incomplete provider fetches. Keep all
+provider boundaries mocked in routine tests. The provider and production company
+universe remain external inputs; do not silently invent either.
 
-Start by inspecting the working tree, repository protocols/adapter semantics,
-PackageCheckpoint and the documented table/index contract. Mock all AWS boundaries
-for routine tests. Phase 4 has not started and requires separate authorization;
-do not begin calendar providers, continuous runtime, cutover or CDK deployment.
+Phase 5 has not started. Continuous recovery/scheduling, runtime cutover and CDK
+deployment remain Phases 6–8. Phase 4's terminal operator redrive and completed-
+package recheck policies remain explicit future work, not implicit implementation.
 
 ## 6. Remaining unresolved external inputs
 
@@ -563,7 +625,7 @@ do not begin calendar providers, continuous runtime, cutover or CDK deployment.
 | Free earnings-calendar provider and available access | TBD | Production provider adapter in Phase 5 |
 | Authoritative approximately 500-company universe with ticker/CIK/name/enabled fields | TBD | Production universe seeding; the legacy sample ticker list is insufficient |
 
-**Neither input blocked Phase 3 or blocks Phase 4.** Use fixture companies and mocked SEC responses
+**Neither input blocked Phases 3–4.** Use fixture companies and mocked SEC responses
 for development. Do not invent a provider or silently choose a production universe.
 Exact windows, safety cadence, retry constants, and alarm thresholds remain
 configurable implementation choices within the approved design.

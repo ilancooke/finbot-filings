@@ -111,7 +111,8 @@ def restore(model, item: dict):
                     raise ValueError("persisted timestamps must use fixed-width UTC encoding")
             elif field.name == "expected_date":
                 value = date.fromisoformat(value)
-            elif field.name in ("retry_count", "size_bytes", "enumerated_artifact_count") and value is not None:
+            elif field.name in ("retry_count", "size_bytes", "enumerated_artifact_count",
+                                "enumeration_failures", "acquisition_failures", "publication_failures") and value is not None:
                 value = integer(value, field.name)
             elif field.name == "raw_provider_payload" and value is not None:
                 value = json.loads(value, parse_constant=_reject_nonfinite_json)

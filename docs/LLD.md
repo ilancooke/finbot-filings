@@ -214,6 +214,95 @@ automatic reconciliation cadence remains later orchestration. No package-wide
 transaction or embedded unbounded manifest is needed: children are immutable,
 application repositories do not delete them, and incomplete parents stay indexed.
 
+### 2.4 Phase 4 implementation notes
+
+The repository now ships async discovery, acquisition/publication and explicit
+recovery services with low-level S3/SNS/SQS adapters. The event contract remains
+`artifact.ready` / `1.0`. No calendar provider, production scheduler/queue,
+continuous recovery loop, main runtime, resource provisioning or deployment is
+introduced. The legacy package and shared data are preserved.
+
+Concrete service contracts:
+
+```python
+DiscoveryService.discover(company: Company) -> tuple[str, ...]  # accessions
+DiscoveryService.enumerate_filing(accession_number: str) -> EnumerationResult
+ArtifactDownloader.acquire(artifact: Artifact) -> StoredArtifact
+IngestionWorker.discover_company(company: Company) -> tuple[str, ...]
+IngestionWorker.process_filing(accession_number: str) -> Outcome
+IngestionWorker.process_artifact(artifact_id: str) -> Outcome
+IngestionWorker.send_dead_letter(kind: str, identity: str) -> Outcome
+RecoveryService.run_pass() -> RecoverySummary
+```
+
+`Outcome` is `complete`, `deferred` or `terminal`; `EnumerationResult` additionally
+contains known artifact IDs. A completed filing outcome describes enumeration,
+not proof all its previously created children have published. RecoverySummary
+counts candidates/outcomes/errors in one observed pass, without an unbounded list
+of results. A recovery candidate can be deferred by an unfinished/terminal parent.
+
+Discovery conditionally creates filings, reloads canonical metadata and finishes
+unfinished enumeration through PackageCheckpoint. New children are dispatched by
+known identities and strong reads rather than relying on instant accession-GSI
+visibility. Original ticker and first discovery timestamps remain canonical.
+An existing completed accession does not automatically trigger a package recheck;
+explicit later validated snapshots can still add children through PackageCheckpoint.
+Submissions fetch/parse errors propagate without a success watermark or invented
+accession. A later company poll retries that discovery.
+
+`BlockingExecution` is shared by SEC and SDK offloading. `AWSExecution` owns an
+explicit injected/constructed SDK client and finite standard retry/timeouts;
+DynamoDBExecution reuses it. Executor admission survives repeated cancellation
+until the actual blocking call completes. Closing with active work fails explicitly.
+AWS needs-retry hooks log each failed HTTP attempt and recovered requests without
+wire bodies/credentials. Workflow/checkpoint/DLQ failures also log contextual IDs.
+
+Share one discovery/worker and IdentityLocks registry across callers, one SEC
+client/limiter and one SEC executor. Locks are scoped by filing/artifact identity
+and removed after use. The worker holds a configurable artifact admission slot
+across the whole acquisition/publication path; this bounds retained document bytes,
+not only SDK request concurrency. There is no distributed coordination.
+
+Storage uses direct `PutObject(IfNoneMatch="*")` under the original filename key.
+It inspects before any SEC download for a record lacking a storage checkpoint.
+Object metadata includes an ASCII JSON envelope (`finbot-provenance`, version 1)
+of artifact identity, CIK, original ticker/form/document type, canonical SEC URL
+and original discovered_at, plus `finbot-content-type`. The provenance header has
+an 1800-byte bound; total user metadata is limited to 2048 bytes. Keys are bounded
+to 1024 UTF-8 bytes. Existing missing/malformed/conflicting metadata fails without
+rewriting the object. S3 URI paths are percent-encoded; actual keys retain original
+characters, and downstream readers decode the URI path.
+
+Both initial creation and repair use HEAD LastModified for stored_at, ContentLength
+for size_bytes, and the recorded original content type. Restart time is never
+substituted. HTTP 412 reconciles the existing object; 409 retries conditionally
+after inspection. Ambiguous write outcomes also inspect before retry. Only a
+specific 404 missing-object response means absence; 403 and missing-bucket errors
+propagate. Reliable missing-object detection requires GetObject and scoped
+ListBucket, in addition to conditional PutObject permissions. Delete/unconditional
+overwrite permissions are outside the ingestion contract.
+
+`download_document(url, max_bytes=...)` streams under the same dispatch lock and
+budget, rejects excessive Content-Length, counts decoded response-content chunks,
+and closes the response on every path. Phase 4 defaults to a 64-MiB maximum per
+artifact, configurable downward, with two whole artifact workflows in flight.
+Buffer-to-bytes conversion temporarily retains both copies. No unsafe multipart
+fallback, application content hash or interpretation is added. The older unbounded
+`download_document(url)` signature remains compatible for existing direct callers.
+
+The worker performs S3 → mark_stored → strong reload → SNS → mark_published.
+Stored work never downloads on publication retry. After ambiguous database
+acknowledgments, it reloads durable facts before repeating external calls or counting
+failure. SNS sends plain ArtifactReady JSON and requires a MessageId. SNS or SDK
+retries can duplicate the same logical event; consumers deduplicate by artifact_id.
+This is at-least-once delivery, not exactly once.
+
+Configuration remains isolated: AWSIOConfig, StorageConfig, MessagingConfig and
+WorkflowConfig read environment/injected mappings with no client creation. See
+README/.env.example for names/defaults. Standard SNS topic and standard operational
+SQS queue must match AWS_REGION. Existing SEC/legacy configuration requirements
+are unchanged. Boto3's minimum is 1.43.110, the verified conditional-PUT model.
+
 ## 3. Core domain models
 
 Use typed Python models/dataclasses/Pydantic models as appropriate. Avoid exposing raw provider/SEC response structures outside adapters.
@@ -383,15 +472,10 @@ Do not implement fast-changing statuses such as `downloading` in DynamoDB.
 
 ```python
 class ArtifactStore(Protocol):
-    async def put(
-        self,
-        *,
-        cik: str,
-        accession_number: str,
-        filename: str,
-        content: bytes,
-        content_type: str | None,
-    ) -> str: ...  # returns s3_uri
+    async def inspect(self, artifact: Artifact) -> StoredArtifact | None: ...
+    async def put_if_absent(
+        self, artifact: Artifact, downloaded: DownloadedDocument,
+    ) -> StoredArtifact: ...
 ```
 
 S3 key format:
@@ -400,7 +484,8 @@ S3 key format:
 <cik>/<accession_number>/<filename>
 ```
 
-Writes should be safe to retry against the deterministic key.
+`StoredArtifact` contains s3_uri, stored_at, content_type and size_bytes. Conditional
+creation, not the deterministic key alone, enforces safe retry. See section 2.4.
 
 ### 4.7 ArtifactEventPublisher
 
@@ -658,6 +743,83 @@ The SDK skill's example suggesting direct float serialization conflicts with the
 which rejects floats. Adapters follow SDK behavior. Generic Streams/outbox and live
 benchmark recommendations are outside this approved phase and architecture.
 
+### 6.7 Phase 4 processing and dead-letter checkpoints
+
+The four tables and GSI definitions in section 6.5 remain unchanged. Schema version
+1 adds optional attributes, omitted on old Phase 3 rows and defaulted when read:
+
+- `enumeration_failures`, `acquisition_failures`, `publication_failures`: nonnegative
+  integer counts of failed workflow attempts, independent of transport/SDK retries.
+- Paired `failure_stage`, `failure_error`, `failure_at`: latest chronological stage
+  failure; each logical failure retry reuses the same aware timestamp/error.
+- Paired `terminal_stage`, `terminal_error`, `terminal_error_type`, `terminal_at`:
+  immutable final failure observation. Error/type text is bounded to 2048 characters.
+- Optional `dead_lettered_at`: first successful operational send checkpoint.
+
+FilingCheckpoint accepts only enumeration failures. ArtifactCheckpoint is separate
+from Artifact and accepts only acquisition/publication failures. Publication
+failures require stored source facts. Terminal stage must match unfinished work;
+completed enumeration/published artifacts cannot be terminal. Validators reject
+partial facts, invalid counters and inconsistent pending membership. Old Phase 3
+records remain readable; older adapter code cannot process new terminal membership
+and must not run alongside the Phase 4 writer.
+
+`record_stage_failure(identity, stage, error, at, max_failures=..., error_type=...,
+terminal=False)` updates the stage count, failure observation, applicable legacy
+diagnostics and terminal decision in one revision-guarded write. Equal matching
+observations and older observations do not count twice. CAS decisions reread
+durable progress; late acquisition failures cannot terminalize publication and
+late enumeration/publication failures cannot resurrect completed work. New stage
+observations do not rewind newer legacy diagnostic timestamps. WorkControl uses
+strictly increasing observation times when the clock repeats.
+
+Terminal work atomically changes `pending_work_kind` to `DEAD_LETTER`, retaining
+the original discovery sort. The existing PendingFilingEnumeration and
+PendingArtifactWork indexes query this additional partition value. The public
+filing `list_pending(kind="ENUMERATE" | "DEAD_LETTER", ...)` and artifact
+`list_pending("ACQUIRE" | "PUBLISH" | "DEAD_LETTER", ...)` hydrate strong base
+records and discard stale candidates as before. No new table/index, scan, TTL,
+age filter, stream, transaction or transient queue state is added.
+
+The worker creates `WorkFailure` from durable canonical source/terminal facts.
+It emits `ingestion.work_failed` / `1.0` with failure_id, work_type/work_id, stage,
+terminal time, error/type, stage failure count, CIK/ticker/form/accession, source
+URL and optional S3 URI; it contains no bytes. Identity is
+`<filing|artifact>/<source-identity>/<stage>/<terminal-time>` with no content hash.
+JSON escapes unsafe SQS control characters and is bounded below default SNS/SQS
+message limits. SQS SendMessage must return MessageId before
+`mark_dead_lettered(identity, at)` records the first send time and removes pending
+keys. Failed/lost acknowledgments remain recoverable; duplicate sends have the
+same failure ID. The terminal source facts are never deleted or rewritten.
+
+Terminal enumeration is durable even if no artifact exists. Partially created
+children cannot acquire/publish before parent completion; a terminal parent keeps
+them deferred, and its failure envelope covers the blocked package. A deferred
+child can remain a recovery candidate, but pagination continues to other rows.
+Normal checkpoint methods reject terminal redrive. Operator investigation uses
+the durable checkpoint/envelope; a state-changing redrive contract is future work.
+
+Failure recording uses finite checkpoint retries with the same original logical
+failure timestamp. If persistence is unavailable, errors propagate and the source
+remains recoverable; successful terminal handling is never fabricated. Retryable
+SEC/incomplete-package, transient SDK and CAS errors consume configured stage
+budgets. Invalid source metadata/storage conflicts become terminal immediately.
+Shared permission/credential/resource/configuration errors propagate instead of
+dead-lettering every company. Cancellation is never a failed workflow attempt.
+
+Operational SQS is an ingestion-owned failed-work queue, separate from downstream
+consumer queues and SNS subscription-delivery DLQs. Phase 4 only sends to configured
+existing resources. Provisioning, retention, alarms and queue policies remain
+Phase 8, with HTTPS/encryption and least-privilege access required for deployment.
+
+AWS behavior verified through AWS MCP includes [conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html),
+[HEAD permissions](https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html),
+[metadata limits](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingMetadata.html),
+[object key limits](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html),
+[SNS Publish](https://docs.aws.amazon.com/sns/latest/api/API_Publish.html), and
+[SQS SendMessage](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SendMessage.html).
+No live resource inspection/mutation was performed.
+
 ## 7. Calendar synchronization
 
 ### 7.1 Cadence
@@ -786,7 +948,7 @@ If SNS publish fails after storage, do **not** download again. Retry publication
 On startup:
 
 1. reload calendar state and rebuild in-memory schedules;
-2. find recent/incomplete artifact records needed for recovery;
+2. find incomplete filings/artifacts and pending terminal sends through sparse indexes;
 3. for records with no `stored_at`, retry acquisition;
 4. for records with `stored_at` but no `published_at`, retry SNS publication;
 5. completed records require no action.
@@ -794,7 +956,11 @@ On startup:
 Phase 3 implements the deliberate sparse-index access pattern in section 6.5.
 Recovery queries are bounded by paginated candidate count, without a recent-age
 cutoff. Old unfinished filings and artifacts remain indexed; avoid table scans.
-The recovery orchestrator and repeat-pass cadence remain Phase 4+.
+Phase 4 provides RecoveryService.run_pass(), traversing enumeration, acquisition,
+publication and dead-letter candidates to token None, including empty actionable
+pages. Work errors are counted/logged without starving later candidates; shared
+infrastructure/configuration failures propagate. Recheck parent/source facts before
+acting. Continuous repeat-pass cadence remains Phase 6 runtime work.
 
 ## 13. Retry and failure behavior
 

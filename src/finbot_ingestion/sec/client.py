@@ -18,7 +18,7 @@ from requests.adapters import HTTPAdapter
 from finbot_ingestion.domain import Company, Filing
 from finbot_ingestion.config import IngestionConfig
 from finbot_ingestion.ingestion.retry_policy import RetryPolicy
-from .errors import SECDataError, SECHTTPError, SECNetworkError
+from .errors import SECDataError, SECDocumentTooLarge, SECHTTPError, SECNetworkError
 from .filing_index import FilingIndex, parse_filing_index
 from .rate_limiter import SECRateLimiter
 from .submissions import parse_company_submissions
@@ -83,7 +83,7 @@ class SecClient:
             except (ValueError, TypeError, OverflowError):
                 return None
 
-    def _request(self, url, *, operation, context=None, package=False):
+    def _request(self, url, *, operation, context=None, package=False, max_bytes=None):
         self._validate_url(url)
         context = context or {}
         redirects = 0
@@ -98,7 +98,26 @@ class SecClient:
                     if self._closed:
                         raise RuntimeError('SEC client is closed')
                     self.limiter.wait()
-                    response = self._session.get(url, timeout=(self.config.sec_connect_timeout_seconds, self.config.sec_read_timeout_seconds), allow_redirects=False)
+                    options = {"stream": True} if max_bytes is not None else {}
+                    response = self._session.get(url, timeout=(self.config.sec_connect_timeout_seconds, self.config.sec_read_timeout_seconds), allow_redirects=False, **options)
+                    bounded_content = None
+                    if max_bytes is not None and 200 <= response.status_code < 300:
+                        length = response.headers.get('Content-Length')
+                        if length is not None:
+                            try:
+                                length = int(length)
+                            except (TypeError, ValueError) as exc:
+                                raise SECDataError('invalid SEC Content-Length') from exc
+                            if length < 0:
+                                raise SECDataError('invalid SEC Content-Length')
+                            if length > max_bytes:
+                                raise SECDocumentTooLarge('SEC document exceeds MAX_ARTIFACT_BYTES')
+                        content = bytearray()
+                        for chunk in response.iter_content(chunk_size=64 * 1024):
+                            if len(content) + len(chunk) > max_bytes:
+                                raise SECDocumentTooLarge('SEC document exceeds MAX_ARTIFACT_BYTES')
+                            content.extend(chunk)
+                        bounded_content = bytes(content)
                 status = response.status_code
                 if status in (301, 302, 303, 307, 308):
                     if redirects >= self.config.sec_max_redirects or not response.headers.get('Location'):
@@ -114,7 +133,7 @@ class SecClient:
                     retry_after = self._retry_after(response.headers.get('Retry-After'))
                     error = SECHTTPError(status, url)
                 else:
-                    content = response.content
+                    content = bounded_content if max_bytes is not None else response.content
                     if had_failure:
                         LOGGER.info('SEC request recovered', extra={'operation': operation, 'attempt_number': attempt, **context})
                     return DownloadedDocument(content, response.headers.get('Content-Type'), url)
@@ -162,5 +181,7 @@ class SecClient:
             LOGGER.warning('SEC package enumeration failed', extra={'operation': 'package_enumeration', 'error_type': type(exc).__name__, 'error_message': str(exc), **context})
             raise
 
-    def download_document(self, url: str) -> DownloadedDocument:
-        return self._request(url, operation='document')
+    def download_document(self, url: str, *, max_bytes: int | None = None) -> DownloadedDocument:
+        if max_bytes is not None and (type(max_bytes) is not int or max_bytes < 1):
+            raise ValueError('max_bytes must be a positive integer')
+        return self._request(url, operation='document', max_bytes=max_bytes)

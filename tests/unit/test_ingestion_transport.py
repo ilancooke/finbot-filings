@@ -178,3 +178,55 @@ def test_transport_environment_options():
     assert config.sec_max_redirects==0
     with pytest.raises(ConfigurationError):
         IngestionConfig.from_env({'SEC_USER_AGENT':'Finbot owner@example.com','SEC_MAX_ATTEMPTS':'2.5'})
+
+
+class StreamingResponse:
+    def __init__(self, chunks, headers=None):
+        self.chunks, self.headers = chunks, headers or {}
+        self.status_code, self.closed, self.read_chunks = 200, False, 0
+
+    @property
+    def content(self):
+        raise AssertionError("bounded downloads must not materialize response.content")
+
+    def iter_content(self, chunk_size):
+        assert chunk_size == 64 * 1024
+        for chunk in self.chunks:
+            self.read_chunks += 1
+            yield chunk
+
+    def close(self):
+        self.closed = True
+
+
+def test_bounded_streaming_download_preserves_decoded_response_bytes():
+    response = StreamingResponse([b"\x00\xff", b"\r\n", b""], {"Content-Type": "application/pdf"})
+    client, session, _ = make([response])
+    result = client.download_document(URL, max_bytes=4)
+    assert result.content == b"\x00\xff\r\n" and result.content_type == "application/pdf"
+    assert session.calls[0][2]["stream"] is True and response.closed
+
+
+@pytest.mark.parametrize("headers,chunks,expected_chunks", [
+    ({"Content-Length": "100"}, [b"unread"], 0), ({}, [b"123", b"45", b"unread"], 2),
+    ({"Content-Length": "1"}, [b"12345", b"unread"], 1)])
+def test_oversized_streams_stop_reading_close_and_do_not_retry(headers, chunks, expected_chunks):
+    from finbot_ingestion.sec.errors import SECDocumentTooLarge
+    response = StreamingResponse(chunks, headers)
+    client, session, _ = make([response])
+    with pytest.raises(SECDocumentTooLarge):
+        client.download_document(URL, max_bytes=4)
+    assert response.read_chunks == expected_chunks and response.closed
+    assert len(session.calls) == 1
+
+
+def test_bounded_stream_retry_retains_shared_dispatch_budget():
+    first, second = StreamingResponse([b"partial"]), StreamingResponse([b"raw"])
+    def fail(chunk_size):
+        yield b"a"
+        raise requests.ConnectionError("stream disconnected")
+    first.iter_content = fail
+    client, session, _ = make([first, second])
+    assert client.download_document(URL, max_bytes=10).content == b"raw"
+    assert len(session.calls) == 2 and first.closed and second.closed
+    assert session.calls[1][0] - session.calls[0][0] >= 0.2

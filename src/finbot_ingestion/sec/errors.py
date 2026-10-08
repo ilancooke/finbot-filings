@@ -9,6 +9,9 @@ class SECDataError(SECError, ValueError):
 class SECIncompletePackageError(SECDataError):
     """Package metadata is not yet sufficient for enumeration."""
 
+class SECDocumentTooLarge(SECDataError):
+    """Document exceeds the configured bounded acquisition size."""
+
 class SECNetworkError(SECError):
     pass
 

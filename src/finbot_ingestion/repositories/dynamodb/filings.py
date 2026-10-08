@@ -12,6 +12,12 @@ from .serialization import integer, pending_sort, record, restore, validate_pend
 PENDING_INDEX = "PendingFilingEnumeration"
 
 
+def work_kind(progress):
+    if progress.terminal_at is not None:
+        return "DEAD_LETTER" if progress.pending_dead_letter else None
+    return "ENUMERATE" if progress.enumeration_completed_at is None else None
+
+
 class DynamoDBFilingRepository(DynamoDBRepository):
     def __init__(self, execution):
         super().__init__(execution, execution.config.filings_table, "accession_number")
@@ -21,8 +27,7 @@ class DynamoDBFilingRepository(DynamoDBRepository):
         filing = restore(Filing, item)
         progress = restore(FilingCheckpoint, item)
         integer(item.get("revision"), "revision")
-        validate_pending(item, "ENUMERATE" if progress.enumeration_completed_at is None else None,
-                         filing.accession_number)
+        validate_pending(item, work_kind(progress), filing.accession_number)
         if (filing.primary_document_name is not None and progress.resolved_primary_document_name is not None
                 and filing.primary_document_name != progress.resolved_primary_document_name):
             raise RepositoryConflict("resolved primary conflicts with original filing")
@@ -57,6 +62,8 @@ class DynamoDBFilingRepository(DynamoDBRepository):
                                     enumerated_artifact_count=artifact_count)
 
         def decide(item):
+            if "terminal_at" in item:
+                raise RepositoryConflict("terminal enumeration requires explicit operator redrive")
             if item.get("primary_document_name") not in (None, primary_document_name):
                 raise RepositoryConflict("enumerated primary conflicts with original filing")
             if "enumeration_completed_at" in item:
@@ -71,14 +78,28 @@ class DynamoDBFilingRepository(DynamoDBRepository):
 
     async def record_failure(self, accession_number: str, error: str, at: datetime) -> None:
         await self._failure(normalize_accession_number(accession_number), error, at,
-                            self._validate, lambda item: "enumeration_completed_at" in item)
+                            self._validate, lambda item: "enumeration_completed_at" in item or "terminal_at" in item)
 
-    async def list_pending(self, *, page_size=None, token=None) -> Page[Filing]:
+    async def record_stage_failure(self, accession_number, stage, error, at, *, max_failures,
+                                   error_type, terminal=False):
+        if stage != "ENUMERATE":
+            raise ValueError("filing failures must be ENUMERATE")
+        await self._stage_failure(normalize_accession_number(accession_number), stage, error, at,
+                                 max_failures=max_failures, error_type=error_type, terminal=terminal,
+                                 validate=self._validate,
+                                 current_stage=lambda item: work_kind(restore(FilingCheckpoint, item)))
+
+    async def mark_dead_lettered(self, accession_number, at):
+        await self._mark_dead_lettered(normalize_accession_number(accession_number), at, self._validate)
+
+    async def list_pending(self, *, kind="ENUMERATE", page_size=None, token=None) -> Page[Filing]:
+        if kind not in ("ENUMERATE", "DEAD_LETTER"):
+            raise ValueError("filing work kind must be ENUMERATE or DEAD_LETTER")
         items, token = await self._query(index=PENDING_INDEX, partition="pending_work_kind",
-                                         value="ENUMERATE", page_size=page_size, token=token)
+                                         value=kind, page_size=page_size, token=token)
         filings = []
         for item in items:
             filing = self._validate(item)
-            if "enumeration_completed_at" not in item:
+            if work_kind(restore(FilingCheckpoint, item)) == kind:
                 filings.append(filing)
         return Page(tuple(filings), token)

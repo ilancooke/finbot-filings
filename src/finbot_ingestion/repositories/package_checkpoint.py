@@ -60,6 +60,8 @@ class PackageCheckpoint:
         if existing.primary_document_name not in (None, primary_document_name):
             raise RepositoryConflict("snapshot primary conflicts with filing")
         progress = await self.filings.get_checkpoint(filing.accession_number)
+        if progress is not None and progress.terminal_at is not None:
+            raise RepositoryConflict("terminal enumeration requires explicit operator redrive")
         if progress is not None and progress.resolved_primary_document_name not in (None, primary_document_name):
             raise RepositoryConflict("snapshot primary conflicts with checkpoint")
         for child in children:

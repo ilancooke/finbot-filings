@@ -4,17 +4,20 @@ This package captures the current design for the SEC document discovery and down
 
 The documents are intentionally scoped to **v0**. They preserve extension points for future scale and new downstream consumers, but avoid building distributed infrastructure before it is needed.
 
-## Implementation status: Phase 3
+## Implementation status: Phase 4
 
 `finbot_ingestion` provides domain contracts, configuration validation, SEC URL
 construction, submissions parsing, shared SEC transport, package enumeration,
 and durable DynamoDB repositories/checkpoints with indexed recovery access.
+Phase 4 adds conditional S3 storage, SNS artifact publication, an operational SQS
+dead-letter adapter, discovery/acquisition workers, and explicit recovery passes.
 It coexists with the existing
 `finbot_filings` package and `finbot-filings` CLI, whose behavior is unchanged.
 See [README-legacy.md](README-legacy.md) for those local workflows.
 
 The distribution is still named `finbot-filings`; both Python namespaces are
-installed from this repository. Phase 3 adds Boto3 for the AWS persistence adapters.
+installed from this repository. Boto3 requires version 1.43.110 or newer for the
+tested conditional-write API contract.
 
 ```bash
 python3.12 -m venv .venv
@@ -40,6 +43,11 @@ The new code is organized as follows:
 - `repositories/dynamodb/`: low-level Boto3 adapters, serialization, isolated AWS
   configuration, and bounded SDK execution. No clients are created on import.
 - `domain/checkpoints.py`: filing enumeration/failure facts separate from `Filing`.
+- `storage/`: conditional S3 creation and validated existing-object inspection.
+- `messaging/`: SNS ArtifactReady and operational SQS terminal-failure envelopes.
+- `ingestion/`: discovery, acquisition/publication, stage retries and recovery.
+- `execution.py`, `aws_execution.py`, `aws_config.py`: bounded blocking I/O,
+  reusable SDK clients, attempt logging and isolated storage/messaging settings.
 
 For example, parse a local submissions fixture without contacting SEC:
 
@@ -80,7 +88,7 @@ hash is used. `artifact_key()` produces `<10-digit-cik>/<artifact-id>`.
 `ArtifactReady.from_artifact(filing, artifact)` requires matching filing identity
 and populated `s3_uri`/`stored_at`; `to_dict()` and `to_json()` serialize the
 version `1.0` contract with UTC timestamps and no document contents. This validates
-the record, not an actual storage commit; the future worker must enforce the
+the record, not an actual storage commit; the Phase 4 worker enforces the
 S3 → DynamoDB → SNS ordering. Artifact storage checkpoints require `s3_uri` and
 `stored_at` together, and publication requires a storage checkpoint.
 
@@ -123,7 +131,7 @@ This example contacts SEC when run; routine tests use fake transports only.
 without marking them stored or published.
 
 The synchronous `requests` client reuses a session and serializes HTTP attempts
-under the shared limiter. Later async runtime callers must use a bounded executor.
+under the shared limiter. Phase 4 services use a shared bounded executor.
 There is one in-flight HTTP attempt at a time; slow responses can reduce throughput
 below five requests/second. Retries and manually followed redirects use the same
 budget. No successful JSON response is permanently cached.
@@ -135,7 +143,9 @@ filing. Raw XML, images, and other auxiliary files are included without interpre
 Missing/inconsistent metadata raises `SECIncompletePackageError`; unsafe or malformed
 metadata raises `SECDataError`. The caller must retry the complete package snapshot
 later, never checkpoint the error as success. A validated snapshot cannot guarantee
-that SEC will not subsequently add another file. Durable reconciliation is Phase 3+.
+that SEC will not subsequently add another file. Durable child checkpoints and
+unfinished-enumeration recovery are implemented; automatic rechecking of completed
+snapshots remains a later policy.
 
 Additional exported environment variables:
 
@@ -156,8 +166,8 @@ jitter; `Retry-After` seconds/dates influence delay up to the configured cap.
 Redirects are restricted to official HTTPS SEC hosts and each hop consumes budget.
 Failures and retry recovery use standard Python logging with structured extra fields.
 
-S3 storage/SNS publication, recovery orchestration, calendar synchronization, scheduling,
-continuous runtime, Docker/CDK, and deployment remain later phases. There is no
+Calendar synchronization, scheduling, continuous runtime, Docker/CDK, and deployment
+remain later phases. There is no
 `finbot_ingestion.main` runtime yet. Legacy source and shared data remain intact.
 
 ## DynamoDB persistence and recovery
@@ -269,11 +279,146 @@ no document bytes/hashes. Source identities are never truncated to fit indexes.
 Normal tests block network access, inject dummy credentials, and use Stubber or
 mocked SDK calls. No live SEC or AWS validation has been performed.
 
+## Restart-safe acquisition and publication
+
+Phase 4 exposes `DiscoveryService.discover(company)`,
+`IngestionWorker.discover_company(company)`, `process_filing(accession_number)`,
+`process_artifact(artifact_id)` and `RecoveryService.run_pass()`. These are explicit
+async calls, not a scheduler or continuous daemon. Share one SEC client/limiter,
+one SEC executor, one discovery/worker instance and its identity-lock registry.
+The worker bounds entire in-flight artifact workflows, not only SDK calls.
+
+The ordered path is **S3 → DynamoDB stored checkpoint → SNS → publication
+checkpoint**. Before downloading an unstored record, the worker inspects S3.
+Compatible existing objects repair database metadata without downloading or
+replacing bytes. S3 writes always use `IfNoneMatch="*"`. Objects carry versioned
+canonical source/discovery provenance; missing or conflicting metadata fails
+explicitly. `stored_at` is S3's original `LastModified`, for both initial creation
+and repair. The adapter preserves original filenames in keys and percent-encodes
+special characters in S3 URIs; consumers decode the URI path to obtain the key.
+
+Document downloads stream with `max_bytes` and stop on excess decoded bytes.
+The worker default/maximum is 64 MiB per artifact, with two in-flight artifacts.
+Acquisition temporarily retains a byte buffer and its immutable bytes copy; choose
+container memory accordingly. Oversized artifacts become explicit terminal work.
+The lower-level `download_document(url)` remains compatible; call
+`download_document(url, max_bytes=...)` to use the bounded path. No application
+content hashes or document interpretation are added.
+
+Stored artifacts skip download on publication failure. Lost SNS acknowledgments
+may republish the same schema `1.0` event with the same original metadata.
+Delivery is **at least once**; consumers deduplicate by `artifact_id`.
+
+Stage failure budgets survive restart and are separate for enumeration,
+acquisition and publication. The legacy `retry_count` remains a chronological
+diagnostic. Terminal observations switch the existing pending index to
+`DEAD_LETTER` until an operational SQS send is checkpointed. Lost send
+acknowledgments can duplicate an envelope with the same `failure_id`.
+Partially created children wait for successful parent enumeration and remain
+deferred if that parent becomes terminal. The parent supplies their operational
+failure record. Successful terminal sends remove pending keys, while retaining
+source/storage facts; normal workers never automatically redrive terminal work.
+
+Recovery continues all candidate pages, including empty pages with tokens, and
+does not stop at a failed or deferred row. Repeat full passes later to catch delayed
+GSI entries. Submissions failures propagate without a success watermark so a later
+company poll can rediscover work. Shared credential, permission and missing-resource
+errors surface to the caller. Recovery summaries/logs make individual work errors
+visible; a summary is not proof of global completion.
+
+Additional isolated configuration (process environment or injected mappings):
+
+| Variable | Default / requirement |
+| --- | --- |
+| `ARTIFACT_BUCKET` | Required general-purpose S3 bucket |
+| `MAX_ARTIFACT_BYTES` | `67108864`; integer 1 through 67108864 |
+| `ARTIFACT_READY_TOPIC_ARN` | Required standard SNS topic in `AWS_REGION` |
+| `INGESTION_DEAD_LETTER_QUEUE_URL` | Required standard SQS queue in `AWS_REGION` |
+| `INGESTION_AWS_CONNECT_TIMEOUT_SECONDS` / `INGESTION_AWS_READ_TIMEOUT_SECONDS` | `5` / `30`; finite, positive |
+| `INGESTION_AWS_MAX_ATTEMPTS` / `INGESTION_AWS_MAX_WORKERS` | `3` / `2`; positive integers |
+| `INGESTION_MAX_STAGE_FAILURES` | `3`; positive integer, per workflow stage |
+| `INGESTION_CHECKPOINT_ATTEMPTS` / `INGESTION_DEAD_LETTER_ATTEMPTS` | `3` / `3`; positive integers |
+| `INGESTION_MAX_INFLIGHT_ARTIFACTS` | `2`; positive integer |
+| `INGESTION_RECOVERY_PAGE_SIZE` | `100`; integer 1 through 1000 |
+| `INGESTION_BACKOFF_BASE_SECONDS` / `INGESTION_BACKOFF_CAP_SECONDS` | `1` / `30`; finite, positive; cap >= base |
+
+SDK attempts and workflow attempts are both finite. SEC already retries each HTTP
+request; a workflow attempt can contain those transport retries. These settings
+do not become requirements for SEC configuration or legacy commands.
+
+This wiring example opts into the AWS credential chain and contacts AWS/SEC when
+run. It assumes the documented tables/indexes, bucket, topic and operational queue
+already exist. No adapter provisions resources:
+
+```python
+import asyncio
+from contextlib import ExitStack
+from finbot_ingestion.aws_config import AWSIOConfig, StorageConfig, MessagingConfig
+from finbot_ingestion.aws_execution import AWSExecution
+from finbot_ingestion.execution import BlockingExecution
+from finbot_ingestion.config import IngestionConfig
+from finbot_ingestion.sec.client import SecClient
+from finbot_ingestion.sec.rate_limiter import SECRateLimiter
+from finbot_ingestion.repositories.dynamodb import (
+    DynamoDBConfig, DynamoDBExecution, DynamoDBFilingRepository,
+    DynamoDBArtifactRepository,
+)
+from finbot_ingestion.storage.s3_artifact_store import S3ArtifactStore
+from finbot_ingestion.messaging.sns_publisher import SNSArtifactEventPublisher
+from finbot_ingestion.messaging.dead_letter import SQSDeadLetterPublisher
+from finbot_ingestion.ingestion.config import WorkflowConfig
+from finbot_ingestion.ingestion.work_control import WorkControl
+from finbot_ingestion.ingestion.discovery_service import DiscoveryService
+from finbot_ingestion.ingestion.artifact_downloader import ArtifactDownloader
+from finbot_ingestion.ingestion.ingestion_worker import IngestionWorker
+from finbot_ingestion.ingestion.recovery_service import RecoveryService
+
+sec_config = IngestionConfig.from_env()
+aws_config, storage_config = AWSIOConfig.from_env(), StorageConfig.from_env()
+messaging_config = MessagingConfig.from_env()
+with ExitStack() as stack:
+    db = stack.enter_context(DynamoDBExecution.from_config(DynamoDBConfig.from_env()))
+    s3, sns, sqs = [stack.enter_context(AWSExecution.from_config(service, aws_config))
+                    for service in ("s3", "sns", "sqs")]
+    sec_execution = stack.enter_context(BlockingExecution(max_workers=1))
+    limiter = SECRateLimiter(sec_config.sec_max_requests_per_second)
+    sec = stack.enter_context(SecClient(sec_config, limiter=limiter))
+    filings, artifacts = DynamoDBFilingRepository(db), DynamoDBArtifactRepository(db)
+    control = WorkControl(WorkflowConfig.from_env())
+    discovery = DiscoveryService(sec, sec_execution, filings, artifacts, control)
+    downloader = ArtifactDownloader(sec, sec_execution, S3ArtifactStore(s3, storage_config),
+                                    max_artifact_bytes=storage_config.max_artifact_bytes)
+    worker = IngestionWorker(discovery, downloader,
+        SNSArtifactEventPublisher(sns, messaging_config),
+        SQSDeadLetterPublisher(sqs, messaging_config), filings, artifacts, control)
+    summary = asyncio.run(RecoveryService(worker).run_pass())
+```
+
+Future runtime wiring must await all tasks before closing executors/clients.
+Cancellation waits for blocking I/O to finish and leaves interrupted work recoverable.
+
+Operational prerequisites for future deployment: HTTPS/encrypted bucket access,
+`s3:GetObject`, conditional `s3:PutObject` and suitably scoped `s3:ListBucket` for
+unambiguous absence checks; no delete/unconditional overwrite rights. A HEAD 403
+is never treated as a missing object. DynamoDB repository permissions, SNS Publish
+and operational SQS SendMessage must be limited to the configured resources.
+The operational queue is distinct from consumer queues/subscription DLQs.
+Storage inspection adds S3 requests and checkpoints add DynamoDB writes; no pricing
+or throughput guarantee is inferred from the SEC ceiling. Policies, retention,
+access logging, CloudTrail data events, CloudWatch metrics/alarms and queue setup
+remain Phase 8 infrastructure work.
+
+To investigate terminal work, inspect its durable checkpoint and the SQS
+`ingestion.work_failed` envelope, then correct the underlying source/configuration
+problem. Phase 4 intentionally exposes no automatic/manual mutation command to
+redrive these records; an explicit operator redrive contract remains future work.
+Do not delete raw S3 objects as a repair procedure.
+
 ## Migration status
 
-Phases 1–3 are complete. See [the migration plan](docs/MIGRATION_PLAN.md) for
-acceptance criteria and validation. Next: Phase 4 — restart-safe S3/SNS acquisition
-and publication. It has not started.
+Phases 1–4 are complete. See [the migration plan](docs/MIGRATION_PLAN.md) for
+acceptance criteria and validation. Next: Phase 5 — earnings-calendar synchronization;
+the provider is still TBD. The legacy CLI remains available.
 
 ## Documents
 
