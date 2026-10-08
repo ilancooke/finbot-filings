@@ -150,22 +150,31 @@ def _target_item_evidence(
 
 def _link_evidence_priority(
     link: Tag, target: Tag, expected_item: str, expected_title: str
-) -> int:
-    """Prefer exact Item targets, then semantic links, then page links.
+) -> tuple[int, int]:
+    """Rank destination evidence first and exact link text second.
 
     Page-number links remain usable when they are the only links available for a
     TOC row, but they do not create ambiguity when a nonnumeric link resolves the
     same canonical section to a different target. When semantic links disagree,
-    an anchor whose destination starts with the expected Item heading wins.
+    an anchor whose destination starts with the expected Item heading wins. If
+    destinations have equal heading evidence, a direct Item or exact-caption
+    link wins over a Part label, generic semantic text, or page number.
     """
     target_evidence = _target_item_evidence(target, expected_item, expected_title)
-    if target_evidence:
-        # Both destination scores outrank link-text-only evidence. Caption
-        # agreement breaks ties between destinations that begin with the same
-        # Item number (for example, repeated Part I/Part II Item 1 rows).
-        return 2 + target_evidence
     link_text = _normalize_text(link.get_text(" ", strip=True))
-    return 0 if NUMERIC_PAGE_LINK_PATTERN.fullmatch(link_text) else 1
+    if NUMERIC_PAGE_LINK_PATTERN.fullmatch(link_text):
+        link_evidence = 0
+    else:
+        item_match = _item_row_match(link_text)
+        direct_item = (
+            item_match is not None
+            and item_match.group(1).upper() == expected_item
+        )
+        link_key = _heading_key(link_text)
+        title_key = _heading_key(expected_title)
+        exact_caption = bool(title_key) and link_key == title_key
+        link_evidence = 2 if direct_item or exact_caption else 1
+    return target_evidence, link_evidence
 
 
 def _heading_key(value: str) -> str:
@@ -517,7 +526,8 @@ def _classify_toc_entries(
     dom_positions = {id(tag): index for index, tag in enumerate(all_tags)}
     definitions = form.by_part_and_item
     entries_by_section: dict[str, RecognizedTocEntry] = {}
-    priorities_by_section: dict[str, int] = {}
+    priorities_by_section: dict[str, tuple[int, int]] = {}
+    link_texts_by_section: dict[str, str] = {}
     targets_by_section: dict[str, Tag] = {}
     warnings: list[str] = []
     current_part: str | None = None
@@ -546,6 +556,7 @@ def _classify_toc_entries(
     detected_outline_entries: dict[str, str] = {}
     candidate_failure_reasons: dict[str, set[str]] = {}
     ambiguous_native_ids: set[str] = set()
+    ambiguities_by_native_id: dict[str, list[str]] = {}
 
     for toc_order, link in enumerate(toc_links):
         href = str(link.get("href", "")).strip()
@@ -700,37 +711,89 @@ def _classify_toc_entries(
             _link_evidence_priority(link, target, item, source_title)
             if item is not None
             else (
-                0
+                (0, 0)
                 if NUMERIC_PAGE_LINK_PATTERN.fullmatch(
                     _normalize_text(link.get_text(" ", strip=True))
                 )
-                else 1
+                else (0, 1)
             )
         )
+        link_text = _normalize_text(link.get_text(" ", strip=True))
         existing = entries_by_section.get(native_id)
         if existing is not None:
-            if existing.anchor_id != anchor_id:
-                existing_priority = priorities_by_section[native_id]
+            existing_priority = priorities_by_section[native_id]
+            if existing.anchor_id == anchor_id:
+                if priority > existing_priority:
+                    priorities_by_section[native_id] = priority
+                    link_texts_by_section[native_id] = link_text
+                continue
+            if priority != existing_priority:
+                chosen = entry if priority > existing_priority else existing
+                rejected = existing if priority > existing_priority else entry
+                chosen_priority = max(priority, existing_priority)
+                rejected_priority = min(priority, existing_priority)
+                chosen_link_text = (
+                    link_text
+                    if priority > existing_priority
+                    else link_texts_by_section[native_id]
+                )
+                rejected_link_text = (
+                    link_texts_by_section[native_id]
+                    if priority > existing_priority
+                    else link_text
+                )
+                if chosen_priority[0] == rejected_priority[0]:
+                    record = {
+                        "section_id": section_id,
+                        "source_section_id": native_id,
+                        "chosen_anchor_id": chosen.anchor_id,
+                        "rejected_anchor_id": rejected.anchor_id,
+                        "chosen_destination_evidence": chosen_priority[0],
+                        "chosen_link_text_evidence": chosen_priority[1],
+                        "rejected_destination_evidence": rejected_priority[0],
+                        "rejected_link_text_evidence": rejected_priority[1],
+                        "chosen_link_text": chosen_link_text,
+                        "rejected_link_text": rejected_link_text,
+                        "method": "direct_item_or_caption_link_tiebreak",
+                    }
+                    duplicate = any(
+                        value["source_section_id"] == native_id
+                        and value["chosen_anchor_id"] == chosen.anchor_id
+                        and value["rejected_anchor_id"] == rejected.anchor_id
+                        for value in diagnostics.disambiguated_item_links
+                    )
+                    if not duplicate:
+                        diagnostics.disambiguated_item_links.append(record)
                 if priority < existing_priority:
                     continue
-                if priority > existing_priority:
-                    entries_by_section[native_id] = entry
-                    priorities_by_section[native_id] = priority
-                    targets_by_section[native_id] = target
-                    continue
-                diagnostics.ambiguous_item_classifications.append(
-                    f"{section_id}: {existing.anchor_id}, {anchor_id}"
-                )
-                ambiguous_native_ids.add(native_id)
-                candidate_failure_reasons.setdefault(native_id, set()).add(
+                ambiguous_native_ids.discard(native_id)
+                candidate_failure_reasons.get(native_id, set()).discard(
                     "ambiguous_anchor_targets"
                 )
+                entries_by_section[native_id] = entry
+                priorities_by_section[native_id] = priority
+                link_texts_by_section[native_id] = link_text
+                targets_by_section[native_id] = target
+                continue
+            ambiguities_by_native_id.setdefault(native_id, []).append(
+                f"{section_id}: {existing.anchor_id}, {anchor_id}"
+            )
+            ambiguous_native_ids.add(native_id)
+            candidate_failure_reasons.setdefault(native_id, set()).add(
+                "ambiguous_anchor_targets"
+            )
             continue
         entries_by_section[native_id] = entry
         priorities_by_section[native_id] = priority
+        link_texts_by_section[native_id] = link_text
         targets_by_section[native_id] = target
 
     extracted_native_ids = set(entries_by_section) - ambiguous_native_ids
+    diagnostics.ambiguous_item_classifications.extend(
+        message
+        for native_id in ambiguous_native_ids
+        for message in ambiguities_by_native_id.get(native_id, [])
+    )
     diagnostics.native_outline_entries_detected = len(detected_outline_entries)
     diagnostics.native_outline_entries_extracted = len(extracted_native_ids)
     diagnostics.native_outline_entries_skipped.extend(

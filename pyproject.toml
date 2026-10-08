@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "finbot-filings"
 version = "0.2.0"
-description = "Discover, download, and deterministically parse public SEC filings"
+description = "SEC ingestion foundations alongside legacy local filing workflows"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -25,6 +25,7 @@ finbot-filings = "finbot_filings.cli:entrypoint"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["finbot_filings*", "finbot_ingestion*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -275,6 +275,79 @@ def test_10k_prefers_item_and_title_links_over_conflicting_page_number_link() ->
     assert result.diagnostics.ambiguous_item_classifications == []
 
 
+def test_10k_prefers_direct_item_link_when_destinations_are_equally_strong() -> None:
+    html = (FIXTURES / "normal_10k.html").read_text(encoding="utf-8")
+    html = html.replace(
+        '<tr><td><a href="#business">Item 1. Business</a></td></tr>',
+        """<tr>
+          <td><a href="#business-wrapper">Part I</a></td>
+          <td><a href="#business-direct">Item 1.</a></td>
+          <td><a href="#business-direct">Business</a></td>
+          <td><a href="#business-wrapper">1</a></td>
+        </tr>""",
+    ).replace(
+        '<h2 id="business">Item 1</h2><p>Business text.</p>',
+        """<div id="business-wrapper">Part I</div>
+        <h2 id="business-direct">Item 1. Business</h2><p>Business text.</p>""",
+    )
+
+    result = parse_filing_sections(
+        html.encode(), file=Path("cat-style-10k.html"), form_type="10-K"
+    )
+
+    assert result.status is ParseStatus.SUCCESS
+    business = next(
+        entry
+        for entry in result.recognized_toc_entries
+        if entry.section_id == "item1_business"
+    )
+    assert business.anchor_id == "business-direct"
+    assert result.diagnostics.ambiguous_item_classifications == []
+    assert result.diagnostics.disambiguated_item_links == [
+        {
+            "section_id": "item1_business",
+            "source_section_id": "item1",
+            "chosen_anchor_id": "business-direct",
+            "rejected_anchor_id": "business-wrapper",
+            "chosen_destination_evidence": 2,
+            "chosen_link_text_evidence": 2,
+            "rejected_destination_evidence": 2,
+            "rejected_link_text_evidence": 1,
+            "chosen_link_text": "Item 1.",
+            "rejected_link_text": "Part I",
+            "method": "direct_item_or_caption_link_tiebreak",
+        }
+    ]
+
+
+def test_10k_keeps_destination_evidence_ahead_of_link_text() -> None:
+    html = (FIXTURES / "normal_10k.html").read_text(encoding="utf-8")
+    html = html.replace(
+        '<tr><td><a href="#business">Item 1. Business</a></td></tr>',
+        """<tr><td>Item 1.
+          <a href="#business-weak">Business</a>
+          <a href="#business">1</a>
+        </td></tr>""",
+    ).replace(
+        '<h2 id="business">Item 1</h2><p>Business text.</p>',
+        """<h2 id="business-weak">Corporate overview</h2><p>Preface.</p>
+        <h2 id="business">Item 1. Business</h2><p>Business text.</p>""",
+    )
+
+    result = parse_filing_sections(
+        html.encode(), file=Path("destination-first-10k.html"), form_type="10-K"
+    )
+
+    assert result.status is ParseStatus.SUCCESS
+    business = next(
+        entry
+        for entry in result.recognized_toc_entries
+        if entry.section_id == "item1_business"
+    )
+    assert business.anchor_id == "business"
+    assert result.diagnostics.disambiguated_item_links == []
+
+
 def test_10k_preserves_noncanonical_multi_registrant_financial_sections() -> None:
     html = (FIXTURES / "normal_10k.html").read_text(encoding="utf-8")
     html = html.replace(

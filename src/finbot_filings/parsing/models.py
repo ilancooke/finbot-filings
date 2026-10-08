@@ -81,6 +81,7 @@ class ParseDiagnostics:
     native_outline_entries_extracted: int = 0
     native_outline_entries_skipped: list[dict[str, str]] = field(default_factory=list)
     recovered_anchor_targets: list[dict[str, str]] = field(default_factory=list)
+    disambiguated_item_links: list[dict[str, Any]] = field(default_factory=list)
     unresolved_anchor_ids: list[str] = field(default_factory=list)
     unresolved_section_ids: list[str] = field(default_factory=list)
     non_forward_anchor_ids: list[str] = field(default_factory=list)
@@ -109,6 +110,7 @@ class ParseDiagnostics:
             "native_outline_entries_skipped": self.native_outline_entries_skipped,
             "native_outline_coverage": self.native_outline_coverage,
             "recovered_anchor_targets": self.recovered_anchor_targets,
+            "disambiguated_item_links": self.disambiguated_item_links,
             "unresolved_anchor_ids": self.unresolved_anchor_ids,
             "unresolved_section_ids": self.unresolved_section_ids,
             "non_forward_anchor_ids": self.non_forward_anchor_ids,

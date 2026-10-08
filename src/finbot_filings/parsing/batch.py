@@ -22,7 +22,7 @@ from finbot_filings.parsing.models import (
 from finbot_filings.parsing.toc import parse_filing_sections
 
 MANIFEST_SCHEMA_VERSION = 4
-PARSER_VERSION = "native-toc-v2"
+PARSER_VERSION = "native-toc-v3"
 
 
 @dataclass(slots=True)
