@@ -377,7 +377,7 @@ completion. Cloud permissions, encryption/retention and conditional-write polici
 must be supplied by future infrastructure. Boto3 minimum raised to 1.43.110, whose
 conditional-PUT model was verified locally; no new dependency is added.
 
-**Validation (2026-10-08):** See current Phase 4 validation below. Tests use SDK
+**Validation (2026-10-08):** See historical Phase 4 validation below. Tests use SDK
 Stubber/stateful mocked boundaries and block network access. They replay the
 complete submissions/parser/package/SEC-byte/S3/database/SNS path, all durable
 acknowledgment/checkpoint losses, separate restart-persistent budgets, terminal
@@ -389,7 +389,14 @@ the delivered contracts; accepted ADR architecture remains unchanged.
 
 ### Phase 5 — Add earnings-calendar synchronization
 
-**Status: NOT STARTED.**
+**Status: COMPLETE for the authorized placeholder-provider scope.**
+
+**Authorized deviation:** The user requested implementation before selecting a
+calendar provider, explicitly asking for a placeholder. The provider-independent
+service/reconciliation/checkpoints and placeholder adapter are delivered; the
+selected live free-provider adapter is deferred. This is not a claim of production
+calendar access or verified provider completeness/coverage. No company universe
+was invented. Phase 6 may use fake/placeholder boundaries during development.
 
 **Goal:** Maintain durable provider-independent earnings expectations for the
 configured universe, with safe refresh and reconciliation.
@@ -414,15 +421,52 @@ logs, or committed configuration.
 
 **Acceptance criteria:**
 
-- Provider-specific fields remain within the adapter; other components receive
+- [x] Provider-specific fields remain within the adapter; other components receive
   normalized expectations and optional raw diagnostic payloads.
-- A date move does not leave an obsolete active row under a date-based key.
+- [x] A date move does not leave an obsolete active row under a date-based key.
   Reconcile only the range for which provider synchronization succeeded.
-- Failed/incomplete fetches cannot erase valid durable expectations; existing
+- [x] Failed/incomplete fetches cannot erase valid durable expectations; existing
   records remain usable through provider outages.
-- Record the last successful sync durably and make stale synchronization observable.
-- Calendar synchronization tests and regressions pass. Calendar data remains
+- [x] Record the last successful sync durably and make stale synchronization observable.
+- [x] Calendar synchronization tests and regressions pass. Calendar data remains
   mutable planning data, separate from immutable filing history.
+
+**Delivered:** CalendarSnapshot explicitly identifies exact provider/date/company
+coverage and completeness; validated normalized expectations remain independent of
+provider payloads. PlaceholderCalendarProvider raises CalendarProviderNotConfigured
+instead of inventing empty data. CalendarSyncService exposes explicit sync_once,
+full/near-term refresh and health calls; one shared instance serializes refreshes.
+Enabled-company pagination, count bounds, canonical ticker/UTC observation handling,
+duplicate/scope/JSON validation, finite provider/checkpoint retries and material
+change logs are covered by offline tests.
+
+DynamoDB retains four tables and existing indexes. Calendar inactive tombstones
+protect cancellations against stale upserts; strong date queries omit them while
+continuing pagination. Reserved calendar metadata stores revision-guarded runs,
+monotonic observation timestamps, separate full/near-term success scopes and
+sanitized failures. Request IDs/timestamps preserve logical retries after lost
+acknowledgments. Writes precede scoped cancellation, and success follows every
+durable write. Restart re-fetches a complete snapshot to repair partial progress.
+
+**Limits/deferred work:** No live provider adapter/HTTP access, production universe,
+automatic scheduler, cloud provisioning, calendar CLI, tombstone cleanup or durable
+snapshot replay during provider outages. Applying a snapshot is not atomic; readers
+can see partial progress. Moves beyond confirmed coverage can temporarily retain
+old expectations. Provider switching is not silently performed at occupied keys.
+Old calendar readers must not run with the Phase 5 writer. Health measures last
+full completion age; callers inspect its scope after universe/range changes.
+Provider-specific credentials, timeouts, limits and completeness evidence will be
+implemented after selection. Recurring cadence belongs to Phase 6.
+
+**Validation (2026-10-08):** 496 tests pass (414 prior tests plus 82 Phase 5 tests).
+Repository-local compilation (`.venv/bin/python -m compileall -q src tests`) and
+`git diff --check` pass. Real SDK Stubber requests and stateful mocked DynamoDB
+boundaries cover conditional writes, pagination, date moves/cancellations,
+incomplete/invalid/empty snapshots, disabled/outside-range rows, bounds, separate
+freshness scopes, failed/lost checkpoints, stale retries, CAS races, cancellation,
+restart at each durable boundary and secret-safe logs. All new boundaries are
+offline/network-blocked. No live AWS/SEC/provider operations, resource changes,
+shared-data writes, container jobs or legacy removal occurred.
 
 ### Phase 6 — Add scheduling and the continuous runtime
 
@@ -546,7 +590,8 @@ image builds. Any live SEC smoke test remains explicitly manual.
 
 ## 4. Current migration status
 
-**Phases 1–4: COMPLETE. Phases 5–8: NOT STARTED.**
+**Phases 1–4: COMPLETE. Phase 5: COMPLETE for authorized placeholder-provider scope.
+Phases 6–8: NOT STARTED.**
 
 Phase 1 delivered typed contracts, deterministic identities, UTC timestamp
 validation, offline submissions parsing, and configuration validation while
@@ -595,7 +640,7 @@ Phase 4 delivered the S3/SNS/SQS adapters, restart-safe discovery/acquisition wo
 durable stage budgets/terminal checkpoints and explicit paginated recovery passes.
 See Phase 4 above and LLD sections 2.4/6.7 for contracts and limitations.
 
-**Current Phase 4 validation (2026-10-08):** 414 tests pass (340 prior tests plus
+**Historical Phase 4 validation (2026-10-08):** 414 tests pass (340 prior tests plus
 74 new tests), using the repository-local Python 3.14 environment. Compilation
 (`.venv/bin/python -m compileall -q src tests`) and `git diff --check` pass.
 The installed Boto3/Botocore conditional-write model is 1.43.110. All integration
@@ -603,26 +648,38 @@ boundaries are mocked and network-blocked. No live AWS/SEC operations, shared-da
 changes or legacy removals occurred. No container jobs or infrastructure deployment
 were run; production runtime/container cutover remains Phase 7.
 
+Phase 5 delivered provider-independent complete-snapshot synchronization, safe
+scoped reconciliation, durable monotonic sync/freshness metadata and an explicit
+unconfigured placeholder. A selected live adapter was deferred at the user's
+request. See Phase 5 above and LLD section 7 for contracts and limitations.
+**Current Phase 5 validation (2026-10-08):** 496 tests pass; compilation and diff
+checks pass, using the repository-local environment and mocked offline boundaries.
+
 ## 5. Next milestone
 
-**NEXT: Phase 5 — Add earnings-calendar synchronization.**
+**NEXT: Phase 6 — Add scheduling and the continuous runtime.**
 
-Select the free calendar provider with the user and implement its normalized
-adapter, durable successful-sync tracking and safe moved/cancelled-event
-reconciliation. Inspect CalendarRepository and its per-date key/update semantics;
-do not erase expectations after failed or incomplete provider fetches. Keep all
-provider boundaries mocked in routine tests. The provider and production company
-universe remain external inputs; do not silently invent either.
+Coordinate the existing calendar/discovery/recovery services in one supervised
+process with in-memory schedules/queues, shared SEC budget, event satisfaction,
+health/logging and graceful shutdown. Use CalendarConfig cadences and inspect
+full-success scope/freshness rather than equating a near-term sync with full
+coverage. Reuse one CalendarSyncService instance/lock and await in-flight work.
+Implement only separately authorized Phase 6 scope; phase completion is not
+authorization to start it.
 
-Phase 5 has not started. Continuous recovery/scheduling, runtime cutover and CDK
-deployment remain Phases 6–8. Phase 4's terminal operator redrive and completed-
-package recheck policies remain explicit future work, not implicit implementation.
+Provider selection/live adapter and the production company universe remain
+external inputs. The placeholder raises and cannot supply production scheduling
+data. Select the free provider with the user, verify complete coverage and implement
+its isolated HTTP/normalization adapter before production use. Keep all provider
+boundaries mocked in routine tests; do not silently invent either input. Runtime
+cutover/CDK remain Phases 7–8. Terminal operator redrive and completed-package
+recheck policies remain explicit future work.
 
 ## 6. Remaining unresolved external inputs
 
 | Input | Status | Required for |
 | --- | --- | --- |
-| Free earnings-calendar provider and available access | TBD | Production provider adapter in Phase 5 |
+| Free earnings-calendar provider and available access | TBD; placeholder delivered by authorization | Deferred live provider adapter and production calendar use |
 | Authoritative approximately 500-company universe with ticker/CIK/name/enabled fields | TBD | Production universe seeding; the legacy sample ticker list is insufficient |
 
 **Neither input blocked Phases 3–4.** Use fixture companies and mocked SEC responses

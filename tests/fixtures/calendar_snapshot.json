@@ -1,0 +1,8 @@
+{
+  "description": "Synthetic normalized provider fixture; no live provider has been selected.",
+  "events": [
+    {"cik": "320193", "ticker": "AAPL", "expected_date": "2026-10-08", "time_of_day": "before_market", "event_id": "apple-q3"},
+    {"cik": "789019", "ticker": "MSFT", "expected_date": "2026-10-09", "time_of_day": "after_market", "event_id": "microsoft-q3"},
+    {"cik": "1018724", "ticker": "AMZN", "expected_date": "2026-10-10", "time_of_day": "unknown", "event_id": null}
+  ]
+}

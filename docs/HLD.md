@@ -117,6 +117,12 @@ Responsibilities:
 
 The exact provider is TBD.
 
+Phase 5 implements this boundary with a placeholder that fails explicitly until a
+provider is selected. Complete scoped snapshots drive safe expectation updates,
+date-move/cancellation reconciliation and durable full/near-term sync checkpoints.
+Failed or incomplete provider fetches preserve existing expectations. Recurring
+refresh scheduling remains Phase 6 runtime work.
+
 ### 6.3 Scheduler
 
 Responsibilities:

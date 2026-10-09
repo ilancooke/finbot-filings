@@ -303,6 +303,14 @@ README/.env.example for names/defaults. Standard SNS topic and standard operatio
 SQS queue must match AWS_REGION. Existing SEC/legacy configuration requirements
 are unchanged. Boto3's minimum is 1.43.110, the verified conditional-PUT model.
 
+### 2.5 Phase 5 implementation notes
+
+Calendar synchronization is implemented with an explicitly unconfigured placeholder
+provider, as authorized by the user. No live provider is selected or contacted.
+See section 7 for concrete snapshot, service, cancellation and sync-state contracts.
+There is no scheduler/background refresh/main runtime; those remain Phase 6.
+Provider HTTP integration, authentication and rate limits await provider selection.
+
 ## 3. Core domain models
 
 Use typed Python models/dataclasses/Pydantic models as appropriate. Avoid exposing raw provider/SEC response structures outside adapters.
@@ -405,10 +413,11 @@ class EarningsCalendarProvider(Protocol):
         start_date: date,
         end_date: date,
         companies: Sequence[Company],
-    ) -> list[ExpectedEarningsEvent]: ...
+    ) -> CalendarSnapshot: ...
 ```
 
-Provider selection is TBD. No other package should depend on provider-specific field names.
+Provider selection is TBD. Phase 5 replaces the illustrative list result with the
+explicit scoped snapshot in section 7; no other package depends on provider fields.
 
 ### 4.2 CalendarRepository
 
@@ -416,6 +425,11 @@ Provider selection is TBD. No other package should depend on provider-specific f
 class CalendarRepository(Protocol):
     async def upsert_events(self, events: Sequence[ExpectedEarningsEvent]) -> None: ...
     async def get_events(self, start: datetime, end: datetime) -> list[ExpectedEarningsEvent]: ...
+    async def cancel_event(self, event: ExpectedEarningsEvent, *, at: datetime) -> bool: ...
+    async def get_sync_state(self, provider: str) -> CalendarSyncState | None: ...
+    async def begin_sync(self, run: CalendarSyncRun) -> CalendarSyncRun: ...
+    async def complete_sync(self, success: CalendarSyncSuccess) -> None: ...
+    async def fail_sync(self, run: CalendarSyncRun, *, error: str, at: datetime) -> None: ...
 ```
 
 ### 4.3 SecClient
@@ -648,7 +662,8 @@ without replacement; equal-time conflicts raise; older observations are ignored.
 No batch-wide atomicity is claimed. `get_events(start, end)` uses inclusive UTC
 calendar dates containing the aware datetimes, queries each date partition, and
 paginates it. The configured maximum date span defaults to 366 days. Moved-date/
-cancellation reconciliation and last successful provider sync remain Phase 5.
+cancellation reconciliation and last successful provider sync are implemented by
+Phase 5 as described in section 7. Phase 3 rows default to active.
 
 Filings retain section 6.3 metadata and add:
 
@@ -822,17 +837,113 @@ No live resource inspection/mutation was performed.
 
 ## 7. Calendar synchronization
 
-### 7.1 Cadence
+### 7.1 Delivered scope and contracts
 
-- Full upcoming-calendar sync: once daily.
-- Optional near-term refresh: configurable; likely every few hours for the next 1–3 days if provider behavior warrants it.
-- On service startup: load relevant near-term records from DynamoDB.
+Phase 5 implements explicit async `CalendarSyncService.sync_once(start_date,
+end_date, kind="full")`, `sync_full()`, `sync_near_term()` and `health()`. Share one
+instance/lock per application event loop. The placeholder adapter always raises
+`CalendarProviderNotConfigured`; it never returns an invented empty calendar.
+An injected provider's name must match CalendarConfig.provider. All provider
+fixtures are synthetic/offline, not captured responses from a selected service.
 
-### 7.2 Update behavior
+`CalendarSnapshot` contains provider, inclusive start/end dates, exact sorted
+company CIK scope, a tuple of ExpectedEarningsEvent and an explicit completeness
+flag. A successful HTTP response alone cannot establish completeness. The adapter
+must collect all pages, normalize time/date/CIK fields and filter provider-wide
+responses to the requested curated universe. Failures/unknown coverage return no
+authoritative empty result. The service rejects coverage mismatch, incomplete
+results, out-of-scope events, noncanonical time values and conflicting duplicates.
+Identical duplicates collapse. A non-null provider ID cannot identify multiple
+dates for one CIK; distinct quarters with different IDs remain distinct rows.
 
-Provider changes should update the expected calendar record. This is planning data, not immutable regulatory data.
+Event time values are before_market/after_market/unknown; None normalizes to
+unknown. Dates remain dates and timestamps are aware UTC. The service substitutes
+canonical curated ticker metadata and the run's observed_at for synced_at;
+provider_updated_at remains a source diagnostic. Raw diagnostic payloads must be
+finite JSON objects with no credentials; database item-size validation covers the
+entire upsert batch before its first write. No raw SDK objects escape adapters.
 
-The ingestion service should log when an expected date/time materially changes.
+### 7.2 Refresh and reconciliation
+
+1. Read all enabled-company pages, including empty pages with continuations;
+   freeze the sorted CIK scope. Empty/ambiguous universes fail explicitly.
+2. Begin a durable run with an opaque request ID and observed_at. The repository
+   reserves strictly increasing observation times even after restart/clock rollback;
+   retries of the same request ID return its original canonical run.
+3. Fetch and validate the entire snapshot within configured count/retry bounds.
+4. Strongly query/paginate the date range and upsert returned expectations.
+5. Cancel missing expectations only for that provider, covered enabled CIKs and
+   confirmed dates. Never reconcile a failed/incomplete fetch or unconfirmed range.
+6. Commit the successful run only after all writes; record material changes/counts.
+
+Date moves within confirmed scope create the new row before cancelling the old.
+Moves across an unconfirmed boundary can temporarily retain the old row until
+coverage includes it. Disabled, other-provider and outside-range rows are not
+removed. Overlapping provider replacement fails; provider migration is explicit
+future work. Stable provider IDs identify date-change logs; without them log
+additions/removals rather than guessing fiscal-period identity.
+
+Cancellation is a conditional PutItem retaining event fields, advancing synced_at
+and setting calendar_active=False. Rows without this flag are active. Equal-time
+conflicting active/tombstone observations fail; older observations are ignored.
+Cancellation rereads on CAS races and cannot erase a newer observation. Repeating
+the same tombstone reports the logical cancellation as applied after a lost ack.
+get_events strongly queries date partitions and skips tombstones after validation,
+continuing every page. No physical deletes, TTL or table scans are introduced.
+Older calendar readers must not run with the Phase 5 writer.
+
+### 7.3 Durable synchronization state
+
+The Calendar table retains its expected_date/cik string key schema and no GSI.
+Reserved partition expected_date="__calendar_sync__", cik=<provider> stores typed
+metadata with repository_schema_version=1, calendar_record_type="sync", revision,
+latest_run, optional full_success/near_term_success and paired sanitized failure
+facts. Metadata is validated separately from domain expectations; ISO-date queries
+never return it. IAM restrictions must include this reserved key in Phase 8.
+
+Runs persist request ID, provider, kind, scope and observation timestamp. Successes
+persist the run, completion time, normalized event count and applied cancellation
+count. Conditional creation and revision-guarded replacement protect sync state;
+completion/failure requires the latest canonical run. First compatible completion
+facts are preserved on retry. Late failures do not overwrite a successful run.
+Near-term success leaves full success unchanged; recovery of one kind preserves
+an outstanding failure from the other kind. Error types are recorded without
+arbitrary exception text/URLs or payloads.
+
+No batch-wide atomicity is claimed. Database interruption can expose partial
+updates; success stays unchanged until application completes. A fresh complete
+snapshot repairs progress idempotently after restart. No persisted provider
+snapshot is replayed during an outage. Cancellation is not a failure observation.
+Old expectations and last successes remain usable after provider failures.
+Cancellation tombstones have no retention/compaction policy in this phase.
+
+### 7.4 Configuration, cadence and health
+
+CalendarConfig is isolated and reads process environment/injected mappings without
+implicit .env/credentials/client creation. README/.env.example list exact settings.
+Full cadence defaults daily; optional near-term cadence defaults disabled and
+near-term range to three days. Full lookahead defaults to 90 inclusive days.
+Positive count/finite timing bounds are validated. Provider and checkpoint retries
+have separate finite budgets and reuse centralized jitter/backoff. Shared AWS
+permission/resource errors propagate. Future HTTP adapters must use bounded
+offloading, provider-specific budgets/timeouts and sanitized errors.
+
+health() exposes durable state, age since last full success and a configurable
+stale flag. Never-synchronized providers are stale; near-term success cannot make
+full synchronization fresh. Callers must inspect recorded coverage when the
+company universe or requested range changes. No scheduling, market-window policy,
+SIGTERM lifecycle or CloudWatch emission is added; these remain Phase 6/8.
+
+### 7.5 AWS verification and limits
+
+Conditional timestamp/provider guards, revision guards and strong paginated reads
+reuse the existing SDK execution. The four-table/index contract is unchanged.
+AWS MCP confirmed [condition operator precedence](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.OperatorsAndFunctions.html)
+and [single-item conditional writes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/BestPractices_ImplementingVersionControl.html).
+The repository-local SDK model/Stubber validates wire parameters. No live AWS/SEC/
+calendar operations or resource changes are performed. Provider-specific HTTP
+timeouts, credentials, coverage evidence and request limits remain deferred until
+selection; the placeholder is deliberately unusable as a production calendar.
 
 ## 8. Polling scheduler algorithm
 

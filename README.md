@@ -4,13 +4,16 @@ This package captures the current design for the SEC document discovery and down
 
 The documents are intentionally scoped to **v0**. They preserve extension points for future scale and new downstream consumers, but avoid building distributed infrastructure before it is needed.
 
-## Implementation status: Phase 4
+## Implementation status: Phase 5 (placeholder provider)
 
 `finbot_ingestion` provides domain contracts, configuration validation, SEC URL
 construction, submissions parsing, shared SEC transport, package enumeration,
 and durable DynamoDB repositories/checkpoints with indexed recovery access.
 Phase 4 adds conditional S3 storage, SNS artifact publication, an operational SQS
 dead-letter adapter, discovery/acquisition workers, and explicit recovery passes.
+Phase 5 adds explicit earnings-calendar synchronization, complete scoped snapshots,
+guarded cancellation/date-move reconciliation, durable sync/freshness checkpoints,
+and a placeholder provider. No live calendar provider has been selected.
 It coexists with the existing
 `finbot_filings` package and `finbot-filings` CLI, whose behavior is unchanged.
 See [README-legacy.md](README-legacy.md) for those local workflows.
@@ -43,6 +46,8 @@ The new code is organized as follows:
 - `repositories/dynamodb/`: low-level Boto3 adapters, serialization, isolated AWS
   configuration, and bounded SDK execution. No clients are created on import.
 - `domain/checkpoints.py`: filing enumeration/failure facts separate from `Filing`.
+- `calendar/`: normalized snapshot/provider contracts, isolated configuration,
+  explicit refresh service and an unconfigured placeholder provider.
 - `storage/`: conditional S3 creation and validated existing-object inspection.
 - `messaging/`: SNS ArtifactReady and operational SQS terminal-failure envelopes.
 - `ingestion/`: discovery, acquisition/publication, stage retries and recovery.
@@ -166,8 +171,8 @@ jitter; `Retry-After` seconds/dates influence delay up to the configured cap.
 Redirects are restricted to official HTTPS SEC hosts and each hop consumes budget.
 Failures and retry recovery use standard Python logging with structured extra fields.
 
-Calendar synchronization, scheduling, continuous runtime, Docker/CDK, and deployment
-remain later phases. There is no
+Live calendar-provider integration, scheduling, continuous runtime, Docker/CDK,
+and deployment remain future work. There is no
 `finbot_ingestion.main` runtime yet. Legacy source and shared data remain intact.
 
 ## DynamoDB persistence and recovery
@@ -265,10 +270,12 @@ are chronological operational diagnostics, not an exact concurrent audit ledger.
 Failures after completion cannot resurrect pending work.
 
 Calendar upserts are per-row and reject equal-sync-time conflicting observations;
-older syncs cannot replace newer records. `get_events(start, end)` selects the
+older syncs cannot replace newer records or cancellation tombstones. Replacing a
+different provider at an occupied key fails explicitly. `get_events(start, end)` selects the
 inclusive UTC **dates** containing those aware datetimes, not intraday event times,
-and queries/paginates each date. Date moves/cancellations and provider successful-
-sync tracking remain Phase 5. Company upserts intentionally replace mutable
+and queries/paginates each date, returning only active expectations. Phase 5
+implements scoped cancellations and successful-sync tracking as described below.
+Company upserts intentionally replace mutable
 curated configuration, including enabled status.
 
 Persistence schema version `1` uses fixed-width microsecond UTC timestamps,
@@ -414,11 +421,109 @@ problem. Phase 4 intentionally exposes no automatic/manual mutation command to
 redrive these records; an explicit operator redrive contract remains future work.
 Do not delete raw S3 objects as a repair procedure.
 
+## Earnings-calendar synchronization
+
+Phase 5 exposes `CalendarSyncService.sync_once(start_date, end_date, kind="full")`,
+`sync_full()`, `sync_near_term()` and `health()` as explicit async calls. Share one
+service instance in one event loop; it serializes refreshes. There is no periodic
+task/daemon or calendar CLI yet. Phase 6 will use the daily and optional near-term
+cadence settings to schedule calls.
+
+The default `PlaceholderCalendarProvider` always raises
+`CalendarProviderNotConfigured`. It performs no HTTP calls, returns no invented
+events, cannot clear expectations, and never establishes a successful-sync
+checkpoint. Provider selection and a live adapter are deliberately deferred at
+the user's request; the service and persistence can be used with injected adapters.
+
+For repositories already constructed by the caller:
+
+```python
+from finbot_ingestion.calendar.service import CalendarSyncService
+from finbot_ingestion.calendar.provider import CalendarProviderNotConfigured
+
+service = CalendarSyncService.with_placeholder(company_repo, calendar_repo)
+# Inside an async caller; repository methods contact AWS if using real adapters:
+try:
+    await service.sync_full()
+except CalendarProviderNotConfigured:
+    pass  # Expected until an actual provider is selected and injected.
+health = await service.health()  # stale=True until a full sync succeeds.
+```
+
+An injected provider implements `EarningsCalendarProvider.fetch_events()` and
+returns `CalendarSnapshot(provider, start_date, end_date, company_ciks, events,
+complete)` (keyword-only fields). It must fully fetch/normalize the exact requested
+inclusive date/company scope, including all pages, before claiming `complete=True`.
+A failed page, unknown coverage, or a provider error must raise or return an
+incomplete snapshot, never a successful empty calendar. Only a validated complete
+empty snapshot can cancel in-scope expectations. Adapters map curated tickers to
+CIKs explicitly and filter global provider results before returning the snapshot.
+The service rejects out-of-scope events, ambiguous curated tickers, conflicting
+duplicates and a stable provider event ID appearing on multiple dates. Distinct
+quarters remain separate events. Provider secrets must never enter diagnostic
+payloads; service failure logs/checkpoints record exception types, not arbitrary
+provider messages or URLs.
+
+The service assigns canonical curated tickers and a durable monotonic observation
+time, normalizes missing earnings times to `unknown`, validates the whole snapshot,
+and writes expectations before cancelling obsolete rows. Cancellation is limited
+to the confirmed range, enabled-company snapshot and same provider. Disabled,
+other-provider and out-of-range records remain untouched. A move across an
+unconfirmed boundary can temporarily retain the old expectation until a refresh
+covers it. Optional stable provider IDs identify date-change logs; no period
+identity is guessed when IDs are unavailable.
+
+Calendar keys remain `expected_date` / `cik`. Cancelled rows retain their metadata,
+set `calendar_active=False` and advance `synced_at`; existing rows without this flag
+are active. Tombstones prevent late retries from recreating removed expectations.
+There is no TTL/deletion/cleanup policy in this phase. Do not run older calendar
+readers alongside the Phase 5 writer: they do not understand inactive records.
+
+Sync metadata uses reserved partition `expected_date="__calendar_sync__"` and
+sort key `cik=<provider>` with a separately validated typed record. It holds the
+latest run, revision, exact company/date scope, separate full/near-term successes
+and sanitized failure facts. It is never returned by ISO-date queries. No fifth
+table, index, scan, stream, hash or infrastructure change is required. Cloud IAM
+key restrictions must allow this reserved partition in future deployment.
+
+Success is recorded only after every expectation/cancellation write completes.
+Lost acknowledgments retry the same request/timestamp/facts. Interrupted writes
+may leave partial progress visible; the next complete refresh repairs it. No
+batch-wide atomicity or durable snapshot replay during a provider outage is
+claimed. Previously stored expectations and the last success remain available
+after failed/incomplete provider fetches. `health()` reports age of the last full
+success; near-term success cannot conceal stale full coverage. It reports recorded
+scope, which callers must compare with a changed production universe/range.
+
+Calendar settings are independent of SEC/AWS/legacy settings, with no implicit
+`.env` loading or client creation:
+
+| Variable | Default |
+| --- | --- |
+| `CALENDAR_PROVIDER` | `placeholder` (injected adapter name must match) |
+| `CALENDAR_LOOKAHEAD_DAYS` / `CALENDAR_NEAR_TERM_DAYS` | `90` / `3`, inclusive day counts |
+| `CALENDAR_FULL_REFRESH_SECONDS` | `86400` |
+| `CALENDAR_NEAR_TERM_REFRESH_SECONDS` | `0` (automatic near-term refresh disabled) |
+| `CALENDAR_STALE_AFTER_SECONDS` | `172800` |
+| `CALENDAR_MAX_COMPANIES` / `CALENDAR_MAX_SNAPSHOT_EVENTS` | `1000` / `5000` |
+| `CALENDAR_COMPANY_PAGE_SIZE` | `100`, integer 1 through 1000 |
+| `CALENDAR_PROVIDER_ATTEMPTS` / `CALENDAR_CHECKPOINT_ATTEMPTS` | `3` / `3` |
+| `CALENDAR_BACKOFF_BASE_SECONDS` / `CALENDAR_BACKOFF_CAP_SECONDS` | `1` / `30` |
+
+Positive finite values are required except the optional zero near-term cadence;
+near-term days cannot exceed lookahead. The requested date span must also fit
+`DYNAMODB_MAX_CALENDAR_RANGE_DAYS`. Company/event counts are bounded. Retryable
+provider/incomplete-snapshot and transient repository failures use the shared
+jittered timing policy; permanent data/configuration/permission errors propagate.
+The selected live adapter will own its HTTP timeouts, request-size bounds,
+provider budget and credentials. Provider calls do not consume the SEC budget.
+
 ## Migration status
 
-Phases 1–4 are complete. See [the migration plan](docs/MIGRATION_PLAN.md) for
-acceptance criteria and validation. Next: Phase 5 — earnings-calendar synchronization;
-the provider is still TBD. The legacy CLI remains available.
+Phases 1–4 and the authorized Phase 5 placeholder scope are complete. See
+[the migration plan](docs/MIGRATION_PLAN.md) for acceptance criteria and validation.
+Next: Phase 6 — scheduling and continuous runtime. The live calendar adapter and
+production universe remain unresolved inputs. The legacy CLI remains available.
 
 ## Documents
 
