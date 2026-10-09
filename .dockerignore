@@ -1,0 +1,13 @@
+# Only application inputs may enter the production build context.
+*
+!pyproject.toml
+!README.md
+!src/
+!src/finbot_ingestion/
+!src/finbot_ingestion/**
+**/__pycache__/
+**/*.pyc
+**/.DS_Store
+**/.env*
+**/*.pem
+**/*.key

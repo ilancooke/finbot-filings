@@ -21,12 +21,14 @@ The architectural sources of truth are:
 - [docs/adr/](adr/): accepted architecture decisions and their rationale.
 
 This plan sequences implementation; it does not replace those design documents.
-Legacy code, [README-legacy.md](../README-legacy.md), and the legacy roadmap are
-implementation/reference material, not the specification for the new service.
+Legacy code/docs were implementation/reference material, not the specification
+for the new service. Phase 7 removed them; the complete pre-cutover revision is
+`59cacd78a1da01d00b913c2e67185b0a0980d7ce` (recovery command in README).
 
 The target Python namespace is `finbot_ingestion`. The physical repository and
 distribution remain `finbot-filings` during migration; a repository rename is not
-a prerequisite. Legacy `finbot_filings` temporarily coexists with the new package.
+a prerequisite. Legacy `finbot_filings` coexisted through Phase 6 and was removed
+during Phase 7. Only `finbot_ingestion` is now installed.
 
 The approved v0 architecture includes:
 
@@ -556,7 +558,10 @@ phases. Terminal redrive/completed-package rechecking remain deferred.
 
 ### Phase 7 — Complete runtime cutover and clean the package
 
-**Status: NOT STARTED.**
+**Status: COMPLETE (2026-10-08).**
+
+The original plan, delivered scope, preservation gate and package/container
+validation are recorded in [PHASE_7_PLAN.md](PHASE_7_PLAN.md).
 
 **Goal:** Make the ingestion service the supported runtime and remove superseded
 legacy functionality without losing valuable work or operational history.
@@ -581,15 +586,49 @@ code, dependencies, Dockerfile, or compose configuration changes before jobs run
 
 **Acceptance criteria:**
 
-- The supported entry point is `python -m finbot_ingestion.main`.
-- Container lifecycle tests pass; image configuration and documented commands agree.
-- No ingestion dependency remains on PyArrow, legacy interpretation modules,
+- [x] The supported entry point is `python -m finbot_ingestion.main`.
+- [x] Container lifecycle tests pass; image configuration and documented commands agree.
+- [x] No ingestion dependency remains on PyArrow, legacy interpretation modules,
   local dataset roots, content hashes, or raw overwrite flags. Retain only
   dependencies justified by acquisition (for example an index HTML parser).
-- Existing shared data remains untouched; useful legacy code is recoverable.
-- Downstream code relocation is not silently undertaken in other repositories.
-- Obsolete docs/commands are removed or clearly archived, and the final package
+- [x] Existing shared data remains untouched; useful legacy code is recoverable.
+- [x] Downstream code relocation is not silently undertaken in other repositories.
+- [x] Obsolete docs/commands are removed or clearly archived, and the final package
   is focused on ingestion.
+
+**Delivered:** Ingestion-only package discovery and module commands; removed
+`finbot_filings`, its console entry point, 144 legacy tests, four interpretation
+fixtures, local batch/ticker workflow and legacy docs. Every removed tracked file
+was verified unchanged against the recovery revision before deletion; no user
+source edits required a separate recovery copy. PyArrow/lxml direct requirements
+are removed. Existing acquisition regressions already covered original bytes,
+idempotency, partial enumeration, storage repair, publication-only retry and
+amendments; all 439 ingestion tests are retained.
+
+Python 3.12 slim wheel-based Dockerfile runs as UID/GID 10001 with direct PID 1
+module startup and local heartbeat health checks. Build-context allowlist/ignore
+rules exclude secrets, caches, shared data and tests. README/.env.example document
+the supported local/container workflows and recovery revision. Root fixtures block
+network/use dummy credentials; SDK stateful fakes are shared with a mounted-only
+lifecycle harness. Nine guarded subprocess checks and six opt-in Docker cases
+validate package/health, actual signals, original bytes/publication, failure exits,
+blocked I/O and cleanup. No application behavior/schema changes were needed.
+
+**Validation (2026-10-08):** Before cleanup, 583 tests passed in the repo-local
+Python 3.14.8 environment. After removal/additions, 448 offline tests pass with
+six Docker cases explicitly skipped in the default suite; all six opt-in cases
+pass against the rebuilt Python 3.12 Linux image. Compilation and diff checks
+pass. Wheel/sdist contents and metadata, fresh temporary wheel installation,
+all-module imports, help/health and `pip check` pass. Image installation validates
+absence of the legacy namespace, PyArrow, lxml, pytest and test harness, plus an
+actual XNYS session. Full commands/results are in PHASE_7_PLAN.
+
+**Limits:** Validation uses stateful fake AWS/HTTP boundaries and network-disabled
+containers, not live providers/resources. Container lifecycle is not a production
+latency/deployment guarantee; shutdown grace still does not cap blocking I/O.
+Provider selection and production universe remain unresolved. No shared-data
+writes, AWS resource changes, live AWS/SEC/provider operations, downstream
+relocation or Phase 8 work occurred.
 
 ### Phase 8 — Add CDK and application delivery
 
@@ -634,7 +673,7 @@ image builds. Any live SEC smoke test remains explicitly manual.
 ## 4. Current migration status
 
 **Phases 1–4: COMPLETE. Phase 5: COMPLETE for authorized placeholder-provider scope.
-Phase 6: COMPLETE. Phases 7–8: NOT STARTED.**
+Phases 6–7: COMPLETE. Phase 8: NOT STARTED.**
 
 Phase 1 delivered typed contracts, deterministic identities, UTC timestamp
 validation, offline submissions parsing, and configuration validation while
@@ -700,24 +739,31 @@ checks pass, using the repository-local environment and mocked offline boundarie
 
 Phase 6 delivered the continuous runtime and revised deterministic satisfaction
 policy. See Phase 6 above and LLD sections 2.6/8.2 for concrete contracts and
-limitations. **Current validation (2026-10-08):** 583 offline tests pass;
+limitations. **Historical Phase 6 validation (2026-10-08):** 583 offline tests pass;
 compilation/diff checks and entry-point help/import checks pass. No live AWS/SEC/
 provider operations, deployment, container jobs or shared-data writes were run.
 
+Phase 7 completed package/container cutover and legacy cleanup. See its section
+and LLD section 2.7 for delivered contracts. **Current validation (2026-10-08):**
+448 offline tests pass; six opt-in Docker lifecycle cases pass separately.
+Compilation/diff checks, fresh distribution installation and image import/session/
+dependency checks pass. Only offline fixture containers were run.
+
 ## 5. Next milestone
 
-**NEXT: Phase 7 — Complete runtime cutover and clean the package.**
+**NEXT: Phase 8 — Add CDK and application delivery.**
 
-Validate the container entry point/lifecycle, clean superseded legacy workflows
-while preserving recoverable history, and focus dependencies/docs on ingestion.
-Phase 6 completion does not authorize starting Phase 7 or cloud deployment.
+Provision the approved single-active-task infrastructure and application delivery
+workflow when authorized. Phase 7 completion does not authorize Phase 8 or live
+cloud deployment. The supported runtime/container and recovery revision are
+documented in README; initial CDK deployment remains manual.
 
 Provider selection/live adapter and the production company universe remain
 external inputs. The placeholder raises and cannot supply production scheduling
 data. Select the free provider with the user, verify complete coverage and implement
 its isolated HTTP/normalization adapter before production use. Keep all provider
 boundaries mocked in routine tests; do not silently invent either input. Runtime
-cutover/CDK remain Phases 7–8. Terminal operator redrive and completed-package
+cutover is complete; CDK remains Phase 8. Terminal operator redrive and completed-package
 recheck policies remain explicit future work.
 
 ## 6. Remaining unresolved external inputs

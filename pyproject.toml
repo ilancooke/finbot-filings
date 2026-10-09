@@ -5,14 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "finbot-filings"
 version = "0.2.0"
-description = "SEC ingestion foundations alongside legacy local filing workflows"
+description = "Restart-safe SEC document acquisition and artifact publication service"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "boto3>=1.43.110,<2",
     "beautifulsoup4>=4.12,<5",
-    "lxml>=5,<7",
-    "pyarrow>=15",
     "requests>=2.32,<3",
     "exchange-calendars>=4.13.2,<5",
 ]
@@ -20,14 +18,13 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "build>=1,<2",
 ]
-
-[project.scripts]
-finbot-filings = "finbot_filings.cli:entrypoint"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["finbot_filings*", "finbot_ingestion*"]
+include = ["finbot_ingestion*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["container: opt-in Docker lifecycle tests (FINBOT_CONTAINER_TESTS=1)"]

@@ -1,33 +1,21 @@
-from __future__ import annotations
+"""Routine tests use offline boundaries and never the user's AWS credentials."""
 
-from datetime import date
+import socket
 
 import pytest
 
-from finbot_filings.models import Company, Filing
-from finbot_filings.sec.filings import filing_index_url, primary_document_url
 
+@pytest.fixture(autouse=True)
+def offline_environment(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("network access is forbidden in ingestion tests")
 
-@pytest.fixture
-def company() -> Company:
-    return Company(ticker="AAPL", name="Apple Inc.", cik=320193)
-
-
-@pytest.fixture
-def filing(company: Company) -> Filing:
-    accession = "0000320193-25-000079"
-    return Filing(
-        ticker=company.ticker,
-        company_name=company.name,
-        cik=company.cik,
-        form="10-K",
-        accession_number=accession,
-        filing_date=date(2025, 10, 31),
-        report_date=date(2025, 9, 27),
-        primary_document="aapl-20250927.htm",
-        filing_url=filing_index_url(company.cik, accession),
-        document_url=primary_document_url(
-            company.cik, accession, "aapl-20250927.htm"
-        ),
-    )
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
 

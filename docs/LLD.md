@@ -73,12 +73,15 @@ finbot-sec-ingestion/
 
 The exact file names may evolve, but ownership boundaries should remain explicit.
 
+Sections 2.1–2.6 record the historical delivery state of each phase. Section 2.7
+describes the current ingestion-only package and container cutover.
+
 ### 2.1 Phase 1 implementation notes
 
-The current repository ships `finbot_ingestion` alongside the unchanged legacy
-`finbot_filings` namespace. Only domain contracts, SEC URL/submissions adapters,
-and SEC configuration validation are implemented; the remaining layout describes
-later phases. Models use frozen Python dataclasses and aware UTC datetimes.
+Phase 1 shipped `finbot_ingestion` alongside the unchanged legacy
+`finbot_filings` namespace. At that phase, only domain contracts, SEC URL/submissions
+adapters and SEC configuration validation were implemented; the remaining layout
+described later phases. Models use frozen Python dataclasses and aware UTC datetimes.
 
 Concrete Phase 1 contract choices:
 
@@ -315,7 +318,8 @@ Provider HTTP integration, authentication and rate limits await provider selecti
 
 `python -m finbot_ingestion.main` now builds one supervised RuntimeApplication with
 one SEC client/limiter/executor, shared repositories and IdentityLocks, and one
-CalendarSyncService. Existing explicit services and the legacy CLI remain usable.
+CalendarSyncService. Existing explicit services remain usable. The legacy CLI was
+preserved at Phase 6 delivery and removed during Phase 7 cutover.
 The application validates settings before AWS client construction and requires
 existing resources and a nonempty enabled universe. The factory accepts only the
 placeholder until a live provider is selected; offline tests inject adapters.
@@ -368,6 +372,50 @@ old disabled-company work progress, queues stay bounded, and eleven tasks suffic
 FIFO dispatch is retained; no fairness layer or canonical-filing cache was justified
 by this short synthetic workload. Database-call counts remain an explicit sizing
 input, especially when real submissions contain many historical rows.
+
+### 2.7 Phase 7 implementation notes
+
+The supported entry point is `python -m finbot_ingestion.main`; the distribution
+and repository remain named `finbot-filings`. Package discovery includes only
+`finbot_ingestion*`. The legacy namespace/console entry point, local bundle layout,
+section/fact/taxonomy interpretation, batch script and sample tickers are removed.
+All deleted source/tests/docs were verified against recoverable revision
+`59cacd78a1da01d00b913c2e67185b0a0980d7ce`; README provides a separate-worktree
+recovery command. Shared operational data and the user's ignored `.env` remain
+untouched. No downstream code relocation occurred.
+
+Runtime dependencies are Boto3, requests, BeautifulSoup and exchange-calendars.
+PyArrow and lxml direct requirements are removed; package enumeration already uses
+the standard-library HTML parser. Exchange calendars still requires pandas, NumPy
+and timezone helpers. Development extras include pytest and the distribution build
+tool. Fresh wheel/sdist and installed-image checks validate the acquisition-only
+dependency boundary. No runtime/domain/storage/event schema changed.
+
+Docker uses a Python 3.12 slim build stage to create application/dependency wheels,
+then installs them without network access in the final stage. Its explicit source
+allowlist excludes credentials, shared data, tests and caches. UID/GID 10001 runs
+the exec-form module entry point as PID 1; logs are unbuffered and bytecode writes
+disabled. No inbound ports, data mounts, bundled test fakes or production mock-mode
+configuration are introduced. `/tmp` supports the existing atomic heartbeat.
+
+The Docker health check runs the module's `--health-check` every 30 seconds with
+five-second timeout, 120-second startup allowance and three retries. Missing,
+invalid, stale or non-live heartbeats fail without AWS/SEC access. Calendar
+freshness/provider configuration remain separate from process liveness. ECS health
+settings/collection/alarms are still Phase 8. README documents explicit environment
+injection and local stop timeout; the existing drain grace is not a hard blocking-I/O
+deadline.
+
+Root test fixtures no longer import legacy modules. Stateful AWS fakes shared with
+Phase 3/4 tests support a mounted test-only Python startup shim: it replaces HTTP/
+SDK boundaries, blocks child-process network access and executes the unchanged
+production entry point/factory with real configuration, limiter and adapters.
+Opt-in containers have network disabled, dummy credentials, a read-only root and
+temporary `/tmp`. Real OS signals, PID 1, non-root installation/session lookup,
+artifact bytes/checkpoints, required-loop failure/return and blocking cleanup are
+tested. Ordinary pytest skips the six Docker cases unless explicitly enabled;
+actual execution is required for Phase 7 completion. See README and
+[PHASE_7_PLAN.md](PHASE_7_PLAN.md) for commands and validation.
 
 ## 3. Core domain models
 
@@ -1294,8 +1342,8 @@ COMPANIES_TABLE
 ARTIFACT_READY_TOPIC_ARN
 SEC_USER_AGENT
 SEC_MAX_REQUESTS_PER_SECOND=5
-ACTIVE_POLL_INTERVAL_SECONDS
-SAFETY_POLL_INTERVAL_SECONDS
+RUNTIME_ACTIVE_POLL_SECONDS
+RUNTIME_SAFETY_POLL_SECONDS
 CALENDAR_LOOKAHEAD_DAYS
 CALENDAR_PROVIDER
 LOG_LEVEL

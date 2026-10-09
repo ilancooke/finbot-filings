@@ -1,683 +1,297 @@
 # finbot SEC ingestion
 
-This package captures the current design for the SEC document discovery and download service that will act as the ingestion layer for the broader finbot platform.
+`finbot-filings` is a focused SEC document-acquisition service. Its installed
+Python namespace is `finbot_ingestion`. It discovers relevant filings, acquires
+original document bytes, stores immutable artifacts in S3, maintains DynamoDB
+metadata/checkpoints and publishes `ArtifactReady` events to SNS. Document
+interpretation, earnings extraction, features and consumer queues belong downstream.
 
-The documents are intentionally scoped to **v0**. They preserve extension points for future scale and new downstream consumers, but avoid building distributed infrastructure before it is needed.
+Phase 7 provides the supported runtime/container and removes the superseded
+`finbot_filings` namespace, local bundle/extraction commands and legacy dependencies.
+CDK, cloud deployment and application delivery remain Phase 8. No live earnings
+calendar adapter or authoritative production company universe has been selected.
+The placeholder reports unavailable calendar coverage; it cannot supply a calendar.
 
-## Implementation status: Phase 6 (continuous runtime)
+## Install and validate
 
-`finbot_ingestion` provides domain contracts, configuration validation, SEC URL
-construction, submissions parsing, shared SEC transport, package enumeration,
-and durable DynamoDB repositories/checkpoints with indexed recovery access.
-Phase 4 adds conditional S3 storage, SNS artifact publication, an operational SQS
-dead-letter adapter, discovery/acquisition workers, and explicit recovery passes.
-Phase 5 adds explicit earnings-calendar synchronization, complete scoped snapshots,
-guarded cancellation/date-move reconciliation, durable sync/freshness checkpoints,
-and a placeholder provider. Phase 6 adds the supervised runtime, bounded queues,
-market-session scheduling, versioned earnings satisfaction, repeated recovery,
-structured logs, metrics and local health checks. No live calendar provider has
-been selected.
-It coexists with the existing
-`finbot_filings` package and `finbot-filings` CLI, whose behavior is unchanged.
-See [README-legacy.md](README-legacy.md) for those local workflows.
-
-The distribution is still named `finbot-filings`; both Python namespaces are
-installed from this repository. Boto3 requires version 1.43.110 or newer for the
-tested conditional-write API contract.
+Python 3.12 or newer is required. From this repository:
 
 ```bash
 python3.12 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m compileall src tests
-.venv/bin/python -m pytest
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python -m compileall -q src tests
+.venv/bin/python -m pytest -q
+.venv/bin/python -m build
 ```
 
-The new code is organized as follows:
-
-- `domain/`: `Company`, `ExpectedEarningsEvent`, `Filing`, `Artifact`,
-  `ArtifactReady`, identity validation, and UTC timestamp helpers.
-- `sec/submissions.py`: pure parsing of supplied SEC JSON, adapted from the
-  legacy submissions parser, without requests, ticker lookup, or a count limit.
-- `sec/urls.py`: official submissions, filing-index, and document URLs.
-- `sec/client.py`, `sec/rate_limiter.py`: shared transport and request budgeting.
-- `sec/filing_index.py`: pure package parsing and artifact enumeration.
-- `ingestion/retry_policy.py`: centralized retry timing.
-- `config.py`: `IngestionConfig`, reading process environment or an injected
-  mapping. It does not load `.env` automatically or require legacy output paths.
-- `repositories/`: async company/calendar/filing/artifact protocols, typed pages,
-  persistence errors, and `PackageCheckpoint` for durable child creation.
-- `repositories/dynamodb/`: low-level Boto3 adapters, serialization, isolated AWS
-  configuration, and bounded SDK execution. No clients are created on import.
-- `domain/checkpoints.py`: filing enumeration/failure facts separate from `Filing`.
-- `calendar/`: normalized snapshot/provider contracts, isolated configuration,
-  explicit refresh service and an unconfigured placeholder provider.
-- `storage/`: conditional S3 creation and validated existing-object inspection.
-- `messaging/`: SNS ArtifactReady and operational SQS terminal-failure envelopes.
-- `ingestion/`: discovery, acquisition/publication, stage retries, bounded work queues and recovery.
-- `scheduler/`: XNYS session windows, completion-based active/safety polling and
-  deterministic earnings satisfaction.
-- `runtime/`, `main.py`: validated runtime settings, supervised loops and signal handling.
-- `observability/`: sanitized JSON logs, bounded EMF metrics and local heartbeat.
-- `execution.py`, `aws_execution.py`, `aws_config.py`: bounded blocking I/O,
-  reusable SDK clients, attempt logging and isolated storage/messaging settings.
-
-For example, parse a local submissions fixture without contacting SEC:
-
-```python
-import json
-from datetime import datetime, timezone
-from pathlib import Path
-
-from finbot_ingestion.domain import Company
-from finbot_ingestion.sec.submissions import parse_company_submissions
-
-payload = json.loads(Path("tests/fixtures/submissions_mixed.json").read_text())
-filings = parse_company_submissions(
-    Company(ticker="AAPL", cik="320193", name="Apple Inc."),
-    payload,
-    discovered_at=datetime(2026, 10, 8, tzinfo=timezone.utc),
-)
-```
-
-The parser accepts all six supported forms and preserves amendments under their
-own accessions. It returns unique filings newest-first by `filed_at`, with
-accession as a deterministic tie-breaker. Identical repeated accessions collapse;
-conflicting metadata for one accession raises `SECDataError`.
-
-`filed_at` currently means the supplied SEC `acceptanceDateTime`, normalized to
-UTC; it is not a measured public availability time. Missing, invalid, or
-timezone-naive acceptance timestamps fail explicitly. `filingDate` and
-`reportDate` never supply a fallback timestamp. `primaryDocument` may be absent,
-null, or empty; the resulting name is `None` for later package enumeration.
-An invalid relevant row rejects the parse; callers must not treat that response
-as fully processed. Supplied parallel columns must have matching lengths.
-
-Artifact IDs are `<dashed-accession>/<original-filename>`, computed by `Artifact`
-and `domain.identity.artifact_identity()`. Filenames preserve case, must be
-basenames, and cannot contain path separators or control characters. No content
-hash is used. `artifact_key()` produces `<10-digit-cik>/<artifact-id>`.
-
-`ArtifactReady.from_artifact(filing, artifact)` requires matching filing identity
-and populated `s3_uri`/`stored_at`; `to_dict()` and `to_json()` serialize the
-version `1.0` contract with UTC timestamps and no document contents. This validates
-the record, not an actual storage commit; the Phase 4 worker enforces the
-S3 → DynamoDB → SNS ordering. Artifact storage checkpoints require `s3_uri` and
-`stored_at` together, and publication requires a storage checkpoint.
-
-SEC configuration:
-
-| Environment variable | Requirement |
-| --- | --- |
-| `SEC_USER_AGENT` | Required, nonempty identifying header; no fabricated fallback |
-| `SEC_MAX_REQUESTS_PER_SECOND` | Defaults to `5`; must be finite, positive, and at most `5` |
-
-Export these variables before calling `IngestionConfig.from_env()`, or pass a
-mapping directly. `.env.example` retains legacy settings and documents the new
-ceiling. The new SEC client enforces this ceiling through an explicitly shared limiter.
-The legacy client's throttling remains unchanged.
-
-## SEC transport and package discovery
-
-```python
-from finbot_ingestion.config import IngestionConfig
-from finbot_ingestion.sec.client import SecClient
-from finbot_ingestion.sec.rate_limiter import SECRateLimiter
-
-config = IngestionConfig.from_env()
-# Construct once and share across every SEC client/caller in the service.
-limiter = SECRateLimiter(config.sec_max_requests_per_second)
-with SecClient(config, limiter=limiter) as client:
-    filings = client.get_company_submissions(company)
-    for filing in filings:
-        package = client.get_filing_index(filing)
-        for document in package.documents:
-            downloaded = client.download_document(document.sec_url)
-            # downloaded.content: original response-content bytes; no text conversion.
-```
-
-This example contacts SEC when run; routine tests use fake transports only.
-`company` is a domain `Company` with a curated CIK. Submissions returns typed
-`Filing` records, package discovery returns `FilingIndex`, and downloads return
-`DownloadedDocument` (`content`, `content_type`, `source_url`, `size_bytes`).
-`package.artifacts(filing, discovered_at=...)` creates deterministic domain records
-without marking them stored or published.
-
-The synchronous `requests` client reuses a session and serializes HTTP attempts
-under the shared limiter. Phase 4 services use a shared bounded executor.
-There is one in-flight HTTP attempt at a time; slow responses can reduce throughput
-below five requests/second. Retries and manually followed redirects use the same
-budget. No successful JSON response is permanently cached.
-
-Package discovery reconciles HTML document tables with accession-directory JSON.
-It includes every directory file except recognized index/navigation files, retains
-original names and available document types, and requires a resolvable primary
-filing. Raw XML, images, and other auxiliary files are included without interpretation.
-Missing/inconsistent metadata raises `SECIncompletePackageError`; unsafe or malformed
-metadata raises `SECDataError`. The caller must retry the complete package snapshot
-later, never checkpoint the error as success. A validated snapshot cannot guarantee
-that SEC will not subsequently add another file. Durable child checkpoints and
-unfinished-enumeration recovery are implemented; automatic rechecking of completed
-snapshots remains a later policy.
-
-Additional exported environment variables:
-
-| Variable | Default |
-| --- | --- |
-| `SEC_CONNECT_TIMEOUT_SECONDS` | `10` |
-| `SEC_READ_TIMEOUT_SECONDS` | `30` |
-| `SEC_MAX_ATTEMPTS` | `3` |
-| `SEC_BACKOFF_BASE_SECONDS` | `1` |
-| `SEC_BACKOFF_CAP_SECONDS` | `30` |
-| `SEC_MAX_REDIRECTS` | `5` |
-
-Timeouts/backoff must be finite and positive; the cap must be at least the base.
-Attempts must be a positive integer and redirects a nonnegative integer.
-Timeouts/connection failures, HTTP 403/429/5xx, and package-index 404 responses
-receive bounded retries. Other HTTP errors fail immediately. Backoff uses full
-jitter; `Retry-After` seconds/dates influence delay up to the configured cap.
-Redirects are restricted to official HTTPS SEC hosts and each hop consumes budget.
-Failures and retry recovery use standard Python logging with structured extra fields.
-
-Live calendar-provider integration, Docker/CDK and deployment remain future work.
-The Phase 6 runtime is described below. Legacy source and shared data remain intact.
-
-## DynamoDB persistence and recovery
-
-Phase 3 implements four separate tables; it does not provision them. See
-[LLD section 6.5](docs/LLD.md#65-phase-3-concrete-schema-and-access-patterns) for the
-table/index contract that future CDK must implement. Adapter operations assume
-those tables and indexes already exist; missing resources fail explicitly.
-
-Configure `DynamoDBConfig.from_env()` separately from SEC settings:
-
-| Variable | Default / requirement |
-| --- | --- |
-| `AWS_REGION` | Required |
-| `COMPANIES_TABLE` | Required |
-| `CALENDAR_TABLE` | Required |
-| `FILINGS_TABLE` | Required |
-| `ARTIFACTS_TABLE` | Required; all four table names must differ |
-| `DYNAMODB_CONNECT_TIMEOUT_SECONDS` | `5`, finite and positive |
-| `DYNAMODB_READ_TIMEOUT_SECONDS` | `10`, finite and positive |
-| `DYNAMODB_MAX_ATTEMPTS` | `3` total SDK attempts, standard retry mode |
-| `DYNAMODB_PAGE_SIZE` | `100`, integer from 1 to 1000 |
-| `DYNAMODB_MAX_WORKERS` | `4`, positive integer |
-| `DYNAMODB_CAS_ATTEMPTS` | `4`, positive integer |
-| `DYNAMODB_MAX_CALENDAR_RANGE_DAYS` | `366`, positive integer |
-
-Parsing configuration never resolves credentials or contacts AWS. Existing SEC
-configuration and the legacy CLI do not require any of these new settings.
-
-The following wiring example contacts AWS **only when repository methods run**;
-client construction explicitly opts into the normal AWS credential chain. It is
-not a test or a provisioning command:
-
-```python
-from finbot_ingestion.repositories.dynamodb import (
-    DynamoDBConfig, DynamoDBExecution, DynamoDBFilingRepository,
-    DynamoDBArtifactRepository,
-)
-from finbot_ingestion.repositories.package_checkpoint import PackageCheckpoint
-
-config = DynamoDBConfig.from_env()
-# Share one execution/client across repositories and one application event loop.
-with DynamoDBExecution.from_config(config) as execution:
-    filings = DynamoDBFilingRepository(execution)
-    artifacts = DynamoDBArtifactRepository(execution)
-    checkpoint = PackageCheckpoint(filings, artifacts)
-    # Inside the caller's async context:
-    # await filings.create_if_absent(filing)
-    # await checkpoint.persist(
-    #     filing, package.artifacts(filing, discovered_at=discovered_at),
-    #     primary_document_name=package.primary_document_name,
-    #     completed_at=completed_at,
-    # )
-```
-
-Repository calls offload blocking Boto3 I/O to a bounded executor. Close the shared
-execution after awaited work finishes; it owns its default executor and closes the
-client. Inject a client/executor for tests or future runtime wiring.
-
-Filing/artifact creation uses conditional writes. Compatible duplicates return
-`False` and preserve original observations, ticker, and checkpoints; incompatible
-source identity/provenance raises `RepositoryConflict`. Artifact creation accepts
-only newly discovered records. `PackageCheckpoint.persist()` verifies parent and
-child identities and confirms every child with a strong base-table read before
-committing completion. `mark_enumerated()` is the low-level commit primitive;
-future discovery callers must use the helper rather than call it prematurely.
-
-First enumeration completion timestamp, resolved primary name, and snapshot count
-are retained. Replaying a later validated snapshot can add missing children through
-the helper without changing those first-completion facts. Completion is an observed
-snapshot, not proof that SEC will never add files; automatic recheck policy is later
-orchestration. Existing accessions must not suppress unfinished enumeration.
-
-`mark_stored()` records URI/time/content metadata together and transitions pending
-work from `ACQUIRE` to `PUBLISH`. Compatible repeats preserve the first timestamp;
-different URI/content metadata raises a conflict. `mark_published()` requires
-storage, preserves the first publication timestamp, and removes pending keys.
-These methods validate database checkpoints; they do not verify S3/SNS calls.
-The Phase 4 worker remains responsible for external commit ordering.
-
-`list_pending()`, `list_for_filing()`, and `list_enabled()` return `Page(items,
-next_token)`. Tokens are opaque SDK continuations scoped to the region, table, index,
-query, and page size. Continue until `next_token is None`, even if `items` is
-empty. Pages are bounded by **candidate** count before base-record validation.
-Recovery has no discovery-age cutoff or TTL and does not depend on a company
-remaining enabled. GSIs are eventually consistent; stale candidates are checked
-with strong base reads. Repeat complete passes later to catch delayed entries.
-A single empty query cannot establish that all work is complete.
-
-Failure recording uses strictly increasing, aware attempt timestamps. Retry one
-logical failure-recording operation with the same timestamp/error. Equal repeats
-and older failures do not increment the counter; an equal timestamp with a
-different error conflicts. Error text is bounded to 2048 characters. Retry counts
-are chronological operational diagnostics, not an exact concurrent audit ledger.
-Failures after completion cannot resurrect pending work.
-
-Calendar upserts are per-row and reject equal-sync-time conflicting observations;
-older syncs cannot replace newer records or cancellation tombstones. Replacing a
-different provider at an occupied key fails explicitly. `get_events(start, end)` selects the
-inclusive UTC **dates** containing those aware datetimes, not intraday event times,
-and queries/paginates each date, returning only active expectations. Phase 5
-implements scoped cancellations and successful-sync tracking as described below.
-Company upserts intentionally replace mutable
-curated configuration, including enabled status.
-
-Persistence schema version `1` uses fixed-width microsecond UTC timestamps,
-omitted optional fields, validated integer counters, and a reversible JSON string
-for raw calendar diagnostic payloads. Event schema `1.0` is unchanged. Oversized
-items, overlong UTF-8 index keys, and malformed records fail explicitly; there are
-no document bytes/hashes. Source identities are never truncated to fit indexes.
-Normal tests block network access, inject dummy credentials, and use Stubber or
-mocked SDK calls. No live SEC or AWS validation has been performed.
-
-## Restart-safe acquisition and publication
-
-Phase 4 exposes `DiscoveryService.discover(company)`,
-`IngestionWorker.discover_company(company)`, `process_filing(accession_number)`,
-`process_artifact(artifact_id)` and `RecoveryService.run_pass()`. These are explicit
-async calls; Phase 6 coordinates them in the continuous runtime. Share one SEC client/limiter,
-one SEC executor, one discovery/worker instance and its identity-lock registry.
-The worker bounds entire in-flight artifact workflows, not only SDK calls.
-
-The ordered path is **S3 → DynamoDB stored checkpoint → SNS → publication
-checkpoint**. Before downloading an unstored record, the worker inspects S3.
-Compatible existing objects repair database metadata without downloading or
-replacing bytes. S3 writes always use `IfNoneMatch="*"`. Objects carry versioned
-canonical source/discovery provenance; missing or conflicting metadata fails
-explicitly. `stored_at` is S3's original `LastModified`, for both initial creation
-and repair. The adapter preserves original filenames in keys and percent-encodes
-special characters in S3 URIs; consumers decode the URI path to obtain the key.
-
-Document downloads stream with `max_bytes` and stop on excess decoded bytes.
-The worker default/maximum is 64 MiB per artifact, with two in-flight artifacts.
-Acquisition temporarily retains a byte buffer and its immutable bytes copy; choose
-container memory accordingly. Oversized artifacts become explicit terminal work.
-The lower-level `download_document(url)` remains compatible; call
-`download_document(url, max_bytes=...)` to use the bounded path. No application
-content hashes or document interpretation are added.
-
-Stored artifacts skip download on publication failure. Lost SNS acknowledgments
-may republish the same schema `1.0` event with the same original metadata.
-Delivery is **at least once**; consumers deduplicate by `artifact_id`.
-
-Stage failure budgets survive restart and are separate for enumeration,
-acquisition and publication. The legacy `retry_count` remains a chronological
-diagnostic. Terminal observations switch the existing pending index to
-`DEAD_LETTER` until an operational SQS send is checkpointed. Lost send
-acknowledgments can duplicate an envelope with the same `failure_id`.
-Partially created children wait for successful parent enumeration and remain
-deferred if that parent becomes terminal. The parent supplies their operational
-failure record. Successful terminal sends remove pending keys, while retaining
-source/storage facts; normal workers never automatically redrive terminal work.
-
-Recovery continues all candidate pages, including empty pages with tokens, and
-does not stop at a failed or deferred row. Repeat full passes later to catch delayed
-GSI entries. Submissions failures propagate without a success watermark so a later
-company poll can rediscover work. Shared credential, permission and missing-resource
-errors surface to the caller. Recovery summaries/logs make individual work errors
-visible; a summary is not proof of global completion.
-
-Additional isolated configuration (process environment or injected mappings):
-
-| Variable | Default / requirement |
-| --- | --- |
-| `ARTIFACT_BUCKET` | Required general-purpose S3 bucket |
-| `MAX_ARTIFACT_BYTES` | `67108864`; integer 1 through 67108864 |
-| `ARTIFACT_READY_TOPIC_ARN` | Required standard SNS topic in `AWS_REGION` |
-| `INGESTION_DEAD_LETTER_QUEUE_URL` | Required standard SQS queue in `AWS_REGION` |
-| `INGESTION_AWS_CONNECT_TIMEOUT_SECONDS` / `INGESTION_AWS_READ_TIMEOUT_SECONDS` | `5` / `30`; finite, positive |
-| `INGESTION_AWS_MAX_ATTEMPTS` / `INGESTION_AWS_MAX_WORKERS` | `3` / `2`; positive integers |
-| `INGESTION_MAX_STAGE_FAILURES` | `3`; positive integer, per workflow stage |
-| `INGESTION_CHECKPOINT_ATTEMPTS` / `INGESTION_DEAD_LETTER_ATTEMPTS` | `3` / `3`; positive integers |
-| `INGESTION_MAX_INFLIGHT_ARTIFACTS` | `2`; positive integer |
-| `INGESTION_RECOVERY_PAGE_SIZE` | `100`; integer 1 through 1000 |
-| `INGESTION_BACKOFF_BASE_SECONDS` / `INGESTION_BACKOFF_CAP_SECONDS` | `1` / `30`; finite, positive; cap >= base |
-
-SDK attempts and workflow attempts are both finite. SEC already retries each HTTP
-request; a workflow attempt can contain those transport retries. These settings
-do not become requirements for SEC configuration or legacy commands.
-
-This wiring example opts into the AWS credential chain and contacts AWS/SEC when
-run. It assumes the documented tables/indexes, bucket, topic and operational queue
-already exist. No adapter provisions resources:
-
-```python
-import asyncio
-from contextlib import ExitStack
-from finbot_ingestion.aws_config import AWSIOConfig, StorageConfig, MessagingConfig
-from finbot_ingestion.aws_execution import AWSExecution
-from finbot_ingestion.execution import BlockingExecution
-from finbot_ingestion.config import IngestionConfig
-from finbot_ingestion.sec.client import SecClient
-from finbot_ingestion.sec.rate_limiter import SECRateLimiter
-from finbot_ingestion.repositories.dynamodb import (
-    DynamoDBConfig, DynamoDBExecution, DynamoDBFilingRepository,
-    DynamoDBArtifactRepository,
-)
-from finbot_ingestion.storage.s3_artifact_store import S3ArtifactStore
-from finbot_ingestion.messaging.sns_publisher import SNSArtifactEventPublisher
-from finbot_ingestion.messaging.dead_letter import SQSDeadLetterPublisher
-from finbot_ingestion.ingestion.config import WorkflowConfig
-from finbot_ingestion.ingestion.work_control import WorkControl
-from finbot_ingestion.ingestion.discovery_service import DiscoveryService
-from finbot_ingestion.ingestion.artifact_downloader import ArtifactDownloader
-from finbot_ingestion.ingestion.ingestion_worker import IngestionWorker
-from finbot_ingestion.ingestion.recovery_service import RecoveryService
-
-sec_config = IngestionConfig.from_env()
-aws_config, storage_config = AWSIOConfig.from_env(), StorageConfig.from_env()
-messaging_config = MessagingConfig.from_env()
-with ExitStack() as stack:
-    db = stack.enter_context(DynamoDBExecution.from_config(DynamoDBConfig.from_env()))
-    s3, sns, sqs = [stack.enter_context(AWSExecution.from_config(service, aws_config))
-                    for service in ("s3", "sns", "sqs")]
-    sec_execution = stack.enter_context(BlockingExecution(max_workers=1))
-    limiter = SECRateLimiter(sec_config.sec_max_requests_per_second)
-    sec = stack.enter_context(SecClient(sec_config, limiter=limiter))
-    filings, artifacts = DynamoDBFilingRepository(db), DynamoDBArtifactRepository(db)
-    control = WorkControl(WorkflowConfig.from_env())
-    discovery = DiscoveryService(sec, sec_execution, filings, artifacts, control)
-    downloader = ArtifactDownloader(sec, sec_execution, S3ArtifactStore(s3, storage_config),
-                                    max_artifact_bytes=storage_config.max_artifact_bytes)
-    worker = IngestionWorker(discovery, downloader,
-        SNSArtifactEventPublisher(sns, messaging_config),
-        SQSDeadLetterPublisher(sqs, messaging_config), filings, artifacts, control)
-    summary = asyncio.run(RecoveryService(worker).run_pass())
-```
-
-Future runtime wiring must await all tasks before closing executors/clients.
-Cancellation waits for blocking I/O to finish and leaves interrupted work recoverable.
-
-Operational prerequisites for future deployment: HTTPS/encrypted bucket access,
-`s3:GetObject`, conditional `s3:PutObject` and suitably scoped `s3:ListBucket` for
-unambiguous absence checks; no delete/unconditional overwrite rights. A HEAD 403
-is never treated as a missing object. DynamoDB repository permissions, SNS Publish
-and operational SQS SendMessage must be limited to the configured resources.
-The operational queue is distinct from consumer queues/subscription DLQs.
-Storage inspection adds S3 requests and checkpoints add DynamoDB writes; no pricing
-or throughput guarantee is inferred from the SEC ceiling. Policies, retention,
-access logging, CloudTrail data events, CloudWatch metrics/alarms and queue setup
-remain Phase 8 infrastructure work.
-
-To investigate terminal work, inspect its durable checkpoint and the SQS
-`ingestion.work_failed` envelope, then correct the underlying source/configuration
-problem. Phase 4 intentionally exposes no automatic/manual mutation command to
-redrive these records; an explicit operator redrive contract remains future work.
-Do not delete raw S3 objects as a repair procedure.
-
-## Earnings-calendar synchronization
-
-Phase 5 exposes `CalendarSyncService.sync_once(start_date, end_date, kind="full")`,
-`sync_full()`, `sync_near_term()` and `health()` as explicit async calls. Share one
-service instance in one event loop; it serializes refreshes. The runtime uses the
-daily and optional near-term cadence settings to schedule calls.
-
-The default `PlaceholderCalendarProvider` always raises
-`CalendarProviderNotConfigured`. It performs no HTTP calls, returns no invented
-events, cannot clear expectations, and never establishes a successful-sync
-checkpoint. Provider selection and a live adapter are deliberately deferred at
-the user's request; the service and persistence can be used with injected adapters.
-
-For repositories already constructed by the caller:
-
-```python
-from finbot_ingestion.calendar.service import CalendarSyncService
-from finbot_ingestion.calendar.provider import CalendarProviderNotConfigured
-
-service = CalendarSyncService.with_placeholder(company_repo, calendar_repo)
-# Inside an async caller; repository methods contact AWS if using real adapters:
-try:
-    await service.sync_full()
-except CalendarProviderNotConfigured:
-    pass  # Expected until an actual provider is selected and injected.
-health = await service.health()  # stale=True until a full sync succeeds.
-```
-
-An injected provider implements `EarningsCalendarProvider.fetch_events()` and
-returns `CalendarSnapshot(provider, start_date, end_date, company_ciks, events,
-complete)` (keyword-only fields). It must fully fetch/normalize the exact requested
-inclusive date/company scope, including all pages, before claiming `complete=True`.
-A failed page, unknown coverage, or a provider error must raise or return an
-incomplete snapshot, never a successful empty calendar. Only a validated complete
-empty snapshot can cancel in-scope expectations. Adapters map curated tickers to
-CIKs explicitly and filter global provider results before returning the snapshot.
-The service rejects out-of-scope events, ambiguous curated tickers, conflicting
-duplicates and a stable provider event ID appearing on multiple dates. Distinct
-quarters remain separate events. Provider secrets must never enter diagnostic
-payloads; service failure logs/checkpoints record exception types, not arbitrary
-provider messages or URLs.
-
-The service assigns canonical curated tickers and a durable monotonic observation
-time, normalizes missing earnings times to `unknown`, validates the whole snapshot,
-and writes expectations before cancelling obsolete rows. Cancellation is limited
-to the confirmed range, enabled-company snapshot and same provider. Disabled,
-other-provider and out-of-range records remain untouched. A move across an
-unconfirmed boundary can temporarily retain the old expectation until a refresh
-covers it. Optional stable provider IDs identify date-change logs; no period
-identity is guessed when IDs are unavailable.
-
-Calendar keys remain `expected_date` / `cik`. Cancelled rows retain their metadata,
-set `calendar_active=False` and advance `synced_at`; existing rows without this flag
-are active. Tombstones prevent late retries from recreating removed expectations.
-There is no TTL/deletion/cleanup policy in this phase. Do not run older calendar
-readers alongside the Phase 5 writer: they do not understand inactive records.
-
-Sync metadata uses reserved partition `expected_date="__calendar_sync__"` and
-sort key `cik=<provider>` with a separately validated typed record. It holds the
-latest run, revision, exact company/date scope, separate full/near-term successes
-and sanitized failure facts. It is never returned by ISO-date queries. No fifth
-table, index, scan, stream, hash or infrastructure change is required. Cloud IAM
-key restrictions must allow this reserved partition in future deployment.
-
-Success is recorded only after every expectation/cancellation write completes.
-Lost acknowledgments retry the same request/timestamp/facts. Interrupted writes
-may leave partial progress visible; the next complete refresh repairs it. No
-batch-wide atomicity or durable snapshot replay during a provider outage is
-claimed. Previously stored expectations and the last success remain available
-after failed/incomplete provider fetches. `health()` reports age of the last full
-success; near-term success cannot conceal stale full coverage. It reports recorded
-scope, which callers must compare with a changed production universe/range.
-
-Calendar settings are independent of SEC/AWS/legacy settings, with no implicit
-`.env` loading or client creation:
-
-| Variable | Default |
-| --- | --- |
-| `CALENDAR_PROVIDER` | `placeholder` (injected adapter name must match) |
-| `CALENDAR_LOOKAHEAD_DAYS` / `CALENDAR_NEAR_TERM_DAYS` | `90` / `3`, inclusive day counts |
-| `CALENDAR_FULL_REFRESH_SECONDS` | `86400` |
-| `CALENDAR_NEAR_TERM_REFRESH_SECONDS` | `0` (automatic near-term refresh disabled) |
-| `CALENDAR_STALE_AFTER_SECONDS` | `172800` |
-| `CALENDAR_MAX_COMPANIES` / `CALENDAR_MAX_SNAPSHOT_EVENTS` | `1000` / `5000` |
-| `CALENDAR_COMPANY_PAGE_SIZE` | `100`, integer 1 through 1000 |
-| `CALENDAR_PROVIDER_ATTEMPTS` / `CALENDAR_CHECKPOINT_ATTEMPTS` | `3` / `3` |
-| `CALENDAR_BACKOFF_BASE_SECONDS` / `CALENDAR_BACKOFF_CAP_SECONDS` | `1` / `30` |
-
-Positive finite values are required except the optional zero near-term cadence;
-near-term days cannot exceed lookahead. The requested date span must also fit
-`DYNAMODB_MAX_CALENDAR_RANGE_DAYS`. Company/event counts are bounded. Retryable
-provider/incomplete-snapshot and transient repository failures use the shared
-jittered timing policy; permanent data/configuration/permission errors propagate.
-The selected live adapter will own its HTTP timeouts, request-size bounds,
-provider budget and credentials. Provider calls do not consume the SEC budget.
-
-## Continuous runtime
-
-After installing dependencies, export the SEC, AWS, table, storage, messaging and
-calendar settings above and in `.env.example`. The runtime requires existing AWS
-resources/indexes and a nonempty enabled company universe. It does not seed or
-provision them, and it does not load `.env` automatically.
+Routine tests block network access and use temporary data, fake transports and
+SDK Stubber/stateful clients. Docker lifecycle tests are separately enabled below.
+`build` creates an sdist and a wheel under ignored `dist/`. Runtime dependencies
+are Boto3, requests, BeautifulSoup and exchange-calendars. The latter needs pandas,
+NumPy and timezone/calendar helpers; ingestion does not depend on PyArrow or lxml.
+
+## Supported commands
 
 ```bash
+.venv/bin/python -m finbot_ingestion.main --help
 .venv/bin/python -m finbot_ingestion.main
-# In a separate process, check the local heartbeat without contacting AWS:
+# Separate process; checks only the local heartbeat:
 .venv/bin/python -m finbot_ingestion.main --health-check
 ```
 
-The first command contacts AWS and SEC when run. One application owns the shared
-SEC client/limiter and bounded executors. Separate bounded queues handle company
-polling, package enumeration and artifact acquisition/publication. Duplicate work
-is suppressed while queued or in flight. Calendar/universe reloads are coarse;
-scheduler ticks use memory only. Recovery runs on startup and repeatedly afterward,
-including unfinished work belonging to old or disabled companies.
+Normal execution contacts AWS and SEC. It requires an identifying SEC User-Agent,
+existing AWS resources/indexes, valid AWS credentials and a nonempty enabled
+company universe. It never provisions or seeds resources. Help needs no service
+configuration. Health checks need only runtime settings and make no AWS/SEC calls;
+exit status is zero for a fresh live heartbeat and one otherwise.
 
-Active polling defaults to ten seconds from the completion of the previous poll.
-Safety polling defaults to one hour with deterministic CIK staggering, on all days.
-XNYS session times from `exchange_calendars` handle DST, holidays and early closes.
-Before-market windows run from open minus two hours through open plus two hours;
-after-market windows run from close minus two hours through close plus three hours.
-Unknown times cover open minus two hours through close plus three hours. Non-session
-expectations remain on their supplied date, using 07:30–19:00 market-local time.
-Unsatisfied expectations remain active for two hours of grace. All intervals are
-half-open UTC instants; unsupported or unavailable calendar coverage fails explicitly.
-The five-request/second SEC ceiling is shared with downloads, retries and recovery,
-so a requested polling cadence is not a throughput guarantee.
+Export settings into the process environment. `.env.example` documents all names
+and defaults; the application does not load `.env` files. `LOG_LEVEL` defaults to
+`INFO`. AWS uses the normal SDK credential chain. Do not place credentials in source,
+images or diagnostic payloads. The existing ignored local `.env` is left untouched;
+its former legacy configuration is not sufficient for this runtime.
 
-`EarningsSatisfactionPolicy` v0 has persisted version `earnings-satisfaction-v1`.
-A match requires the same CIK and SEC acceptance time inside the window/grace:
+## Container workflow
 
-| Eligible exact form | Additional evidence | Persisted match reason |
-| --- | --- | --- |
-| Original `10-Q` | None | `original_10_q` |
-| Original `10-K` | None | `original_10_k` |
-| Original `8-K` | Unambiguous SEC Item `2.02` | `original_8_k_item_2_02` |
-
-Amendments and generic 8-Ks still enter ingestion. Absent, malformed or ambiguous
-required item metadata leaves the expectation unsatisfied; aggressive polling
-continues through grace. Only exact comma-separated SEC item codes from the same
-submissions row provide evidence; filenames, exhibits and document contents cannot
-supply it. Earliest acceptance time then accession breaks candidate ties;
-overlapping expectations remain unsatisfied when association is ambiguous.
-
-A separate conditional checkpoint in the Calendar table reserved partition
-`__event_satisfaction__` retains accession, acceptance time, original form, event
-identity, window/grace bounds, item evidence, match reason and policy version.
-The event key includes provider and CIK plus stable provider event ID, or expected
-date when no ID exists. Stable-ID date moves retain satisfaction; moves without
-IDs may rearm the new date. Unknown checkpoint policy versions fail explicitly.
-Aggressive polling stops only after a durable checkpoint; safety polling and
-unfinished ingestion continue. This is a scheduling heuristic only: it does not
-assert that earnings were extracted or validated.
-
-The placeholder cannot refresh a calendar. The runtime visibly reports
-`provider_configured=false` and stale coverage while retaining durable expectations
-and safety polling. Unsupported provider names fail at startup; tests can inject
-an adapter. A live provider and authoritative production universe remain external
-inputs. Health distinguishes task liveness from calendar full-sync age and scope;
-near-term refresh does not establish full freshness. The local heartbeat is atomic,
-removed on shutdown and checked for age/liveness without an inbound HTTP API.
-
-SIGTERM/SIGINT stops poll admissions and producers, then drains queues within a
-30-second grace. Remaining tasks are cancelled cooperatively and blocking calls
-are awaited before clients close. This grace is not a hard upper bound on blocking
-HTTP completion. Required loop failure, unexpected return or a busy task exceeding
-the stall allowance fails the runtime and returns a nonzero exit status. Restart
-reconstructs schedules and recovers durable pending work.
-
-Logs are sanitized JSON on stderr. Bounded, thread-safe CloudWatch Embedded Metric
-Format records go to stdout every five seconds and on shutdown, with only Service
-and Environment dimensions. They include request/retry/errors, acceptance-based
-latencies, queues, satisfaction, recovery and calendar/task health. CloudWatch log
-collection, alarms and DLQ-depth monitoring require Phase 8 infrastructure.
-
-Runtime settings are read from exported environment variables:
-
-| Variable | Default |
-| --- | --- |
-| `RUNTIME_MARKET_TIMEZONE` | `America/New_York` |
-| `RUNTIME_MARKET_CALENDAR` | `XNYS` |
-| `RUNTIME_ACTIVE_POLL_SECONDS` | `10` |
-| `RUNTIME_SAFETY_POLL_SECONDS` | `3600` |
-| `RUNTIME_BEFORE_OPEN_SECONDS` | `7200` |
-| `RUNTIME_AFTER_OPEN_SECONDS` | `7200` |
-| `RUNTIME_BEFORE_CLOSE_SECONDS` | `7200` |
-| `RUNTIME_AFTER_CLOSE_SECONDS` | `10800` |
-| `RUNTIME_GRACE_SECONDS` | `7200` |
-| `RUNTIME_NON_SESSION_START_HOUR` | `7` |
-| `RUNTIME_NON_SESSION_START_MINUTE` | `30` |
-| `RUNTIME_NON_SESSION_END_HOUR` | `19` |
-| `RUNTIME_RELOAD_SECONDS` | `300` |
-| `RUNTIME_RECOVERY_SECONDS` | `60` |
-| `RUNTIME_TICK_SECONDS` | `1` |
-| `RUNTIME_REFRESH_RETRY_SECONDS` | `60` |
-| `RUNTIME_POLL_WORKERS` | `2` |
-| `RUNTIME_ENUMERATION_WORKERS` | `1` |
-| `RUNTIME_COMPANY_QUEUE_SIZE` | `1000` |
-| `RUNTIME_FILING_QUEUE_SIZE` | `100` |
-| `RUNTIME_ARTIFACT_QUEUE_SIZE` | `200` |
-| `RUNTIME_METRICS_FLUSH_SECONDS` | `5` |
-| `RUNTIME_HEARTBEAT_SECONDS` | `30` |
-| `RUNTIME_STALL_SECONDS` | `1800` |
-| `RUNTIME_SHUTDOWN_GRACE_SECONDS` | `30` |
-| `RUNTIME_HEALTH_PATH` | `/tmp/finbot-ingestion-health.json` |
-
-Durations must be finite and positive; active cadence cannot exceed safety cadence.
-Runtime workers are bounded to 1–16 (including `INGESTION_MAX_INFLIGHT_ARTIFACTS`),
-and queue sizes to 1–10,000. The fallback window must be ordered and health path
-absolute. Reload lookback/forward coverage expands with configured windows/grace
-and must fit the configured repository date-range bound.
-
-The offline [capacity replay](docs/PHASE_6_REPLAY.md) records queue and latency
-measurements for 500 enabled companies and 5–50 active companies. Run it with:
+Build again after application, dependency or image-configuration changes:
 
 ```bash
-.venv/bin/python -m pytest -q -s tests/integration/test_phase6_replay.py
+docker build -t finbot-ingestion:phase7 .
+docker run --rm --network none finbot-ingestion:phase7 --help
+docker run --rm --network none finbot-ingestion:phase7 --health-check
 ```
 
-## Migration status
+The final command returns one because that new container has no runtime heartbeat.
+The image installs a wheel in Python 3.12 slim Linux, runs as UID/GID 10001, and
+starts `python -m finbot_ingestion.main` directly as PID 1. It contains runtime
+dependencies and timezone data; tests, build sources, credentials and shared data
+are excluded. It exposes no inbound port. `/tmp` holds the atomic heartbeat.
 
-Phases 1–6 are complete within the authorized placeholder-provider scope. See
-[the migration plan](docs/MIGRATION_PLAN.md) for acceptance criteria and validation.
-Next: Phase 7 — container/runtime cutover and package cleanup. The live calendar adapter and
-production universe remain unresolved inputs. The legacy CLI remains available.
+For a configured local runtime, prepare a private Docker environment file:
 
-## Documents
+```bash
+cp .env.example .env.ingestion
+# Edit example identity/resource values and supply valid runtime credentials.
+# This starts real AWS/SEC work; run only with the intended existing resources.
+docker run --rm --name finbot-ingestion \
+  --env-file .env.ingestion --stop-timeout 120 \
+  --read-only --tmpfs /tmp:rw,nosuid,size=32m \
+  --cap-drop ALL --security-opt no-new-privileges \
+  finbot-ingestion:phase7
+```
 
-- [`docs/HLD.md`](docs/HLD.md) — high-level architecture, responsibilities, assumptions, data flow, AWS services, and scaling boundaries.
-- [`docs/LLD.md`](docs/LLD.md) — implementation-oriented design for Codex: package structure, interfaces, data models, persistence, event schema, algorithms, retries, restart behavior, configuration, and tests.
-- [`docs/adr/`](docs/adr/) — architecture decision records explaining the major design choices and when to revisit them.
+The example file is in Docker `--env-file` format. Passing it is explicit; the
+application still reads process variables only. For local Docker, credentials must
+be supplied explicitly through your chosen SDK credential mechanism. AWS task-role
+credentials will be configured in Phase 8. Never bake credentials into the image.
+No `FINBOT_DATA_ROOT` mount is used by this cloud ingestion service.
 
-## v0 summary
+From another terminal:
 
-- Coverage: curated universe of approximately 500 companies.
-- Earnings calendar: one free provider behind a swappable interface; provider selection is TBD.
-- Discovery: calendar-driven, per-company SEC/EDGAR polling.
-- Active polling: approximately every 5–10 seconds during earnings windows.
-- SEC request ceiling: centralized client-side limit of 5 requests/second for the service.
-- Relevant forms: 8-K, 10-Q, 10-K, plus amendments; download the primary filing document and all exhibits.
-- Storage: immutable raw documents in S3; filing/artifact metadata and durable checkpoints in DynamoDB.
-- Eventing: publish `ArtifactReady` to SNS after durable storage; downstream consumers receive through their own SQS queues.
-- Runtime: one ECS/Fargate task for v0, with an in-memory scheduler/request queue.
-- Observability: CloudWatch logs, metrics, and alarms; DLQ for exhausted retries.
-- CI/CD: GitHub Actions runs tests, builds/pushes the Docker image to ECR, and updates ECS; CDK deploys infrastructure.
-- Historical correctness: amendments/restatements create new immutable records so downstream clients can reproduce the information set available at any point in time.
+```bash
+docker exec finbot-ingestion python -m finbot_ingestion.main --health-check
+docker stop --timeout 120 finbot-ingestion
+```
 
-## Explicitly deferred
+SIGTERM/SIGINT stops poll admissions and producers, drains bounded stage queues
+within the configured grace, then cancels remaining tasks cooperatively. Blocking
+HTTP/SDK calls finish before clients close. The default 30-second drain grace is
+not a hard bound on total cleanup; Docker's stop timeout is separate. Forced
+termination leaves interrupted work recoverable from durable checkpoints.
 
-- Global EDGAR latest-filings ingestion.
-- SEC Company Facts ingestion.
-- Multi-instance/distributed SEC rate limiting.
-- Multiple earnings-calendar providers and reconciliation.
-- RAG/indexing and earnings extraction logic; these are downstream consumers of this service.
+The image health check uses the local heartbeat every 30 seconds, with a five-second
+command timeout, 120-second startup allowance and three retries. It checks liveness,
+not full calendar readiness. Placeholder/stale calendar state remains visible in
+health output and metrics. ECS health configuration and alarms remain Phase 8 work.
+
+## Offline container validation
+
+After rebuilding the image, run:
+
+```bash
+FINBOT_CONTAINER_TESTS=1 FINBOT_CONTAINER_IMAGE=finbot-ingestion:phase7 \
+  .venv/bin/python -m pytest -q tests/integration/test_phase7.py -m container
+```
+
+Docker must be accessible from the execution environment. Opted-in tests fail if
+Docker/the image is unavailable; ordinary pytest clearly skips these six cases.
+They mount a test-only startup shim and reusable stateful boundaries outside the
+image, leaving the production entry point, configuration, real SEC limiter,
+repositories and supervision intact. Containers have `--network none`, dummy
+credentials, read-only filesystems and temporary fixture state. Tests cover
+installed imports/dependencies, health, PID 1, SIGTERM/SIGINT, original bytes and
+publication, blocked I/O cleanup and unexpected required-loop failure/return.
+No mock-mode switch is shipped in the application.
+
+## Acquisition and durable contracts
+
+Coverage is a curated universe of approximately 500 ticker/CIK/name/enabled records.
+Ticker is convenience metadata; CIK normalizes to ten digits. Relevant forms are
+`8-K`, `10-Q`, `10-K` and their `/A` amendments. Accessions retain dashed identity;
+SEC archive URLs use numeric CIK and dash-free accession path components.
+
+`filed_at` is SEC `acceptanceDateTime`, normalized to UTC, rather than a measured
+public-availability instant. Missing, invalid or naive acceptance timestamps fail;
+filing/report dates never substitute. Parsing returns all supported recent rows
+without a count cutoff. Identical accession duplicates collapse; conflicts and
+invalid relevant rows reject the response. A missing primary name can be resolved
+by later package enumeration. Historical submissions backfill is not implemented.
+
+Package discovery reconciles the filing's HTML document table and directory JSON.
+It acquires the primary document and all observed documents/exhibits, including
+PDFs, XML, images and auxiliary files, excluding recognized navigation/index files.
+Missing/inconsistent snapshots are retried rather than checkpointed as complete.
+Enumeration completion describes one observed snapshot; automatic completed-package
+rechecking remains deferred.
+
+Artifact IDs are `<dashed-accession>/<original-filename>`; filenames preserve case
+and must be safe basenames. S3 keys are `<10-digit-cik>/<artifact-id>`. S3 URI paths
+are percent-encoded; consumers decode the URI path to obtain the original key.
+No application content hashes or interpretation are used. Amendments create new
+immutable records and objects, preserving historical information sets.
+
+The ordered path is **S3 → DynamoDB stored checkpoint → SNS → published checkpoint**.
+S3 writes use `IfNoneMatch="*"`. Before downloading an unstored record, acquisition
+inspects existing objects and validates canonical versioned provenance. Compatible
+objects repair metadata without replacing bytes; missing/conflicting metadata
+fails explicitly. `stored_at` is the original S3 HEAD `LastModified`, including repair.
+HEAD permission errors never mean absence. Original discovery/ticker facts remain
+canonical on duplicate discovery.
+
+Downloads stream original response-content bytes with a maximum of 64 MiB per
+artifact, configurable downward; oversized work fails explicitly. Two whole artifact
+workflows run concurrently by default. Buffer conversion can retain two copies
+per workflow temporarily; container memory must account for that. Stored artifacts
+skip download when publication is retried.
+
+`ArtifactReady` is `artifact.ready` / schema `1.0`, containing artifact/filing/CIK/
+ticker/form/document/filename/S3 references and acceptance/discovery/storage times,
+without document contents. Delivery is at least once. Consumers deduplicate by
+`artifact_id` and own their subscribed SQS queues. Lost publication acknowledgments
+can produce identical logical events again.
+
+## Persistence, recovery and terminal work
+
+Four existing tables and fixed indexes are required; all keys are strings:
+
+| Table | Base partition / sort key | Required GSIs |
+| --- | --- | --- |
+| Companies | `cik` / none | `EnabledCompanies`: `enabled_marker` / `cik` |
+| Calendar | `expected_date` / `cik` | None |
+| Filings | `accession_number` / none | `PendingFilingEnumeration`: `pending_work_kind` / `pending_work_sort` |
+| Artifacts | `artifact_id` / none | `PendingArtifactWork`: `pending_work_kind` / `pending_work_sort`; `ArtifactsByAccession`: `accession_number` / `filename` |
+
+GSIs use KEYS_ONLY projection. See [LLD sections 6–8](docs/LLD.md) for exact schema,
+revision guards, scoped pagination, sync/satisfaction records and compatibility.
+The Calendar table must permit reserved `__calendar_sync__` and
+`__event_satisfaction__` partitions. Inactive cancellation tombstones prevent stale
+refreshes from restoring cancelled events. Do not run superseded adapter versions
+against newer processing/calendar records.
+
+Conditional creates and guarded updates preserve first observations/checkpoints.
+Enumeration completes only after every child is confirmed durable through a strong
+base-table read. Transient queue/download states remain in memory. Pending sparse
+indexes drive repeated recovery without scans, age cutoffs or TTL, including work
+from disabled companies. GSIs are eventual; candidates are strongly rechecked.
+Continue every page, including empty pages with a token, and repeat full passes.
+One empty pass never proves global completion.
+
+Enumeration/acquisition/publication have separate persistent failure budgets.
+Terminal facts precede operational SQS dead-letter sends, whose first successful
+checkpoint removes pending eligibility. Lost sends can duplicate the stable
+`failure_id`. Partially created children wait for completed parent enumeration;
+a terminal parent keeps them deferred. Shared configuration/permission/resource
+errors propagate instead of terminalizing every company.
+
+Investigate `ingestion.work_failed` envelopes together with durable checkpoints.
+Normal workers never automatically redrive terminal work. An operator mutation
+command remains deferred; deleting raw objects is not a repair procedure.
+
+## Calendar, scheduling and observability
+
+Only `CALENDAR_PROVIDER=placeholder` is wired. It raises
+`CalendarProviderNotConfigured`, never invents an empty snapshot and cannot clear
+expectations or establish freshness. Injected provider contracts require complete,
+validated snapshots of exact company/date scope before cancellation. Existing
+expectations survive failed/incomplete refreshes. Full and near-term success scopes
+are distinct; near-term refresh never establishes full freshness.
+
+The runtime uses coarse five-minute durable reloads and memory-only scheduler ticks.
+Completion-based active polling defaults to ten seconds; all-day safety polling to
+one hour with CIK staggering. XNYS sessions handle DST, holidays and early closes.
+Before-market windows span open minus two hours to open plus two hours;
+after-market windows span close minus two hours to close plus three hours. Unknown
+times span the full combined window; non-session expectations retain their date with
+a 07:30–19:00 market-local fallback. Unsatisfied events get two hours of grace.
+
+All SEC polls/indexes/downloads/retries/redirects share a five-request/second ceiling.
+One HTTP attempt is in flight at a time through reused synchronous transport and a
+bounded executor. Slow responses and competing work reduce throughput. Target poll
+cadence and downstream latency are not unconditional guarantees. See the synthetic
+[Phase 6 capacity replay](docs/PHASE_6_REPLAY.md).
+
+Version `earnings-satisfaction-v1` stops aggressive polling only after a durable
+satisfaction checkpoint for the same CIK and acceptance within window/grace. Exact
+original `10-Q` and `10-K` qualify; original `8-K` also requires unambiguous SEC
+Item `2.02` metadata. Amendments/generic or ambiguous 8-Ks remain ingested without
+satisfying the event. Safety polling and pending recovery continue. This is a
+scheduling heuristic, not evidence of extracted or validated earnings.
+
+Required-loop failure, unexpected return or stalled busy work exits nonzero.
+Sanitized JSON logs go to stderr; bounded CloudWatch EMF records go to stdout with
+Service/Environment dimensions. Local health separates liveness from calendar
+age/scope/provider configuration. CloudWatch collection, DLQ-depth monitoring and
+alarms require Phase 8 infrastructure.
+
+## Configuration reference
+
+`.env.example` contains every supported setting. Configuration parsing does not
+create clients, resolve credentials or load files implicitly. Region/table/storage/
+messaging requirements apply to normal runtime execution; isolated domain/parser
+utilities need only their own relevant settings.
+
+| Group | Required settings / defaults |
+| --- | --- |
+| SEC | Required `SEC_USER_AGENT`; `SEC_MAX_REQUESTS_PER_SECOND=5` (finite, positive, at most 5) |
+| SEC transport | `SEC_CONNECT_TIMEOUT_SECONDS=10`, `SEC_READ_TIMEOUT_SECONDS=30`, `SEC_MAX_ATTEMPTS=3`, `SEC_BACKOFF_BASE_SECONDS=1`, `SEC_BACKOFF_CAP_SECONDS=30`, `SEC_MAX_REDIRECTS=5` |
+| AWS/DynamoDB | Required `AWS_REGION`, four distinct `COMPANIES_TABLE`, `CALENDAR_TABLE`, `FILINGS_TABLE`, `ARTIFACTS_TABLE` names |
+| DynamoDB execution | Connect/read timeouts 5/10 seconds, 3 attempts, page size 100, 4 workers, 4 CAS attempts, maximum date span 366 days; `DYNAMODB_*` names in example |
+| Storage/messaging | Required `ARTIFACT_BUCKET`, same-region standard `ARTIFACT_READY_TOPIC_ARN`, standard `INGESTION_DEAD_LETTER_QUEUE_URL`; `MAX_ARTIFACT_BYTES=67108864` |
+| Ingestion | AWS connect/read 5/30 seconds, attempts/workers 3/2, stage failures 3, checkpoint/dead-letter attempts 3/3, inflight artifacts 2, recovery page 100, backoff 1/30 seconds; `INGESTION_*` names in example |
+| Calendar | Placeholder provider, lookahead/near-term 90/3 days, full/near-term refresh 86400/0 seconds, stale after 172800 seconds, maximum companies/events 1000/5000, company page 100, provider/checkpoint attempts 3/3, backoff 1/30 seconds |
+| Runtime | XNYS / America/New_York, active/safety 10/3600 seconds, reload/recovery/tick 300/60/1 seconds, refresh retry 60 seconds, poll/enumeration workers 2/1, company/filing/artifact queues 1000/100/200 |
+| Runtime health | Metrics/heartbeat 5/30 seconds, stall allowance 1800 seconds, shutdown grace 30 seconds, `RUNTIME_HEALTH_PATH=/tmp/finbot-ingestion-health.json` |
+
+Durations must be finite and positive except zero disables near-term refresh.
+Backoff cap must be at least base; active cadence cannot exceed safety cadence.
+Runtime worker counts are bounded 1–16 and queues 1–10,000. Health path must be
+absolute; derived reload coverage must fit the repository date-span bound.
+SEC retries include network/timeouts, 403/429/5xx and package-index 404, with bounded
+jitter and Retry-After. Redirects stay on official HTTPS SEC hosts and consume budget.
+
+Deployment must supply encrypted/HTTPS storage and least-privilege permissions:
+conditional S3 PutObject, GetObject and scoped ListBucket for absence detection,
+DynamoDB table/index access, SNS Publish and operational SQS SendMessage. Ingestion
+must not delete or unconditionally replace raw objects. Resources/policies/retention
+are Phase 8 work; no adapter provisions them.
+
+## Design documents and legacy recovery
+
+[HLD](docs/HLD.md), [LLD](docs/LLD.md), [ADRs](docs/adr/) and
+[MIGRATION_PLAN](docs/MIGRATION_PLAN.md) remain the sources of truth.
+[PHASE_7_PLAN](docs/PHASE_7_PLAN.md) records the cutover and validation. Prior phase
+plans/results are historical records; use this README for current commands.
+
+All removed legacy source, extraction/parsing tests, fixtures, docs, scripts and
+sample tickers are recoverable at commit
+`59cacd78a1da01d00b913c2e67185b0a0980d7ce`. Recover them without replacing current
+source or touching shared data, for example from this repository:
+
+```bash
+git worktree add --detach ../finbot-filings-legacy 59cacd78a1da01d00b913c2e67185b0a0980d7ce
+```
+
+No permanent legacy subtree or compatibility CLI remains. Downstream relocation
+requires separate work. Global EDGAR feeds, Company Facts, multiple calendar
+providers, distributed rate limiting, multiple ingestion tasks, RAG and extraction
+remain outside v0. Next milestone: Phase 8, CDK and application delivery.

@@ -41,53 +41,7 @@ MESSAGING = MessagingConfig("us-east-1", "arn:aws:sns:us-east-1:123456789012:art
                             "https://sqs.us-east-1.amazonaws.com/123456789012/ingestion-failed")
 
 
-def aws_error(code, status, operation):
-    return ClientError({"Error": {"Code": code, "Message": "injected"},
-                        "ResponseMetadata": {"HTTPStatusCode": status}}, operation)
-
-
-class MemoryS3:
-    def __init__(self):
-        self.objects, self.calls = {}, []
-        self.failures, self.lost = deque(), deque()
-        self.clock = NOW + timedelta(seconds=1)
-
-    def api(self, operation, params):
-        self.calls.append((operation, deepcopy(params)))
-        if self.failures and self.failures[0][0] == operation:
-            _, error = self.failures.popleft()
-            raise error
-        key = (params["Bucket"], params["Key"])
-        if operation == "HeadObject":
-            if key not in self.objects:
-                raise aws_error("404", 404, operation)
-            return deepcopy(self.objects[key][1])
-        assert operation == "PutObject"
-        assert params["IfNoneMatch"] == "*"
-        if key in self.objects:
-            raise aws_error("PreconditionFailed", 412, operation)
-        head = {"Metadata": deepcopy(params["Metadata"]), "ContentLength": len(params["Body"]),
-                "LastModified": self.clock, "ContentType": params.get("ContentType", "application/octet-stream")}
-        self.objects[key] = (params["Body"], head)
-        if self.lost and self.lost[0] == operation:
-            self.lost.popleft()
-            raise ReadTimeoutError(endpoint_url="https://mock.invalid")
-        return {"ETag": '"opaque"'}
-
-
-class MemoryMessages:
-    def __init__(self):
-        self.events, self.failures, self.lost = [], deque(), deque()
-
-    def api(self, operation, params):
-        if self.failures and self.failures[0][0] == operation:
-            _, error = self.failures.popleft()
-            raise error
-        self.events.append((operation, deepcopy(params)))
-        if self.lost and self.lost[0] == operation:
-            self.lost.popleft()
-            raise ReadTimeoutError(endpoint_url="https://mock.invalid")
-        return {"MessageId": f"message-{len(self.events)}"}
+from aws_fakes import MemoryS3, MemoryMessages, aws_error
 
 
 class FakeSEC:
