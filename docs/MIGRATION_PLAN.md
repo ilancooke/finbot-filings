@@ -8,10 +8,12 @@ authorization to begin the next phase.
 ## 1. Target state
 
 This repository is becoming a focused SEC document-ingestion service. It will
-discover relevant filings for a curated universe of approximately 500 companies,
-acquire primary documents and all attached documents/exhibits, preserve immutable
+discover relevant filings for the initial
+[50-symbol curated universe](PRODUCTION_UNIVERSE.md), acquire primary documents
+and all attached documents/exhibits, preserve immutable
 raw artifacts in S3, maintain metadata and durable checkpoints in DynamoDB, and
 publish versioned `ArtifactReady` events through SNS after durable storage.
+Approximately 500 companies remains the v0 capacity target.
 
 The architectural sources of truth are:
 
@@ -804,8 +806,9 @@ GitHub delivery executed or production inputs selected.
 
 ## 5. Next milestone
 
-**NEXT: Approve the production universe and ongoing Yahoo access, validate a full
-30-day live scope, and separately authorize deployment/activation.**
+**NEXT: Verify the selected production company identities, resolve ongoing Yahoo
+access, validate a full 30-day live scope, and separately authorize
+deployment/activation.**
 
 Phase 8 implementation is delivered and validated offline. Initial CDK deployment
 remains manual; no infrastructure has been provisioned. Follow DEPLOYMENT.md for
@@ -816,8 +819,10 @@ cloud operations.
 Yahoo/yfinance was chosen after an authorized live probe on 2026-10-09. The adapter
 is now implemented and validated offline; explicit Yahoo selection is supported
 alongside the default placeholder. Section 5.1 preserves the original due-diligence
-evidence and handoff; section 5.2 records delivery. Implementation does not approve
-a production universe or authorize deployment/activation. Terminal operator redrive
+evidence and handoff; section 5.2 records delivery. The
+[initial production ticker universe](PRODUCTION_UNIVERSE.md) was subsequently
+selected on 2026-10-09; verified identities remain pending. Implementation does
+not authorize deployment/activation. Terminal operator redrive
 and completed-package recheck remain future work.
 
 ### 5.1 Yahoo/yfinance earnings-calendar implementation handoff (2026-10-09)
@@ -1078,7 +1083,7 @@ historical evidence rather than a full production coverage result.
 | Input | Status | Required for |
 | --- | --- | --- |
 | Earnings-calendar ongoing access and production coverage | Yahoo/yfinance adapter delivered offline (section 5.2); ongoing access arrangement and full 30-day live validation pending | Production calendar use |
-| Authoritative approximately 500-company universe with ticker/CIK/name/enabled fields | TBD | Production universe seeding; the legacy sample ticker list is insufficient |
+| Production universe with ticker/CIK/name/enabled fields | 50 symbols selected on 2026-10-09 in [PRODUCTION_UNIVERSE.md](PRODUCTION_UNIVERSE.md); SCHW correction confirmed, verified identities pending | Authorized production universe seeding |
 
 **Neither input blocked Phases 3–4.** Use fixture companies and mocked SEC responses
 for development. Follow the agreed Yahoo policy in section 5.1; do not silently

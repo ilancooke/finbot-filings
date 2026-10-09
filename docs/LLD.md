@@ -475,6 +475,10 @@ Requirements:
 - CIK stored in normalized zero-padded string form where needed for SEC URLs/contracts.
 - ticker is convenience metadata, not the primary SEC identity.
 
+The initial ticker scope is recorded in [PRODUCTION_UNIVERSE.md](PRODUCTION_UNIVERSE.md).
+Its 50 symbols must resolve to verified Company records before production
+seeding. The runtime reads enabled records from the Companies table.
+
 ### 3.2 ExpectedEarningsEvent
 
 Represents a calendar expectation, not an actual filing.

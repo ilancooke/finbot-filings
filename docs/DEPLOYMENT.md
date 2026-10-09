@@ -182,7 +182,8 @@ remain pending. Do not set the approval flag or start production until these are
    private `/tmp/finbot-yahoo` caches, 30-day daily refresh and replacement-only
    reconciliation. The default placeholder cannot establish readiness. Offline
    fixture tests and the earlier partial live probe do not satisfy this live gate.
-2. Approve the authoritative company universe and explicitly authorize seeding.
+2. Verify the company identities for the selected
+   [50-symbol production universe](PRODUCTION_UNIVERSE.md) and explicitly authorize seeding.
    Use the existing repository Company contract (CIK padded to ten digits, ticker,
    name, enabled, repository_schema_version=1, enabled_marker=ENABLED for enabled
    rows). No sample records or seeding command were introduced by Phase 8.

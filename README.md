@@ -12,7 +12,8 @@ application delivery, health alarms and the agreed conservative recovery policy.
 Infrastructure and workflows are validated offline; no AWS resources are deployed.
 The Yahoo/yfinance earnings-calendar adapter is implemented and tested offline.
 Provider selection remains explicit; the default placeholder reports unavailable
-coverage. The authoritative production company universe and live validation remain pending.
+coverage. The [initial production universe](docs/PRODUCTION_UNIVERSE.md) contains
+50 user-selected symbols; verified company identities and live validation remain pending.
 
 ## Install and validate
 
@@ -133,7 +134,9 @@ No mock-mode switch is shipped in the application.
 
 ## Acquisition and durable contracts
 
-Coverage is a curated universe of approximately 500 ticker/CIK/name/enabled records.
+Initial coverage is the [50-symbol production universe](docs/PRODUCTION_UNIVERSE.md),
+with approximately 500 companies retained as the v0 capacity target.
+Runtime company records require verified ticker/CIK/name/enabled fields.
 Ticker is convenience metadata; CIK normalizes to ten digits. Relevant forms are
 `8-K`, `10-Q`, `10-K` and their `/A` amendments. Accessions retain dashed identity;
 SEC archive URLs use numeric CIK and dash-free accession path components.
@@ -341,8 +344,9 @@ git worktree add --detach ../finbot-filings-legacy 59cacd78a1da01d00b913c2e67185
 No permanent legacy subtree or compatibility CLI remains. Downstream relocation
 requires separate work. Global EDGAR feeds, Company Facts, multiple calendar
 providers, distributed rate limiting, multiple ingestion tasks, RAG and extraction
-remain outside v0. Next milestones: production universe approval, ongoing provider
-access, full 30-day live validation, separately authorized manual infrastructure
+remain outside v0. Next milestones: production identity verification, authorized
+universe seeding, ongoing provider access, full 30-day live validation, separately
+authorized manual infrastructure
 deployment and production activation.
 
 ## Phase 8 infrastructure and delivery

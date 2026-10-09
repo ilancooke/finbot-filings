@@ -16,7 +16,7 @@ The service exists as a reusable platform component because the same SEC documen
 
 ## 2. v0 goals
 
-1. Support a curated universe of approximately 500 companies while preserving a path to thousands.
+1. Support the initial [50-symbol curated universe](PRODUCTION_UNIVERSE.md), with capacity for approximately 500 companies and a path to thousands.
 2. Maintain an earnings calendar and use it to determine when individual companies should be polled aggressively.
 3. Detect relevant SEC filings quickly enough to support a downstream end-to-end earnings target of p50 < 30 seconds and p99 < 60 seconds.
 4. Download the filing's primary document and exhibits once they become available.
@@ -94,7 +94,9 @@ Earnings Calendar Provider
 
 ### 6.1 Company universe
 
-A curated configuration of approximately 500 supported companies.
+A curated configuration starting with the
+[50 user-selected symbols](PRODUCTION_UNIVERSE.md). Approximately 500 companies
+remains the v0 capacity target. Verified ticker/CIK/name mappings are pending.
 
 Minimum identity fields:
 
@@ -112,7 +114,7 @@ daily 30-day observations, market-local dates, independently validated collectio
 completeness and replacement-only reconciliation. Missing observations alone do not
 cancel expectations. Existing authoritative-snapshot providers retain their policy.
 The Yahoo adapter is delivered and validated offline under
-[YAHOO_CALENDAR_PLAN](YAHOO_CALENDAR_PLAN.md). Production universe approval,
+[YAHOO_CALENDAR_PLAN](YAHOO_CALENDAR_PLAN.md). Production identity verification,
 full 30-day live coverage validation and activation remain separate work.
 
 Responsibilities:
@@ -467,7 +469,8 @@ Likely future changes:
 
 ## 15. Open decisions
 
-The authoritative production universe, ongoing Yahoo access and full 30-day live
+The initial ticker universe is selected in [PRODUCTION_UNIVERSE.md](PRODUCTION_UNIVERSE.md).
+Verified company identities, ongoing Yahoo access and full 30-day live
 coverage validation remain unresolved. Manual infrastructure deployment and
 production activation require separate authorization. Window/cadence/retry/alarm
 defaults and the four-table schema are implemented in LLD; production tuning remains
