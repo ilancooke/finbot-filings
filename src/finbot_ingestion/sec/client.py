@@ -10,6 +10,7 @@ import logging
 import math
 import random
 import time
+import threading
 from urllib.parse import urljoin, urlsplit
 
 import requests
@@ -18,7 +19,7 @@ from requests.adapters import HTTPAdapter
 from finbot_ingestion.domain import Company, Filing
 from finbot_ingestion.config import IngestionConfig
 from finbot_ingestion.ingestion.retry_policy import RetryPolicy
-from .errors import SECDataError, SECDocumentTooLarge, SECHTTPError, SECNetworkError
+from .errors import SECDataError, SECDocumentTooLarge, SECHTTPError, SECNetworkError, SECRequestStopped
 from .filing_index import FilingIndex, parse_filing_index
 from .rate_limiter import SECRateLimiter
 from .urls import accession_index_json_url, company_submissions_url
@@ -52,7 +53,17 @@ class SecClient:
         self._sleep, self._random, self._now = sleeper, random_value, now
         self._retry = RetryPolicy(config.sec_max_attempts, config.sec_backoff_base_seconds, config.sec_backoff_cap_seconds)
         self._closed = False
+        self._admissions_stopped = threading.Event()
         self.metrics = None
+
+    def stop_admissions(self):
+        # Never acquire the transport lock on the event loop: an in-flight request
+        # may hold it for its entire response. Session close happens after cleanup.
+        self._admissions_stopped.set()
+
+    def _check_admission(self):
+        if self._admissions_stopped.is_set():
+            raise SECRequestStopped("SEC request admissions are stopped")
 
     def close(self) -> None:
         with self.limiter.dispatch_lock:
@@ -90,6 +101,7 @@ class SecClient:
         attempt = 0
         had_failure = False
         while True:
+            self._check_admission()
             attempt += 1
             response = None
             retry_after = None
@@ -98,6 +110,7 @@ class SecClient:
                     if self._closed:
                         raise RuntimeError('SEC client is closed')
                     self.limiter.wait()
+                    self._check_admission()
                     if self.metrics is not None:
                         self.metrics.count("SecRequests")
                     options = {"stream": True} if max_bytes is not None else {}

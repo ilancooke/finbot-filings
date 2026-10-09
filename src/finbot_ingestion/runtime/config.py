@@ -3,6 +3,7 @@
 from dataclasses import dataclass, fields
 import math
 import os
+import re
 from zoneinfo import ZoneInfo
 
 from finbot_ingestion.config import ConfigurationError
@@ -35,6 +36,8 @@ class RuntimeConfig:
     heartbeat_seconds: float = 30
     stall_seconds: float = 1800
     shutdown_grace_seconds: float = 30
+    sec_startup_quiet_seconds: float = 0
+    metrics_environment: str = "local"
     health_path: str = "/tmp/finbot-ingestion-health.json"
 
     def __post_init__(self):
@@ -45,7 +48,7 @@ class RuntimeConfig:
             for field in fields(self):
                 value = getattr(self, field.name)
                 if field.name.endswith("seconds"):
-                    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or (value == 0 and field.name != "sec_startup_quiet_seconds"):
                         raise ValueError(f"{field.name} must be finite and positive")
                 elif field.name.endswith(("workers", "size")):
                     bound = 16 if field.name.endswith("workers") else 10000
@@ -62,6 +65,8 @@ class RuntimeConfig:
                 raise ValueError("active interval must not exceed safety interval")
             if not isinstance(self.health_path, str) or not self.health_path.startswith("/"):
                 raise ValueError("health_path must be absolute")
+            if not isinstance(self.metrics_environment, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.metrics_environment):
+                raise ValueError("invalid metrics environment")
         except (ValueError, KeyError) as exc:
             raise ConfigurationError(str(exc)) from exc
 

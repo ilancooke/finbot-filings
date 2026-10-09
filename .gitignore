@@ -9,3 +9,10 @@ __pycache__/
 data/
 build/
 dist/
+
+# Phase 8 infrastructure/release tooling
+node_modules/
+cdk.out/
+infra/cdk/.venv/
+infra/cdk/config.local.json
+release-manifest.json

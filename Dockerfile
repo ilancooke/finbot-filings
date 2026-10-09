@@ -13,6 +13,8 @@ RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels /wheels
     && groupadd --gid 10001 finbot \
     && useradd --uid 10001 --gid finbot --no-create-home finbot
 WORKDIR /app
+RUN chown 10001:10001 /tmp && chmod 1777 /tmp
+VOLUME ["/tmp"]
 USER 10001:10001
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \

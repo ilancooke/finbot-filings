@@ -73,8 +73,8 @@ finbot-sec-ingestion/
 
 The exact file names may evolve, but ownership boundaries should remain explicit.
 
-Sections 2.1–2.6 record the historical delivery state of each phase. Section 2.7
-describes the current ingestion-only package and container cutover.
+Sections 2.1–2.7 record delivery history. Section 2.8 describes the current
+infrastructure, delivery and runtime recovery additions.
 
 ### 2.1 Phase 1 implementation notes
 
@@ -416,6 +416,42 @@ artifact bytes/checkpoints, required-loop failure/return and blocking cleanup ar
 tested. Ordinary pytest skips the six Docker cases unless explicitly enabled;
 actual execution is required for Phase 7 completion. See README and
 [PHASE_7_PLAN.md](PHASE_7_PLAN.md) for commands and validation.
+
+### 2.8 Phase 8 implementation notes
+
+Python CDK v2 defines retained state and stopped-by-default runtime stacks under
+`infra/cdk/`; synthesis uses explicit account/region/AZ fixture context without
+AWS lookups. The four tables and KEYS_ONLY indexes match section 6.5. Raw storage
+requires conditional create-only PUT, versioning/encryption, retention and scoped
+read/list access; ingestion cannot delete objects. SNS uses a dedicated retained
+KMS key for scoped encrypted publication. Standard operational SQS is encrypted
+and retains envelopes for 14 days; durable terminal facts remain authoritative.
+ECR is retained in the state stack for initial image publication before runtime.
+
+The ARM64 Fargate task has no inbound port, HTTPS egress, non-root read-only root
+and image-declared writable `/tmp` volume. ECS health uses startPeriod 300s; the
+local image retains 120s. RuntimeConfig adds finite nonnegative
+`RUNTIME_SEC_STARTUP_QUIET_SECONDS` (local 0, ECS 150) and bounded
+`RUNTIME_METRICS_ENVIRONMENT` (local `local`, ECS environment). An interruptible
+monotonic startup wait precedes all SEC work. Thread-safe shutdown admission
+checks reject new attempts after limiter waits, retries and redirects, without
+counting shutdown as a failed workflow. Existing source/event/schema contracts
+remain unchanged.
+
+GitHub CI validates offline application, CDK, workflow and ARM64 container checks.
+Scoped OIDC delivery registers digest revisions, waits for observed predecessor
+STOPPED status and verifies actual revision/digest/health/completion. Failed
+releases remain failed even when restoration succeeds. An explicit gate preserves
+stopped environments. Controlled rollback/maintenance use the same stop/wait/start
+procedure; automatic replacement accepts ADR 008's conservative overlap limit.
+EMF alarms cover liveness, calendar scope/configuration/freshness, failure backlog,
+SEC/publication errors and acceptance-based latency.
+
+[DEPLOYMENT.md](DEPLOYMENT.md) documents manual infrastructure/image bootstrap,
+OIDC variables, intentional application-revision drift, readiness, alarms and
+recovery. No live AWS/SEC calls, provisioning, universe seeding or provider
+selection accompany implementation. Runtime activation still needs both external
+inputs; offline validation does not establish production readiness.
 
 ## 3. Core domain models
 
@@ -1370,6 +1406,25 @@ python -m finbot_ingestion.main
 7. handle graceful shutdown.
 
 The service must handle SIGTERM from ECS and stop accepting new work while allowing reasonable in-flight cleanup.
+
+### 16.1 Phase 8 automatic recovery (implemented)
+
+[ADR 008](adr/008-use-conservative-ecs-automatic-recovery.md) specifies active
+desired count 1, minimumHealthyPercent 0, maximumPercent 100, stopTimeout 120s,
+and a configurable 150s quiet period before every ECS process's first SEC request
+(local default 0). Use monotonic timing and an interruptible wait. ECS health-check
+startPeriod is 300s; calendar readiness remains separate from process liveness.
+
+SIGTERM closes a shared thread-safe SEC dispatch admission guard. Recheck it before
+every actual HTTP attempt, including retries, redirects and attempts waiting on
+the limiter. Complete already dispatched I/O and safe checkpoints; leave queued
+SEC work recoverable without counting shutdown as a stage failure. Phase 8 adds this guard to the prior Phase 7 queue-draining lifecycle.
+
+Controlled deployments wait for STOPPED before replacement. Automatic recovery's
+quiet period is conservative protection, not a formal mutual-exclusion guarantee.
+It adds 2.5 minutes before polling resumes; failure detection/provisioning can add
+more. This may materially delay discovery during expected earnings windows.
+Measure and revisit via [ARCH-001](BACKLOG.md#arch-001--reduce-recovery-delay-during-active-earnings-windows).
 
 ## 17. CDK infrastructure
 

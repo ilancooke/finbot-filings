@@ -1,0 +1,7 @@
+{
+  "app": "infra/cdk/.venv/bin/python infra/cdk/app.py",
+  "context": {
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/core:defaultCrossStackReferences": "strong"
+  }
+}

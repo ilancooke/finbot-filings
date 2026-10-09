@@ -3,6 +3,9 @@
 class SECError(Exception):
     """SEC acquisition failure."""
 
+class SECRequestStopped(Exception):
+    """Shutdown refused new dispatch; not a failed workflow attempt."""
+
 class SECDataError(SECError, ValueError):
     """Invalid metadata; never checkpoint the response as complete."""
 

@@ -1,0 +1,82 @@
+name: Application delivery
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      activate:
+        description: 'Start a stopped service only after documented production-readiness approval'
+        type: boolean
+        default: false
+      image_digest:
+        description: 'Optional existing validated ARM64 digest for rollback; empty builds this commit'
+        type: string
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: finbot-ingestion-production-delivery
+  cancel-in-progress: false
+jobs:
+  release:
+    if: >-
+      vars.FINBOT_DELIVERY_ENABLED == 'true' && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    environment: production
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 55
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      FINBOT_CLUSTER: ${{ vars.FINBOT_CLUSTER }}
+      FINBOT_SERVICE: ${{ vars.FINBOT_SERVICE }}
+      FINBOT_REPOSITORY_URI: ${{ vars.FINBOT_REPOSITORY_URI }}
+      FINBOT_BASELINE: ${{ vars.FINBOT_BASELINE_TASK_DEFINITION }}
+      FINBOT_ACTIVATION_APPROVED: ${{ vars.FINBOT_ACTIVATION_APPROVED }}
+      RELEASE_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+      ROLLBACK_DIGEST: ${{ inputs.image_digest }}
+      ACTIVATE: ${{ inputs.activate }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.RELEASE_COMMIT }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Validate application before credentials
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -e '.[dev]'
+          .venv/bin/python -m pytest -q
+      - name: Build and validate target image
+        if: env.ROLLBACK_DIGEST == ''
+        run: |
+          docker build --platform linux/arm64 --provenance=false -t finbot-ingestion:release .
+          test "$(docker image inspect finbot-ingestion:release --format '{{.Architecture}}')" = arm64
+          FINBOT_CONTAINER_TESTS=1 FINBOT_CONTAINER_IMAGE=finbot-ingestion:release .venv/bin/python -m pytest -q tests/integration/test_phase7.py -m container
+          .venv/bin/python scripts/check_heartbeat_volume.py finbot-ingestion:release
+      - uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
+        with:
+          role-to-assume: ${{ vars.FINBOT_RELEASE_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: finbot-${{ github.run_id }}
+          role-duration-seconds: 3600
+      - name: Push or inspect image, then deploy
+        run: |
+          .venv/bin/python scripts/deliver.py
+      - name: Preserve release checkpoint
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-manifest.json
+          if-no-files-found: ignore
+          retention-days: 30

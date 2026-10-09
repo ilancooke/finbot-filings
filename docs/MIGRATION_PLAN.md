@@ -632,7 +632,19 @@ relocation or Phase 8 work occurred.
 
 ### Phase 8 — Add CDK and application delivery
 
-**Status: NOT STARTED.**
+**Status: IMPLEMENTED (2026-10-09); live deployment not performed.**
+
+The implementation, deployment gates and offline validation are recorded in
+[PHASE_8_PLAN.md](PHASE_8_PLAN.md). The user authorized implementation; live
+provisioning and activation remain separate. See [DEPLOYMENT.md](DEPLOYMENT.md).
+
+Automatic ECS recovery is now decided in [ADR 008](adr/008-use-conservative-ecs-automatic-recovery.md):
+stop-first replacement, 120s stop timeout, 150s SEC startup quiet period and no new
+SEC request admissions on SIGTERM. This accepts conservative protection rather
+than formal exclusion for automatic recovery. The 2.5-minute quiet period can
+materially delay earnings ingestion and must be revisited using recovery metrics;
+see [BACKLOG.md, ARCH-001](BACKLOG.md#arch-001--reduce-recovery-delay-during-active-earnings-windows).
+The policy is implemented and tested offline; it has not been deployed.
 
 **Goal:** Provision the approved infrastructure and automate tested application
 image delivery while keeping initial infrastructure deployment manual.
@@ -670,10 +682,43 @@ image builds. Any live SEC smoke test remains explicitly manual.
 - CDK deployment remains manual initially; deployment instructions and alarms are
   documented and tested. No unapproved distributed coordination is introduced.
 
+**Delivered:** Pinned Python CDK/Node toolchain, retained state/runtime stacks,
+four contract-compatible tables/GSIs, conditional immutable S3 policies, encrypted
+SNS/SQS, retained ECR, scoped task/execution/OIDC release roles, ARM64 Fargate at
+count zero and eleven health/error/calendar/backlog/latency alarms. SNS uses a
+dedicated retained KMS key for precisely scoped encrypted publisher access. ECR
+lives in retained state so an image can be pushed before runtime deployment.
+
+Runtime adds configurable monotonic SEC startup quiet timing, deployed metrics
+environment and a shutdown admission guard across retries/redirects/limiter waits.
+No domain/event/repository schema changes. Docker declares non-root writable `/tmp`
+for ECS bind-mount copy-up. GitHub workflows run offline application/CDK/workflow/
+ARM64 container validation; delivery uses immutable commit/run tags and resolved
+digests, explicit STOPPED handoff, actual revision/digest/health verification and
+bounded restoration that never turns a failed release into success. Stopped
+environments and explicit activation gates are preserved.
+
+**Validation (2026-10-09):** Final commands/results are in PHASE_8_PLAN. Offline
+application, infrastructure/workflow and six actual network-disabled container
+lifecycle checks pass, along with strict credential-free/no-lookup synthesis,
+compilation, actionlint, distribution build and non-root volume probe. No live
+AWS/SEC/provider calls, resource provisioning, company seeding, shared-data writes
+or GitHub workflow execution occurred.
+
+**Limits:** Offline synthesis/assertions are not live IAM/network/ECS verification.
+Automatic replacement retains ADR 008's conservative overlap limitation and
+150-second latency cost. Target subnet/AZ availability, notifications and memory
+sizing need authorized cloud checks. Provider/universe remain unresolved and
+production activation is blocked until they are supplied. CDK always deploys the
+service stopped; manual runtime changes reconcile image/baseline and explicitly
+reactivate. Public-subnet egress is v0's supported topology; private egress
+requires a reviewed change. Terminal redrive and completed-package rechecking
+remain deferred.
+
 ## 4. Current migration status
 
 **Phases 1–4: COMPLETE. Phase 5: COMPLETE for authorized placeholder-provider scope.
-Phases 6–7: COMPLETE. Phase 8: NOT STARTED.**
+Phases 6–7: COMPLETE. Phase 8: IMPLEMENTED and validated offline; not deployed.**
 
 Phase 1 delivered typed contracts, deterministic identities, UTC timestamp
 validation, offline submissions parsing, and configuration validation while
@@ -744,27 +789,33 @@ compilation/diff checks and entry-point help/import checks pass. No live AWS/SEC
 provider operations, deployment, container jobs or shared-data writes were run.
 
 Phase 7 completed package/container cutover and legacy cleanup. See its section
-and LLD section 2.7 for delivered contracts. **Current validation (2026-10-08):**
+and LLD section 2.7 for delivered contracts. **Historical Phase 7 validation (2026-10-08):**
 448 offline tests pass; six opt-in Docker lifecycle cases pass separately.
 Compilation/diff checks, fresh distribution installation and image import/session/
 dependency checks pass. Only offline fixture containers were run.
 
+Phase 8 delivered CDK, scoped delivery roles, observability and controlled image
+releases. See PHASE_8_PLAN.md for exact commands and DEPLOYMENT.md for the runbook.
+**Current validation (2026-10-09):** 473 application tests and 15 infrastructure/
+workflow tests pass; six opt-in ARM64 Docker lifecycle cases pass separately.
+Strict credential-free synthesis, actionlint, distribution build, compilation,
+heartbeat-volume probe and diff checks pass. No AWS resources were provisioned,
+GitHub delivery executed or production inputs selected.
+
 ## 5. Next milestone
 
-**NEXT: Phase 8 — Add CDK and application delivery.**
+**NEXT: Resolve production inputs and separately authorize deployment/activation.**
 
-Provision the approved single-active-task infrastructure and application delivery
-workflow when authorized. Phase 7 completion does not authorize Phase 8 or live
-cloud deployment. The supported runtime/container and recovery revision are
-documented in README; initial CDK deployment remains manual.
+Phase 8 implementation is delivered and validated offline. Initial CDK deployment
+remains manual; no infrastructure has been provisioned. Follow DEPLOYMENT.md for
+explicit account/network/OIDC configuration, staged infrastructure/image delivery,
+live verification and activation gates. Implementation does not authorize live
+cloud operations.
 
-Provider selection/live adapter and the production company universe remain
-external inputs. The placeholder raises and cannot supply production scheduling
-data. Select the free provider with the user, verify complete coverage and implement
-its isolated HTTP/normalization adapter before production use. Keep all provider
-boundaries mocked in routine tests; do not silently invent either input. Runtime
-cutover is complete; CDK remains Phase 8. Terminal operator redrive and completed-package
-recheck policies remain explicit future work.
+Select and implement the calendar adapter and approve the authoritative company
+universe before production activation. The placeholder cannot supply calendar
+coverage. Do not silently invent either input. Terminal operator redrive and
+completed-package recheck policies remain explicit future work.
 
 ## 6. Remaining unresolved external inputs
 

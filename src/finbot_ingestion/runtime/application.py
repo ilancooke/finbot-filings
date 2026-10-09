@@ -14,6 +14,7 @@ from finbot_ingestion.ingestion.work_queue import WorkQueue
 from finbot_ingestion.ingestion.work_control import work_error, retryable
 from finbot_ingestion.observability.health import HealthFile
 from finbot_ingestion.observability.metrics import Metrics
+from finbot_ingestion.sec.errors import SECRequestStopped
 from finbot_ingestion.scheduler.earnings_satisfaction_policy import EarningsSatisfactionPolicy
 from finbot_ingestion.scheduler.polling_scheduler import PollingScheduler
 from .clock import Clock
@@ -28,7 +29,7 @@ class RuntimeApplication:
         if not 1 <= worker.control.config.max_inflight_artifacts <= 16:
             raise ValueError("runtime artifact worker count must be in [1, 16]")
         self.worker, self.recovery, self.windows = worker, recovery, windows
-        self.clock, self.metrics = clock or Clock(), metrics or Metrics()
+        self.clock, self.metrics = clock or Clock(), metrics or Metrics(environment=config.metrics_environment)
         self.health_file = health_file or HealthFile(config.health_path)
         self.polls = WorkQueue(config.company_queue_size, self.clock)
         self.filings = WorkQueue(config.filing_queue_size, self.clock)
@@ -55,6 +56,9 @@ class RuntimeApplication:
 
     def request_stop(self):
         self.polls.accepting = False
+        sec = self.worker.discovery.sec
+        if hasattr(sec, "stop_admissions"):
+            sec.stop_admissions()
         self.stop.set()
 
     def progress(self, name):
@@ -161,6 +165,9 @@ class RuntimeApplication:
                         if checkpoint is not None and checkpoint.enumeration_completed_at is None:
                             await self.filings.put(observation.filing.accession_number, observation.filing.accession_number)
                     await self.satisfy(observations)
+            except SECRequestStopped:
+                if not self.stop.is_set() and not self.draining:
+                    raise
             except Exception as exc:
                 if not work_error(exc):
                     raise
@@ -182,6 +189,9 @@ class RuntimeApplication:
                     result = await self.worker.enumerate_only(item.key)
                     for identity in result.artifact_ids:
                         await self.artifacts.put(identity, identity)
+            except SECRequestStopped:
+                if not self.stop.is_set() and not self.draining:
+                    raise
             except Exception as exc:
                 if not work_error(exc):
                     raise
@@ -197,6 +207,9 @@ class RuntimeApplication:
                 with self.busy(name):
                     self.metrics.observe("ArtifactQueueDelayMs", (self.clock.monotonic() - item.queued_at) * 1000)
                     await self.worker.process_artifact(item.key)
+            except SECRequestStopped:
+                if not self.stop.is_set() and not self.draining:
+                    raise
             except Exception as exc:
                 if not work_error(exc):
                     raise
@@ -318,6 +331,24 @@ class RuntimeApplication:
     async def run(self):
         stop_waiter = None
         try:
+            if self.config.sec_startup_quiet_seconds:
+                LOGGER.info("SEC startup quiet period", extra={"operation": "startup_quiet"})
+                deadline = self.clock.monotonic() + self.config.sec_startup_quiet_seconds
+                stop_waiter = asyncio.create_task(self.stop.wait())
+                while not self.stop.is_set() and self.clock.monotonic() < deadline:
+                    sleeper = asyncio.create_task(self.clock.sleep(deadline - self.clock.monotonic()))
+                    try:
+                        await asyncio.wait([sleeper, stop_waiter], return_when=asyncio.FIRST_COMPLETED)
+                        if sleeper.done():
+                            sleeper.result()
+                    finally:
+                        sleeper.cancel()
+                        await asyncio.gather(sleeper, return_exceptions=True)
+                stop_waiter.cancel()
+                await asyncio.gather(stop_waiter, return_exceptions=True)
+                stop_waiter = None
+            if self.stop.is_set():
+                return
             await self.reload()
             if self.stop.is_set():
                 return
@@ -352,6 +383,7 @@ class RuntimeApplication:
 
     async def shutdown(self, stop_waiter=None):
         self.draining = True
+        self.request_stop()
         self.polls.accepting = False
         producers = [task for name, task in self.tasks.items()
                      if name in ("scheduler", "reload", "refresh", "recovery")]

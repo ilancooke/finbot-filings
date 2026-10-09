@@ -376,6 +376,18 @@ Alert on conditions such as:
 
 One ECS/Fargate service running one task continuously.
 
+Accepted Phase 8 recovery policy ([ADR 008](adr/008-use-conservative-ecs-automatic-recovery.md)):
+keep automatic replacement with stop-first settings, a 120-second container stop
+timeout and 150-second SEC startup quiet period. Stop new SEC request admissions
+on shutdown. Controlled deployments wait for the old task to reach STOPPED.
+This reduces overlap risk without claiming formal cross-process exclusion.
+The quiet period alone adds 2.5 minutes to recovery and can substantially delay
+earnings-window discovery; total outage can be longer. It is accepted for v0 and
+must be revisited against latency needs; track that investigation in
+[BACKLOG.md](BACKLOG.md#arch-001--reduce-recovery-delay-during-active-earnings-windows).
+Phase 8 implements this policy and the stopped-by-default CDK service; live
+deployment and production activation remain separately authorized operations.
+
 The container hosts:
 
 - calendar refresh orchestration;

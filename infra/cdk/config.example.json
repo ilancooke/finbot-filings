@@ -1,0 +1,10 @@
+{
+  "account": "123456789012",
+  "region": "us-east-1",
+  "environment": "example",
+  "prefix": "finbot",
+  "sec_user_agent": "Finbot your-email@example.com",
+  "github_subject": "repo:EXAMPLE/finbot-filings:ref:refs/heads/main",
+  "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "monitoring_enabled": false
+}

@@ -6,9 +6,10 @@ original document bytes, stores immutable artifacts in S3, maintains DynamoDB
 metadata/checkpoints and publishes `ArtifactReady` events to SNS. Document
 interpretation, earnings extraction, features and consumer queues belong downstream.
 
-Phase 7 provides the supported runtime/container and removes the superseded
-`finbot_filings` namespace, local bundle/extraction commands and legacy dependencies.
-CDK, cloud deployment and application delivery remain Phase 8. No live earnings
+The supported runtime/container uses only `finbot_ingestion`; the superseded
+namespace and extraction commands were removed in Phase 7. Phase 8 adds CDK,
+application delivery, health alarms and the agreed conservative recovery policy.
+Infrastructure and workflows are validated offline; no AWS resources are deployed. No live earnings
 calendar adapter or authoritative production company universe has been selected.
 The placeholder reports unavailable calendar coverage; it cannot supply a calendar.
 
@@ -56,9 +57,9 @@ its former legacy configuration is not sufficient for this runtime.
 Build again after application, dependency or image-configuration changes:
 
 ```bash
-docker build -t finbot-ingestion:phase7 .
-docker run --rm --network none finbot-ingestion:phase7 --help
-docker run --rm --network none finbot-ingestion:phase7 --health-check
+docker build -t finbot-ingestion:phase8 .
+docker run --rm --network none finbot-ingestion:phase8 --help
+docker run --rm --network none finbot-ingestion:phase8 --health-check
 ```
 
 The final command returns one because that new container has no runtime heartbeat.
@@ -77,13 +78,12 @@ docker run --rm --name finbot-ingestion \
   --env-file .env.ingestion --stop-timeout 120 \
   --read-only --tmpfs /tmp:rw,nosuid,size=32m \
   --cap-drop ALL --security-opt no-new-privileges \
-  finbot-ingestion:phase7
+  finbot-ingestion:phase8
 ```
 
 The example file is in Docker `--env-file` format. Passing it is explicit; the
 application still reads process variables only. For local Docker, credentials must
-be supplied explicitly through your chosen SDK credential mechanism. AWS task-role
-credentials will be configured in Phase 8. Never bake credentials into the image.
+be supplied explicitly through your chosen SDK credential mechanism. The CDK task definition uses AWS task-role credentials when deployed. Never bake credentials into the image.
 No `FINBOT_DATA_ROOT` mount is used by this cloud ingestion service.
 
 From another terminal:
@@ -93,8 +93,10 @@ docker exec finbot-ingestion python -m finbot_ingestion.main --health-check
 docker stop --timeout 120 finbot-ingestion
 ```
 
-SIGTERM/SIGINT stops poll admissions and producers, drains bounded stage queues
-within the configured grace, then cancels remaining tasks cooperatively. Blocking
+SIGTERM/SIGINT stops poll producers and all new SEC HTTP admissions, including
+retries and redirects. In-flight I/O and safe checkpoints can finish within the
+existing cleanup procedure; queued SEC work remains recoverable. Bounded queues
+drain within the configured grace, then remaining tasks cancel cooperatively. Blocking
 HTTP/SDK calls finish before clients close. The default 30-second drain grace is
 not a hard bound on total cleanup; Docker's stop timeout is separate. Forced
 termination leaves interrupted work recoverable from durable checkpoints.
@@ -102,14 +104,15 @@ termination leaves interrupted work recoverable from durable checkpoints.
 The image health check uses the local heartbeat every 30 seconds, with a five-second
 command timeout, 120-second startup allowance and three retries. It checks liveness,
 not full calendar readiness. Placeholder/stale calendar state remains visible in
-health output and metrics. ECS health configuration and alarms remain Phase 8 work.
+health output and metrics. The CDK ECS health check uses a 300-second startup
+allowance for its 150-second SEC quiet period; local startup defaults to no delay.
 
 ## Offline container validation
 
 After rebuilding the image, run:
 
 ```bash
-FINBOT_CONTAINER_TESTS=1 FINBOT_CONTAINER_IMAGE=finbot-ingestion:phase7 \
+FINBOT_CONTAINER_TESTS=1 FINBOT_CONTAINER_IMAGE=finbot-ingestion:phase8 \
   .venv/bin/python -m pytest -q tests/integration/test_phase7.py -m container
 ```
 
@@ -241,7 +244,7 @@ Required-loop failure, unexpected return or stalled busy work exits nonzero.
 Sanitized JSON logs go to stderr; bounded CloudWatch EMF records go to stdout with
 Service/Environment dimensions. Local health separates liveness from calendar
 age/scope/provider configuration. CloudWatch collection, DLQ-depth monitoring and
-alarms require Phase 8 infrastructure.
+alarms are defined by Phase 8 CDK and require manual infrastructure deployment.
 
 ## Configuration reference
 
@@ -260,9 +263,12 @@ utilities need only their own relevant settings.
 | Ingestion | AWS connect/read 5/30 seconds, attempts/workers 3/2, stage failures 3, checkpoint/dead-letter attempts 3/3, inflight artifacts 2, recovery page 100, backoff 1/30 seconds; `INGESTION_*` names in example |
 | Calendar | Placeholder provider, lookahead/near-term 90/3 days, full/near-term refresh 86400/0 seconds, stale after 172800 seconds, maximum companies/events 1000/5000, company page 100, provider/checkpoint attempts 3/3, backoff 1/30 seconds |
 | Runtime | XNYS / America/New_York, active/safety 10/3600 seconds, reload/recovery/tick 300/60/1 seconds, refresh retry 60 seconds, poll/enumeration workers 2/1, company/filing/artifact queues 1000/100/200 |
+| Runtime startup/metrics | `RUNTIME_SEC_STARTUP_QUIET_SECONDS=0` locally (150 in ECS), `RUNTIME_METRICS_ENVIRONMENT=local` (deployment environment in ECS) |
 | Runtime health | Metrics/heartbeat 5/30 seconds, stall allowance 1800 seconds, shutdown grace 30 seconds, `RUNTIME_HEALTH_PATH=/tmp/finbot-ingestion-health.json` |
 
-Durations must be finite and positive except zero disables near-term refresh.
+Durations must be finite and positive except zero disables near-term refresh
+and is allowed for the SEC startup quiet period. Metrics environment must contain
+1–64 letters, digits, underscores or hyphens.
 Backoff cap must be at least base; active cadence cannot exceed safety cadence.
 Runtime worker counts are bounded 1–16 and queues 1–10,000. Health path must be
 absolute; derived reload coverage must fit the repository date-span bound.
@@ -273,12 +279,18 @@ Deployment must supply encrypted/HTTPS storage and least-privilege permissions:
 conditional S3 PutObject, GetObject and scoped ListBucket for absence detection,
 DynamoDB table/index access, SNS Publish and operational SQS SendMessage. Ingestion
 must not delete or unconditionally replace raw objects. Resources/policies/retention
-are Phase 8 work; no adapter provisions them.
+are defined in Phase 8 CDK; no runtime adapter provisions them.
 
 ## Design documents and legacy recovery
 
 [HLD](docs/HLD.md), [LLD](docs/LLD.md), [ADRs](docs/adr/) and
 [MIGRATION_PLAN](docs/MIGRATION_PLAN.md) remain the sources of truth.
+[BACKLOG](docs/BACKLOG.md) tracks unscheduled future changes and revisit triggers.
+[ADR 008](docs/adr/008-use-conservative-ecs-automatic-recovery.md) records the
+implemented Phase 8 recovery policy and its earnings-latency tradeoff.
+[DEPLOYMENT](docs/DEPLOYMENT.md) documents CDK, GitHub configuration, readiness,
+stop/wait/start releases and recovery; [PHASE_8_PLAN](docs/PHASE_8_PLAN.md) records
+delivery and validation.
 [PHASE_7_PLAN](docs/PHASE_7_PLAN.md) records the cutover and validation. Prior phase
 plans/results are historical records; use this README for current commands.
 
@@ -294,4 +306,31 @@ git worktree add --detach ../finbot-filings-legacy 59cacd78a1da01d00b913c2e67185
 No permanent legacy subtree or compatibility CLI remains. Downstream relocation
 requires separate work. Global EDGAR feeds, Company Facts, multiple calendar
 providers, distributed rate limiting, multiple ingestion tasks, RAG and extraction
-remain outside v0. Next milestone: Phase 8, CDK and application delivery.
+remain outside v0. Next milestones: provider/universe selection, separately authorized manual
+infrastructure deployment, live validation and production activation.
+
+## Phase 8 infrastructure and delivery
+
+Install the independent pinned CDK toolchain and synthesize fixture templates
+without AWS access:
+
+```bash
+python3.12 -m venv infra/cdk/.venv
+infra/cdk/.venv/bin/python -m pip install -r infra/cdk/requirements-dev.txt
+npm ci --ignore-scripts --no-audit --no-fund
+infra/cdk/.venv/bin/python -m pytest -q infra/cdk/tests
+npm run synth -- --no-lookups
+```
+
+Use [DEPLOYMENT.md](docs/DEPLOYMENT.md) for real configuration and deployment;
+never deploy the default dummy inputs. CDK owns retained state and a runtime
+service at desired count zero. GitHub CI has no AWS credentials; delivery uses
+scoped OIDC, immutable tags/digests and an explicit STOPPED handoff. Stopped
+environments stay stopped until separate readiness approval and manual activation.
+The calendar provider and authoritative universe remain unresolved.
+
+Automatic ECS recovery uses min/max 0/100, a 120-second stop timeout and a
+150-second quiet period before SEC traffic. This is conservative protection,
+not formal cross-process exclusion. The quiet period alone adds 2.5 minutes to
+recovery and can substantially delay active-window earnings discovery; follow
+[ARCH-001](docs/BACKLOG.md#arch-001--reduce-recovery-delay-during-active-earnings-windows).

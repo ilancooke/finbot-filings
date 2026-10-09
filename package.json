@@ -1,0 +1,6 @@
+{
+  "name": "finbot-ingestion-infra-tools",
+  "private": true,
+  "scripts": { "synth": "cdk synth --strict", "cdk": "cdk" },
+  "devDependencies": { "aws-cdk": "2.1145.0" }
+}
