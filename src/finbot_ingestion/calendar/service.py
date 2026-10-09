@@ -31,6 +31,7 @@ class CalendarSyncService:
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.sleep, self.random_value = sleeper, random_value
         self._lock = asyncio.Lock()
+        self.metrics = None
 
     @classmethod
     def with_placeholder(cls, companies, calendar, config=None, **options):
@@ -54,6 +55,8 @@ class CalendarSyncService:
                     "error_type": type(exc).__name__, "will_retry": will_retry})
                 if not will_retry:
                     raise
+                if self.metrics is not None:
+                    self.metrics.count("RetryAttempts")
                 options = {"random_value": self.random_value} if self.random_value is not None else {}
                 await self.sleep(policy.delay(attempt, **options))
 

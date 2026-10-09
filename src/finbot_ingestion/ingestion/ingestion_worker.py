@@ -22,6 +22,7 @@ class IngestionWorker:
         if self.locks is not discovery.locks:
             raise ValueError("worker and discovery must share identity locks")
         self._slots = asyncio.Semaphore(control.config.max_inflight_artifacts)
+        self.metrics = None
 
     async def discover_company(self, company):
         accessions = await self.discovery.discover(company)
@@ -30,13 +31,19 @@ class IngestionWorker:
         return accessions
 
     async def process_filing(self, accession_number):
-        result = await self.discovery.enumerate_filing(accession_number)
+        result = await self.enumerate_only(accession_number)
         if result.outcome == Outcome.TERMINAL:
-            return await self.send_dead_letter("filing", accession_number)
+            return result.outcome
         # Use known child identities, not an eventually consistent accession query.
         for artifact_id in result.artifact_ids:
             await self.process_artifact(artifact_id)
         return result.outcome
+
+    async def enumerate_only(self, accession_number):
+        result = await self.discovery.enumerate_filing(accession_number)
+        if result.outcome == Outcome.TERMINAL:
+            await self.send_dead_letter("filing", accession_number)
+        return result
 
     async def process_artifact(self, artifact_id):
         async with self.locks.hold("artifact/" + artifact_id), self._slots:
@@ -63,6 +70,10 @@ class IngestionWorker:
                         await self.control.checkpoint(lambda: self.artifacts.mark_stored(artifact_id,
                             stored.s3_uri, stored.stored_at, stored.content_type, stored.size_bytes),
                             operation="mark_stored", identity=artifact_id)
+                        if self.metrics is not None:
+                            self.metrics.count("ArtifactsStored")
+                            self.metrics.latency("DownloadLatencyMs", artifact.discovered_at, stored.stored_at)
+                            self.metrics.latency("IngestionLatencyMs", filing.filed_at, stored.stored_at)
                         LOGGER.info("Artifact stored", extra={"operation": "ACQUIRE", "artifact_id": artifact_id,
                             "cik": artifact.company_cik, "accession_number": artifact.accession_number})
                     else:
@@ -74,12 +85,16 @@ class IngestionWorker:
                         published_at = self.control.now()
                         await self.control.checkpoint(lambda: self.artifacts.mark_published(artifact_id, published_at),
                             operation="mark_published", identity=artifact_id)
+                        if self.metrics is not None:
+                            self.metrics.count("ArtifactsPublished")
                         LOGGER.info("Artifact published", extra={"operation": "PUBLISH", "artifact_id": artifact_id,
                             "cik": artifact.company_cik, "accession_number": artifact.accession_number})
                     if recovering:
                         LOGGER.info("Workflow recovered", extra={"operation": stage, "artifact_id": artifact_id})
                         recovering = False
                 except Exception as exc:
+                    if stage == "PUBLISH" and self.metrics is not None:
+                        self.metrics.count("ArtifactPublishFailures")
                     if not work_error(exc):
                         raise
                     # A checkpoint can have succeeded despite losing all acknowledgments.
@@ -107,6 +122,8 @@ class IngestionWorker:
                 sent_at = self.control.now()
                 await self.control.checkpoint(lambda: repo.mark_dead_lettered(identity, sent_at),
                     operation="mark_dead_lettered", identity=identity)
+                if self.metrics is not None:
+                    self.metrics.count("DeadLetterMessages")
                 LOGGER.warning("Terminal work dead-lettered", extra={"operation": "DEAD_LETTER",
                     "work_id": identity, "failure_id": failure.failure_id})
                 return Outcome.TERMINAL

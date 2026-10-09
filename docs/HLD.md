@@ -121,7 +121,7 @@ Phase 5 implements this boundary with a placeholder that fails explicitly until 
 provider is selected. Complete scoped snapshots drive safe expectation updates,
 date-move/cancellation reconciliation and durable full/near-term sync checkpoints.
 Failed or incomplete provider fetches preserve existing expectations. Recurring
-refresh scheduling remains Phase 6 runtime work.
+refresh scheduling is coordinated by the Phase 6 runtime.
 
 ### 6.3 Scheduler
 
@@ -141,10 +141,22 @@ Initial polling policy:
 - after-market reporters: active polling begins roughly two hours before market close and continues roughly three hours after close;
 - unknown-time reporters: use a wider trading-day + after-hours window;
 - during active window: target approximately 5–10 second polling cadence per active company, subject to the global SEC request ceiling;
-- after a relevant filing is found: stop aggressive polling for that expected event;
+- after EarningsSatisfactionPolicy confirms a qualifying filing and its satisfaction
+  checkpoint is durable: stop aggressive polling for that expected event;
 - if no filing appears: continue through a grace period, then fall back to low-frequency polling.
 
 These exact windows are configuration, not hard-coded business logic.
+
+Phase 6 implements a deterministic, versioned `EarningsSatisfactionPolicy`.
+For v0, the same CIK and an acceptance timestamp inside the window/grace are
+required, together with an original 10-Q, original 10-K, or original 8-K whose
+unambiguous SEC item metadata includes Item 2.02. Amendments and generic 8-Ks remain
+ingested but cannot satisfy an expectation. Missing or ambiguous required item
+metadata leaves it unsatisfied and aggressive polling continues through the
+window/grace. Persist the match reason and policy version with satisfaction;
+safety polling and incomplete ingestion recovery continue. This is a scheduling
+heuristic, not proof that earnings were extracted or validated. See
+[the Phase 6 plan](PHASE_6_PLAN.md) for evidence handling and acceptance tests.
 
 ### 6.4 SEC client and centralized rate limiter
 
@@ -292,7 +304,7 @@ Phase 4 implements this ordering with conditional S3 creation and inspected
 original object provenance. It also recovers unfinished filing enumeration before
 acquiring children. SNS and operational dead-letter delivery are at least once;
 consumers deduplicate by stable artifact/failure identity. Explicit recovery passes
-are implemented; continuous scheduling remains a later runtime phase. Normal v0
+are implemented and repeated by the Phase 6 continuous runtime. Normal v0
 acquisition is bounded to 64 MiB per artifact; larger documents fail explicitly.
 
 ## 9. Failure handling

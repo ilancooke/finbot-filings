@@ -91,3 +91,45 @@ def parse_company_submissions(
     if not isinstance(filings, Mapping) or not isinstance(filings.get("recent"), Mapping):
         raise SECDataError("SEC submissions response is missing filings.recent")
     return parse_filing_arrays(company, filings["recent"], discovered_at=discovered_at)
+
+
+def parse_company_submissions_with_evidence(company, payload, *, discovered_at):
+    """Optional malformed item evidence never suppresses otherwise valid ingestion.
+
+    SEC's comma-separated exact item-code strings are the only supported encoding.
+    Duplicate rows with conflicting evidence are ambiguous, not affirmative matches.
+    """
+    import re
+    from finbot_ingestion.domain.sec_items import SECItemMetadata, FilingObservation
+    from finbot_ingestion.domain.identity import normalize_accession_number
+
+    filings = parse_company_submissions(company, payload, discovered_at=discovered_at)
+    arrays = payload["filings"]["recent"]
+    supplied = arrays.get("items")
+    aligned = isinstance(supplied, list) and len(supplied) == len(arrays["accessionNumber"])
+    by_accession = {}
+    for index, raw in enumerate(arrays["accessionNumber"]):
+        try:
+            accession = normalize_accession_number(raw)
+        except ValueError:
+            continue
+        status, items = "absent", ()
+        if "items" in arrays and not aligned:
+            status = "ambiguous"
+        elif aligned:
+            value = supplied[index]
+            if value is None or value == "":
+                pass
+            elif not isinstance(value, str) or len(value) > 4096:
+                status = "ambiguous"
+            else:
+                parts = tuple(part.strip() for part in value.split(","))
+                if len(parts) <= 100 and all(re.fullmatch(r"[1-9]\.[0-9]{2}", part) for part in parts):
+                    status, items = "known", tuple(sorted(set(parts)))
+                else:
+                    status = "ambiguous"
+        evidence = SECItemMetadata(accession, company.cik, status, items)
+        if accession in by_accession and by_accession[accession] != evidence:
+            evidence = SECItemMetadata(accession, company.cik, "ambiguous")
+        by_accession[accession] = evidence
+    return tuple(FilingObservation(f, by_accession[f.accession_number]) for f in filings)

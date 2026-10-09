@@ -22,12 +22,22 @@ class AWSExecution(BlockingExecution):
     def __init__(self, client, config, *, executor=None):
         super().__init__(max_workers=config.max_workers, executor=executor, name="aws")
         self.client, self.config = client, config
+        self.metrics = None
         self._handler_id = f"finbot-attempts-{id(self)}"
         if hasattr(client, "meta"):
             self._event = "needs-retry." + client.meta.service_model.service_name
-            client.meta.events.register(self._event, log_sdk_attempt, unique_id=self._handler_id)
+            client.meta.events.register(self._event, self._log_attempt, unique_id=self._handler_id)
         else:
             self._event = None
+
+    def _log_attempt(self, *, attempts, response=None, caught_exception=None, operation=None, **kwargs):
+        log_sdk_attempt(attempts=attempts, response=response, caught_exception=caught_exception,
+                        operation=operation, **kwargs)
+        if self.metrics is not None:
+            if attempts > 1:
+                self.metrics.count("RetryAttempts")
+            if caught_exception is not None or (response is not None and response[0].status_code >= 300):
+                self.metrics.count("AwsRequestErrors")
 
     @classmethod
     def from_config(cls, service, config, *, session=None):

@@ -308,8 +308,66 @@ are unchanged. Boto3's minimum is 1.43.110, the verified conditional-PUT model.
 Calendar synchronization is implemented with an explicitly unconfigured placeholder
 provider, as authorized by the user. No live provider is selected or contacted.
 See section 7 for concrete snapshot, service, cancellation and sync-state contracts.
-There is no scheduler/background refresh/main runtime; those remain Phase 6.
+Phase 5 did not add scheduling/background refresh; Phase 6 supplies those below.
 Provider HTTP integration, authentication and rate limits await provider selection.
+
+### 2.6 Phase 6 implementation notes
+
+`python -m finbot_ingestion.main` now builds one supervised RuntimeApplication with
+one SEC client/limiter/executor, shared repositories and IdentityLocks, and one
+CalendarSyncService. Existing explicit services and the legacy CLI remain usable.
+The application validates settings before AWS client construction and requires
+existing resources and a nonempty enabled universe. The factory accepts only the
+placeholder until a live provider is selected; offline tests inject adapters.
+
+The default required task set has eleven loops: scheduler, recovery, refresh,
+reload, heartbeat, metrics, two company polls, one enumeration and two artifact
+workers. Pools and queue capacities are bounded. Company queue admission is
+nonblocking; filing/artifact handoff applies bounded backpressure. Recovery uses
+the same worker/locks, traverses all indexed pages and repeats after completion,
+so old/disabled work and later GSI visibility remain recoverable. No per-tick
+DynamoDB access occurs. Coarse reloads strongly read satisfaction checkpoints and
+serialize with new satisfaction writes. New/disabled companies change polling
+eligibility without discarding durable pending artifacts.
+
+Due times use monotonic time and are set from poll completion, with no catch-up
+burst. Wall-clock UTC is used only for event windows/freshness. New safety due times
+are staggered by CIK; active-window transitions bring due work forward. XNYS
+session windows come from an offline `exchange_calendars>=4.13.2,<5` adapter;
+coverage errors are distinct from confirmed holidays. Windows are cached with a
+4096-entry bound. Reload date coverage includes derived past/grace and forward
+pre-window spans. Concrete settings/defaults are in README and `.env.example`.
+
+Full/optional near-term refresh is completion-based through the same service lock;
+full refresh coalesces near-term work. Unconfigured/transient/incomplete refreshes
+preserve expectations and use a cooldown. Cached health requires matching full
+universe/date coverage as well as full-sync age. Near-term success cannot conceal
+stale full coverage. Provider configuration is reported independently of liveness.
+
+Every required loop is supervised: failure or unexpected return terminates the
+application. Busy progress exceeding the default 1800-second stall allowance fails
+health; idle workers stay healthy. An atomic local heartbeat supports the separate
+`--health-check` command without AWS access or inbound HTTP. SIGTERM/SIGINT stops
+poll admissions, cancels producers, drains stage queues within the configured grace,
+then cooperatively cancels remaining tasks and awaits blocking I/O before closing
+resources. Repeated cancellation cannot bypass cleanup. The drain grace is not a
+hard total HTTP deadline; forced termination relies on durable recovery.
+
+Sanitized JSON logs go to stderr; bounded thread-safe EMF batches go to stdout.
+Metric samples are capped at 100/name/flush with dropped-sample counts, and names
+are bounded to 100 including that counter. Only Service/Environment are dimensions.
+Request attempts, retries/throttles/errors, newly observed durable transitions,
+acceptance-based latency, queue delay/depth, recovery and task/calendar health are
+instrumented. CloudWatch collection/alarms remain Phase 8. Metrics are operational
+observations and may repeat during repair, not an exactly-once ledger.
+
+[PHASE_6_REPLAY.md](PHASE_6_REPLAY.md) reports eight 500-company scenarios. At 50
+active companies, five-second target cadence and a 36-document package, polling
+slows substantially under the same SEC budget. All active companies and delayed
+old disabled-company work progress, queues stay bounded, and eleven tasks suffice.
+FIFO dispatch is retained; no fairness layer or canonical-filing cache was justified
+by this short synthetic workload. Database-call counts remain an explicit sizing
+input, especially when real submissions contain many historical rows.
 
 ## 3. Core domain models
 
@@ -931,8 +989,9 @@ offloading, provider-specific budgets/timeouts and sanitized errors.
 health() exposes durable state, age since last full success and a configurable
 stale flag. Never-synchronized providers are stale; near-term success cannot make
 full synchronization fresh. Callers must inspect recorded coverage when the
-company universe or requested range changes. No scheduling, market-window policy,
-SIGTERM lifecycle or CloudWatch emission is added; these remain Phase 6/8.
+company universe or requested range changes. Phase 6 adds scheduling, market-window
+policy, SIGTERM lifecycle and local EMF emission; deployed CloudWatch collection
+and alarms remain Phase 8.
 
 ### 7.5 AWS verification and limits
 
@@ -969,11 +1028,75 @@ The scheduler should not bypass the SEC rate limiter.
 Configuration should support:
 
 ```text
-ACTIVE_POLL_INTERVAL_SECONDS=5..10
-SAFETY_POLL_INTERVAL_SECONDS=<TBD, likely hours>
+RUNTIME_ACTIVE_POLL_SECONDS=10
+RUNTIME_SAFETY_POLL_SECONDS=3600
 ```
 
 Do not hard-code market times throughout the codebase. Centralize window calculation in one policy component.
+
+### 8.2 Phase 6 EarningsSatisfactionPolicy contract (implemented)
+
+The pure deterministic `EarningsSatisfactionPolicy` is initially versioned
+`earnings-satisfaction-v1`. Evaluate the expectation, explicit window/grace bounds,
+canonical durable filing and typed accession/CIK-bound SEC item evidence; do no
+I/O, clock reads or document interpretation inside the policy.
+
+Require matching CIK and `filed_at` in `[window_start, grace_end)`. The only positive
+v0 decisions are:
+
+| Exact form | Required SEC item evidence | Match reason |
+| --- | --- | --- |
+| `10-Q` | None | `original_10_q` |
+| `10-K` | None | `original_10_k` |
+| `8-K` | Unambiguous exact Item `2.02` | `original_8_k_item_2_02` |
+
+All amendments are ineligible, including 8-K/A with Item 2.02. Generic 8-Ks and
+missing/malformed/conflicting/ambiguous required item evidence leave the expectation
+unsatisfied. Aggressive polling continues through window/grace; all six supported
+forms still enter acquisition independently of this policy. Never infer Item 2.02
+from exhibits, filenames, descriptions or document contents.
+
+`Filing` remains unchanged. Phase 6 adds typed `SECItemMetadata` and
+`FilingObservation` through `parse_company_submissions_with_evidence()`,
+`SecClient.get_company_submissions_with_evidence()` and
+`DiscoveryService.discover_with_evidence()`, preserving existing entry points.
+Known, absent and ambiguous evidence are distinct; association/normalization stays
+in SEC adapters. Optional item metadata failures cannot suppress otherwise valid
+filing ingestion. Old records without evidence do not qualify an 8-K; fresh valid
+source observations can supply evidence without rewriting original provenance.
+
+Among qualifying candidates, sort by acceptance timestamp then accession. Ambiguous
+overlapping expectations remain unsatisfied. Persist satisfaction separately from
+mutable calendar rows with accession, CIK, acceptance time, window/grace bounds,
+match reason, policy version, original form and required 8-K item evidence. Validate
+those facts on write/reload; unknown policy versions cannot silently suppress polls.
+Stop aggressive polling only after the checkpoint is durable. Safety polling and
+pending package/artifact recovery continue. Satisfaction does not require publication
+and is never proof that earnings were extracted or validated.
+
+`DynamoDBSatisfactionRepository` uses the existing Calendar table, partition key
+`expected_date="__event_satisfaction__"` and sort key `cik=<event identity>`.
+Identity is canonical compact JSON `[provider, CIK, "id", provider_event_id]`, or
+`[provider, CIK, "date", expected_date]`, with the 1024-byte sort-key bound. Stable
+IDs survive date moves; date-only identities cannot link moves reliably. Ticker,
+sync time and report-time changes do not change identity.
+
+Records carry `calendar_record_type="satisfaction"`, repository schema version 1,
+matched accession/acceptance timestamp, satisfaction timestamp, observed expected
+date, window start/end/grace end, original form, match reason, policy version,
+normalized SEC items and evidence source. Canonical UTC microsecond timestamps and
+all policy facts are validated on write/reload; unknown versions fail explicitly.
+The adapter verifies a matching durable filing before conditional PutItem with
+`attribute_not_exists(expected_date)`. Strong full-key reads reconcile conflicts
+and lost acknowledgments without overwriting the first checkpoint. Existing
+400-KB serialization validation applies; the fixture checkpoint is under 2 KiB.
+This adds no table/index or public API. Phase 8 task-role permissions must include
+this reserved partition alongside sync metadata.
+
+The original implementation plan is retained in [PHASE_6_PLAN.md](PHASE_6_PLAN.md).
+Offline policy, parser, real SDK Stubber and stateful runtime tests validate these
+contracts, refresh/restart preservation, conflicts, lost acknowledgments and
+independent ingestion of non-matches.
 
 ## 9. SEC request queue and rate limiter
 
@@ -1071,7 +1194,7 @@ Phase 4 provides RecoveryService.run_pass(), traversing enumeration, acquisition
 publication and dead-letter candidates to token None, including empty actionable
 pages. Work errors are counted/logged without starving later candidates; shared
 infrastructure/configuration failures propagate. Recheck parent/source facts before
-acting. Continuous repeat-pass cadence remains Phase 6 runtime work.
+acting. Phase 6 repeats passes on startup and after each configured recovery interval.
 
 ## 13. Retry and failure behavior
 
@@ -1142,12 +1265,18 @@ Emit custom metrics for:
 - `SecRequestErrors`;
 - `FilingsDiscovered`;
 - `ArtifactsStored`;
+- `ArtifactsPublished`;
 - `ArtifactPublishFailures`;
 - `RetryAttempts`;
 - `DiscoveryLatencyMs`;
 - `DownloadLatencyMs`;
 - `IngestionLatencyMs`;
 - `CalendarSyncAgeSeconds`.
+
+Implemented latency definitions: `DiscoveryLatencyMs` is SEC acceptance to filing
+discovery; `DownloadLatencyMs` is artifact discovery to object storage;
+`IngestionLatencyMs` is SEC acceptance to object storage. These include queue and
+stage delays and do not measure public availability or publication completion.
 
 ## 15. Configuration
 

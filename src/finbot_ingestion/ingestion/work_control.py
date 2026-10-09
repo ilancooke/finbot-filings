@@ -70,9 +70,12 @@ class WorkControl:
         self.config, self.sleep = config, sleeper
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.random_value = random_value
+        self.metrics = None
         self.policy = RetryPolicy(config.max_stage_failures, config.backoff_base_seconds, config.backoff_cap_seconds)
 
     async def backoff(self, attempt):
+        if self.metrics is not None:
+            self.metrics.count("RetryAttempts")
         options = {"random_value": self.random_value} if self.random_value is not None else {}
         await self.sleep(self.policy.delay(attempt, **options))
 
@@ -105,3 +108,7 @@ class WorkControl:
         await self.checkpoint(lambda: repo.record_stage_failure(identity, stage, str(error) or type(error).__name__, at,
             max_failures=self.config.max_stage_failures, error_type=type(error).__name__, terminal=not retryable(error)),
             operation="record_stage_failure", identity=identity)
+        if self.metrics is not None:
+            current = await repo.get_checkpoint(identity)
+            if current is not None and current.terminal_at is not None and progress.terminal_at is None:
+                self.metrics.count("TerminalFailures")

@@ -21,7 +21,6 @@ from finbot_ingestion.ingestion.retry_policy import RetryPolicy
 from .errors import SECDataError, SECDocumentTooLarge, SECHTTPError, SECNetworkError
 from .filing_index import FilingIndex, parse_filing_index
 from .rate_limiter import SECRateLimiter
-from .submissions import parse_company_submissions
 from .urls import accession_index_json_url, company_submissions_url
 
 LOGGER = logging.getLogger(__name__)
@@ -53,6 +52,7 @@ class SecClient:
         self._sleep, self._random, self._now = sleeper, random_value, now
         self._retry = RetryPolicy(config.sec_max_attempts, config.sec_backoff_base_seconds, config.sec_backoff_cap_seconds)
         self._closed = False
+        self.metrics = None
 
     def close(self) -> None:
         with self.limiter.dispatch_lock:
@@ -98,6 +98,8 @@ class SecClient:
                     if self._closed:
                         raise RuntimeError('SEC client is closed')
                     self.limiter.wait()
+                    if self.metrics is not None:
+                        self.metrics.count("SecRequests")
                     options = {"stream": True} if max_bytes is not None else {}
                     response = self._session.get(url, timeout=(self.config.sec_connect_timeout_seconds, self.config.sec_read_timeout_seconds), allow_redirects=False, **options)
                     bounded_content = None
@@ -119,6 +121,11 @@ class SecClient:
                             content.extend(chunk)
                         bounded_content = bytes(content)
                 status = response.status_code
+                if self.metrics is not None:
+                    if status in (403, 429):
+                        self.metrics.count("SecThrottles")
+                    if status >= 400:
+                        self.metrics.count("SecRequestErrors")
                 if status in (301, 302, 303, 307, 308):
                     if redirects >= self.config.sec_max_redirects or not response.headers.get('Location'):
                         raise SECDataError('invalid or exhausted SEC redirect chain')
@@ -139,6 +146,8 @@ class SecClient:
                     return DownloadedDocument(content, response.headers.get('Content-Type'), url)
             except (requests.Timeout, requests.ConnectionError) as exc:
                 error, retryable = SECNetworkError(str(exc)), True
+                if self.metrics is not None:
+                    self.metrics.count("SecRequestErrors")
             except SECDataError as exc:
                 error, retryable = exc, False
             except requests.RequestException as exc:
@@ -151,12 +160,19 @@ class SecClient:
             LOGGER.warning('SEC request failed', extra={'operation': operation, 'attempt_number': attempt, 'error_type': type(error).__name__, 'error_message': str(error), 'will_retry': will_retry, **context})
             if not will_retry:
                 raise error
+            if self.metrics is not None:
+                self.metrics.count("RetryAttempts")
             self._sleep(self._retry.delay(attempt, random_value=self._random, retry_after=retry_after))
 
     def get_company_submissions(self, company: Company, *, discovered_at: datetime | None = None) -> list[Filing]:
+        return [observation.filing for observation in self.get_company_submissions_with_evidence(
+            company, discovered_at=discovered_at)]
+
+    def get_company_submissions_with_evidence(self, company, *, discovered_at=None):
+        from .submissions import parse_company_submissions_with_evidence
         result = self._request(company_submissions_url(company.cik), operation='submissions', context={'cik': company.cik, 'ticker': company.ticker})
         try:
-            return parse_company_submissions(company, self._json(result), discovered_at=discovered_at or self._now())
+            return parse_company_submissions_with_evidence(company, self._json(result), discovered_at=discovered_at or self._now())
         except SECDataError as exc:
             LOGGER.warning('SEC submissions parsing failed', extra={'operation': 'submissions', 'cik': company.cik, 'ticker': company.ticker, 'error_type': type(exc).__name__, 'error_message': str(exc)})
             raise

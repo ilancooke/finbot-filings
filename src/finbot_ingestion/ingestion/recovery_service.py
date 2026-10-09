@@ -20,6 +20,7 @@ class RecoverySummary:
 class RecoveryService:
     def __init__(self, worker, *, page_size=None):
         self.worker = worker
+        self.progress = None
         self.page_size = worker.control.config.recovery_page_size if page_size is None else page_size
         if type(self.page_size) is not int or not 1 <= self.page_size <= 1000:
             raise ValueError("page_size must be in [1, 1000]")
@@ -29,6 +30,8 @@ class RecoveryService:
         while True:
             page = await fetch(token)
             for source in page.items:
+                if self.progress is not None:
+                    self.progress()
                 summary.candidates += 1
                 try:
                     outcome = await action(source)

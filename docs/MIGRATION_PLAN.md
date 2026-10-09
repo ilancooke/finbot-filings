@@ -470,12 +470,12 @@ shared-data writes, container jobs or legacy removal occurred.
 
 ### Phase 6 — Add scheduling and the continuous runtime
 
-**Status: NOT STARTED.**
+**Status: COMPLETE (2026-10-08).**
 
 **Goal:** Coordinate calendar-driven polling, safety polling, acquisition, and
 recovery in one supervised long-running process.
 
-**Major modules/files:** `scheduler/{window_policy,polling_scheduler}.py`;
+**Major modules/files:** `scheduler/{window_policy,polling_scheduler,earnings_satisfaction_policy}.py`;
 `ingestion/work_queue.py`; `main.py`; `observability/{logging,metrics,health}.py`;
 runtime configuration; fake-clock scheduler and load replay tests.
 
@@ -486,13 +486,24 @@ contracts rather than implementing independent limits in scheduler/workers.
 **New functionality:** Centralized market-time/window policy; configurable active,
 safety, and grace schedules; in-memory `asyncio.Queue` and duplicate-work
 suppression; worker supervision; coarse calendar reloads; durable expected-event
-satisfaction (such as matched accession); startup reconstruction; SIGTERM handling;
+satisfaction with matched accession, match reason and policy version; typed SEC
+item evidence from submissions/discovery; startup reconstruction; SIGTERM handling;
 structured logs, latency/error/health metrics, and calendar freshness tracking.
 
 **Testing expectations:** Fake-clock tests cover active/safety boundaries,
 daylight-saving changes, nontrading days, unknown report times, satisfied events,
 grace periods, and restart. A roughly 500-company replay measures queue delay and
 discovery/download contention. Test task failure, health reporting, and shutdown.
+
+**Authorized satisfaction policy:** Implement deterministic versioned
+`EarningsSatisfactionPolicy`, initially `earnings-satisfaction-v1`. Require the
+same CIK and acceptance time within window/grace, plus an original 10-Q, original
+10-K, or original 8-K with unambiguous SEC Item 2.02 metadata. Amendments and generic
+8-Ks are ingested but never satisfy an expectation. Missing or ambiguous required
+metadata leaves it unsatisfied and aggressive polling continues through window/grace.
+Persist match reason and policy version. Satisfaction is a scheduling heuristic
+only, never evidence of extracted or validated earnings. See
+[PHASE_6_PLAN.md](PHASE_6_PLAN.md) and LLD section 8.2 for the implemented contract.
 
 **Acceptance criteria:**
 
@@ -502,6 +513,11 @@ discovery/download contention. Test task failure, health reporting, and shutdown
   does not grow the queue without bound.
 - Aggressive polling stops for a satisfied expected event and remains stopped
   after restart; safety polling continues according to policy.
+- Satisfaction tests cover eligible original forms, Item 2.02 among multiple items,
+  generic 8-Ks, all amendments, missing/ambiguous/malformed item metadata, wrong CIK,
+  window/grace boundaries and deterministic ordering. Non-matches remain ingested
+  without suppressing aggressive polling; positive checkpoints retain the reason,
+  evidence and policy version through refresh/restart.
 - Failed background tasks cannot leave a deceptively healthy idle process.
 - SIGTERM stops new work and permits reasonable in-flight cleanup; interrupted
   work remains recoverable.
@@ -510,6 +526,33 @@ discovery/download contention. Test task failure, health reporting, and shutdown
   downloads or retries; do not promise unconditional downstream latency targets.
 - Add elaborate fairness only if replay demonstrates starvation; retain a simple
   design otherwise. Runtime, scheduler, and recovery tests pass.
+
+**Delivered:** `main.py`/RuntimeApplication, finite bounded worker pools/queues,
+completion-based market-aware polling, coarse durable reloads, full/near-term
+refresh coordination, repeated shared-lock recovery, conditional versioned
+satisfaction and typed SEC item evidence, signal cleanup, sanitized JSON logs,
+bounded thread-safe EMF and local heartbeat/health checks. Actual XNYS sessions
+use the constrained `exchange_calendars` dependency. Existing services and legacy
+CLI remain available. No table/index change, live provider selection, infrastructure
+change, shared-data write or legacy removal occurred.
+
+**Validation:** 583 offline tests pass using the repository-local environment,
+including 87 Phase 6 tests over the 496-test Phase 5 baseline. Compilation and
+`git diff --check` pass. Real SDK Stubber/stateful fakes validate checkpoints,
+eligibility/non-match ingestion, restart/date moves/lost acknowledgments, every
+required-loop failure/return, signal admissions, stalls/freshness and repeated
+cancellation with blocking cleanup. Eight 500-company virtual-clock scenarios
+report SEC request starts/statuses, per-company polling intervals, stage latency,
+queue/task bounds and persistence calls. See [PHASE_6_REPLAY.md](PHASE_6_REPLAY.md).
+All active companies receive service and old disabled-company work hidden until a
+later GSI pass is published; no elaborate fairness/cache layer was added.
+
+**Limits:** Synthetic replay is not a production latency or database sizing
+estimate. Large active sets/downloads exhaust the shared SEC budget. Only an
+unconfigured placeholder is wired; a live adapter and production universe remain
+external inputs. The shutdown grace is a drain allowance, not a hard blocking-I/O
+deadline. CloudWatch collection/alarms and container/runtime cutover remain later
+phases. Terminal redrive/completed-package rechecking remain deferred.
 
 ### Phase 7 — Complete runtime cutover and clean the package
 
@@ -591,7 +634,7 @@ image builds. Any live SEC smoke test remains explicitly manual.
 ## 4. Current migration status
 
 **Phases 1–4: COMPLETE. Phase 5: COMPLETE for authorized placeholder-provider scope.
-Phases 6–8: NOT STARTED.**
+Phase 6: COMPLETE. Phases 7–8: NOT STARTED.**
 
 Phase 1 delivered typed contracts, deterministic identities, UTC timestamp
 validation, offline submissions parsing, and configuration validation while
@@ -652,20 +695,22 @@ Phase 5 delivered provider-independent complete-snapshot synchronization, safe
 scoped reconciliation, durable monotonic sync/freshness metadata and an explicit
 unconfigured placeholder. A selected live adapter was deferred at the user's
 request. See Phase 5 above and LLD section 7 for contracts and limitations.
-**Current Phase 5 validation (2026-10-08):** 496 tests pass; compilation and diff
+**Historical Phase 5 validation (2026-10-08):** 496 tests pass; compilation and diff
 checks pass, using the repository-local environment and mocked offline boundaries.
+
+Phase 6 delivered the continuous runtime and revised deterministic satisfaction
+policy. See Phase 6 above and LLD sections 2.6/8.2 for concrete contracts and
+limitations. **Current validation (2026-10-08):** 583 offline tests pass;
+compilation/diff checks and entry-point help/import checks pass. No live AWS/SEC/
+provider operations, deployment, container jobs or shared-data writes were run.
 
 ## 5. Next milestone
 
-**NEXT: Phase 6 — Add scheduling and the continuous runtime.**
+**NEXT: Phase 7 — Complete runtime cutover and clean the package.**
 
-Coordinate the existing calendar/discovery/recovery services in one supervised
-process with in-memory schedules/queues, shared SEC budget, event satisfaction,
-health/logging and graceful shutdown. Use CalendarConfig cadences and inspect
-full-success scope/freshness rather than equating a near-term sync with full
-coverage. Reuse one CalendarSyncService instance/lock and await in-flight work.
-Implement only separately authorized Phase 6 scope; phase completion is not
-authorization to start it.
+Validate the container entry point/lifecycle, clean superseded legacy workflows
+while preserving recoverable history, and focus dependencies/docs on ingestion.
+Phase 6 completion does not authorize starting Phase 7 or cloud deployment.
 
 Provider selection/live adapter and the production company universe remain
 external inputs. The placeholder raises and cannot supply production scheduling

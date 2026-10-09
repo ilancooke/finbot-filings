@@ -4,7 +4,7 @@ This package captures the current design for the SEC document discovery and down
 
 The documents are intentionally scoped to **v0**. They preserve extension points for future scale and new downstream consumers, but avoid building distributed infrastructure before it is needed.
 
-## Implementation status: Phase 5 (placeholder provider)
+## Implementation status: Phase 6 (continuous runtime)
 
 `finbot_ingestion` provides domain contracts, configuration validation, SEC URL
 construction, submissions parsing, shared SEC transport, package enumeration,
@@ -13,7 +13,10 @@ Phase 4 adds conditional S3 storage, SNS artifact publication, an operational SQ
 dead-letter adapter, discovery/acquisition workers, and explicit recovery passes.
 Phase 5 adds explicit earnings-calendar synchronization, complete scoped snapshots,
 guarded cancellation/date-move reconciliation, durable sync/freshness checkpoints,
-and a placeholder provider. No live calendar provider has been selected.
+and a placeholder provider. Phase 6 adds the supervised runtime, bounded queues,
+market-session scheduling, versioned earnings satisfaction, repeated recovery,
+structured logs, metrics and local health checks. No live calendar provider has
+been selected.
 It coexists with the existing
 `finbot_filings` package and `finbot-filings` CLI, whose behavior is unchanged.
 See [README-legacy.md](README-legacy.md) for those local workflows.
@@ -50,7 +53,11 @@ The new code is organized as follows:
   explicit refresh service and an unconfigured placeholder provider.
 - `storage/`: conditional S3 creation and validated existing-object inspection.
 - `messaging/`: SNS ArtifactReady and operational SQS terminal-failure envelopes.
-- `ingestion/`: discovery, acquisition/publication, stage retries and recovery.
+- `ingestion/`: discovery, acquisition/publication, stage retries, bounded work queues and recovery.
+- `scheduler/`: XNYS session windows, completion-based active/safety polling and
+  deterministic earnings satisfaction.
+- `runtime/`, `main.py`: validated runtime settings, supervised loops and signal handling.
+- `observability/`: sanitized JSON logs, bounded EMF metrics and local heartbeat.
 - `execution.py`, `aws_execution.py`, `aws_config.py`: bounded blocking I/O,
   reusable SDK clients, attempt logging and isolated storage/messaging settings.
 
@@ -171,9 +178,8 @@ jitter; `Retry-After` seconds/dates influence delay up to the configured cap.
 Redirects are restricted to official HTTPS SEC hosts and each hop consumes budget.
 Failures and retry recovery use standard Python logging with structured extra fields.
 
-Live calendar-provider integration, scheduling, continuous runtime, Docker/CDK,
-and deployment remain future work. There is no
-`finbot_ingestion.main` runtime yet. Legacy source and shared data remain intact.
+Live calendar-provider integration, Docker/CDK and deployment remain future work.
+The Phase 6 runtime is described below. Legacy source and shared data remain intact.
 
 ## DynamoDB persistence and recovery
 
@@ -291,7 +297,7 @@ mocked SDK calls. No live SEC or AWS validation has been performed.
 Phase 4 exposes `DiscoveryService.discover(company)`,
 `IngestionWorker.discover_company(company)`, `process_filing(accession_number)`,
 `process_artifact(artifact_id)` and `RecoveryService.run_pass()`. These are explicit
-async calls, not a scheduler or continuous daemon. Share one SEC client/limiter,
+async calls; Phase 6 coordinates them in the continuous runtime. Share one SEC client/limiter,
 one SEC executor, one discovery/worker instance and its identity-lock registry.
 The worker bounds entire in-flight artifact workflows, not only SDK calls.
 
@@ -425,9 +431,8 @@ Do not delete raw S3 objects as a repair procedure.
 
 Phase 5 exposes `CalendarSyncService.sync_once(start_date, end_date, kind="full")`,
 `sync_full()`, `sync_near_term()` and `health()` as explicit async calls. Share one
-service instance in one event loop; it serializes refreshes. There is no periodic
-task/daemon or calendar CLI yet. Phase 6 will use the daily and optional near-term
-cadence settings to schedule calls.
+service instance in one event loop; it serializes refreshes. The runtime uses the
+daily and optional near-term cadence settings to schedule calls.
 
 The default `PlaceholderCalendarProvider` always raises
 `CalendarProviderNotConfigured`. It performs no HTTP calls, returns no invented
@@ -518,11 +523,134 @@ jittered timing policy; permanent data/configuration/permission errors propagate
 The selected live adapter will own its HTTP timeouts, request-size bounds,
 provider budget and credentials. Provider calls do not consume the SEC budget.
 
+## Continuous runtime
+
+After installing dependencies, export the SEC, AWS, table, storage, messaging and
+calendar settings above and in `.env.example`. The runtime requires existing AWS
+resources/indexes and a nonempty enabled company universe. It does not seed or
+provision them, and it does not load `.env` automatically.
+
+```bash
+.venv/bin/python -m finbot_ingestion.main
+# In a separate process, check the local heartbeat without contacting AWS:
+.venv/bin/python -m finbot_ingestion.main --health-check
+```
+
+The first command contacts AWS and SEC when run. One application owns the shared
+SEC client/limiter and bounded executors. Separate bounded queues handle company
+polling, package enumeration and artifact acquisition/publication. Duplicate work
+is suppressed while queued or in flight. Calendar/universe reloads are coarse;
+scheduler ticks use memory only. Recovery runs on startup and repeatedly afterward,
+including unfinished work belonging to old or disabled companies.
+
+Active polling defaults to ten seconds from the completion of the previous poll.
+Safety polling defaults to one hour with deterministic CIK staggering, on all days.
+XNYS session times from `exchange_calendars` handle DST, holidays and early closes.
+Before-market windows run from open minus two hours through open plus two hours;
+after-market windows run from close minus two hours through close plus three hours.
+Unknown times cover open minus two hours through close plus three hours. Non-session
+expectations remain on their supplied date, using 07:30–19:00 market-local time.
+Unsatisfied expectations remain active for two hours of grace. All intervals are
+half-open UTC instants; unsupported or unavailable calendar coverage fails explicitly.
+The five-request/second SEC ceiling is shared with downloads, retries and recovery,
+so a requested polling cadence is not a throughput guarantee.
+
+`EarningsSatisfactionPolicy` v0 has persisted version `earnings-satisfaction-v1`.
+A match requires the same CIK and SEC acceptance time inside the window/grace:
+
+| Eligible exact form | Additional evidence | Persisted match reason |
+| --- | --- | --- |
+| Original `10-Q` | None | `original_10_q` |
+| Original `10-K` | None | `original_10_k` |
+| Original `8-K` | Unambiguous SEC Item `2.02` | `original_8_k_item_2_02` |
+
+Amendments and generic 8-Ks still enter ingestion. Absent, malformed or ambiguous
+required item metadata leaves the expectation unsatisfied; aggressive polling
+continues through grace. Only exact comma-separated SEC item codes from the same
+submissions row provide evidence; filenames, exhibits and document contents cannot
+supply it. Earliest acceptance time then accession breaks candidate ties;
+overlapping expectations remain unsatisfied when association is ambiguous.
+
+A separate conditional checkpoint in the Calendar table reserved partition
+`__event_satisfaction__` retains accession, acceptance time, original form, event
+identity, window/grace bounds, item evidence, match reason and policy version.
+The event key includes provider and CIK plus stable provider event ID, or expected
+date when no ID exists. Stable-ID date moves retain satisfaction; moves without
+IDs may rearm the new date. Unknown checkpoint policy versions fail explicitly.
+Aggressive polling stops only after a durable checkpoint; safety polling and
+unfinished ingestion continue. This is a scheduling heuristic only: it does not
+assert that earnings were extracted or validated.
+
+The placeholder cannot refresh a calendar. The runtime visibly reports
+`provider_configured=false` and stale coverage while retaining durable expectations
+and safety polling. Unsupported provider names fail at startup; tests can inject
+an adapter. A live provider and authoritative production universe remain external
+inputs. Health distinguishes task liveness from calendar full-sync age and scope;
+near-term refresh does not establish full freshness. The local heartbeat is atomic,
+removed on shutdown and checked for age/liveness without an inbound HTTP API.
+
+SIGTERM/SIGINT stops poll admissions and producers, then drains queues within a
+30-second grace. Remaining tasks are cancelled cooperatively and blocking calls
+are awaited before clients close. This grace is not a hard upper bound on blocking
+HTTP completion. Required loop failure, unexpected return or a busy task exceeding
+the stall allowance fails the runtime and returns a nonzero exit status. Restart
+reconstructs schedules and recovers durable pending work.
+
+Logs are sanitized JSON on stderr. Bounded, thread-safe CloudWatch Embedded Metric
+Format records go to stdout every five seconds and on shutdown, with only Service
+and Environment dimensions. They include request/retry/errors, acceptance-based
+latencies, queues, satisfaction, recovery and calendar/task health. CloudWatch log
+collection, alarms and DLQ-depth monitoring require Phase 8 infrastructure.
+
+Runtime settings are read from exported environment variables:
+
+| Variable | Default |
+| --- | --- |
+| `RUNTIME_MARKET_TIMEZONE` | `America/New_York` |
+| `RUNTIME_MARKET_CALENDAR` | `XNYS` |
+| `RUNTIME_ACTIVE_POLL_SECONDS` | `10` |
+| `RUNTIME_SAFETY_POLL_SECONDS` | `3600` |
+| `RUNTIME_BEFORE_OPEN_SECONDS` | `7200` |
+| `RUNTIME_AFTER_OPEN_SECONDS` | `7200` |
+| `RUNTIME_BEFORE_CLOSE_SECONDS` | `7200` |
+| `RUNTIME_AFTER_CLOSE_SECONDS` | `10800` |
+| `RUNTIME_GRACE_SECONDS` | `7200` |
+| `RUNTIME_NON_SESSION_START_HOUR` | `7` |
+| `RUNTIME_NON_SESSION_START_MINUTE` | `30` |
+| `RUNTIME_NON_SESSION_END_HOUR` | `19` |
+| `RUNTIME_RELOAD_SECONDS` | `300` |
+| `RUNTIME_RECOVERY_SECONDS` | `60` |
+| `RUNTIME_TICK_SECONDS` | `1` |
+| `RUNTIME_REFRESH_RETRY_SECONDS` | `60` |
+| `RUNTIME_POLL_WORKERS` | `2` |
+| `RUNTIME_ENUMERATION_WORKERS` | `1` |
+| `RUNTIME_COMPANY_QUEUE_SIZE` | `1000` |
+| `RUNTIME_FILING_QUEUE_SIZE` | `100` |
+| `RUNTIME_ARTIFACT_QUEUE_SIZE` | `200` |
+| `RUNTIME_METRICS_FLUSH_SECONDS` | `5` |
+| `RUNTIME_HEARTBEAT_SECONDS` | `30` |
+| `RUNTIME_STALL_SECONDS` | `1800` |
+| `RUNTIME_SHUTDOWN_GRACE_SECONDS` | `30` |
+| `RUNTIME_HEALTH_PATH` | `/tmp/finbot-ingestion-health.json` |
+
+Durations must be finite and positive; active cadence cannot exceed safety cadence.
+Runtime workers are bounded to 1–16 (including `INGESTION_MAX_INFLIGHT_ARTIFACTS`),
+and queue sizes to 1–10,000. The fallback window must be ordered and health path
+absolute. Reload lookback/forward coverage expands with configured windows/grace
+and must fit the configured repository date-range bound.
+
+The offline [capacity replay](docs/PHASE_6_REPLAY.md) records queue and latency
+measurements for 500 enabled companies and 5–50 active companies. Run it with:
+
+```bash
+.venv/bin/python -m pytest -q -s tests/integration/test_phase6_replay.py
+```
+
 ## Migration status
 
-Phases 1–4 and the authorized Phase 5 placeholder scope are complete. See
+Phases 1–6 are complete within the authorized placeholder-provider scope. See
 [the migration plan](docs/MIGRATION_PLAN.md) for acceptance criteria and validation.
-Next: Phase 6 — scheduling and continuous runtime. The live calendar adapter and
+Next: Phase 7 — container/runtime cutover and package cleanup. The live calendar adapter and
 production universe remain unresolved inputs. The legacy CLI remains available.
 
 ## Documents
