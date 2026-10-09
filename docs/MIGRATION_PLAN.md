@@ -804,7 +804,8 @@ GitHub delivery executed or production inputs selected.
 
 ## 5. Next milestone
 
-**NEXT: Resolve production inputs and separately authorize deployment/activation.**
+**NEXT: Approve the production universe and ongoing Yahoo access, validate a full
+30-day live scope, and separately authorize deployment/activation.**
 
 Phase 8 implementation is delivered and validated offline. Initial CDK deployment
 remains manual; no infrastructure has been provisioned. Follow DEPLOYMENT.md for
@@ -812,22 +813,277 @@ explicit account/network/OIDC configuration, staged infrastructure/image deliver
 live verification and activation gates. Implementation does not authorize live
 cloud operations.
 
-Select and implement the calendar adapter and approve the authoritative company
-universe before production activation. The placeholder cannot supply calendar
-coverage. Do not silently invent either input. Terminal operator redrive and
-completed-package recheck policies remain explicit future work.
+Yahoo/yfinance was chosen after an authorized live probe on 2026-10-09. The adapter
+is now implemented and validated offline; explicit Yahoo selection is supported
+alongside the default placeholder. Section 5.1 preserves the original due-diligence
+evidence and handoff; section 5.2 records delivery. Implementation does not approve
+a production universe or authorize deployment/activation. Terminal operator redrive
+and completed-package recheck remain future work.
+
+### 5.1 Yahoo/yfinance earnings-calendar implementation handoff (2026-10-09)
+
+**Historical handoff status: LIVE DUE DILIGENCE COMPLETE; IMPLEMENTATION NOT STARTED
+at handoff. See section 5.2 for subsequent delivery.**
+
+The user agreed to the following initial policy after reviewing live results:
+
+- Maintain a rolling lookahead of **30 calendar days**, refreshed **once daily**.
+  Include the refresh date through that date plus 29 days. No hourly/near-term
+  refresh is needed. Planned settings are `CALENDAR_LOOKAHEAD_DAYS=30`,
+  `CALENDAR_FULL_REFRESH_SECONDS=86400` and
+  `CALENDAR_NEAR_TERM_REFRESH_SECONDS=0`; expose configuration rather than
+  scattering constants through the implementation.
+- Use **before-market / after-market / unknown** classifications for scheduling.
+  Yahoo's exact event timestamp is not authoritative release or SEC availability
+  time. Existing market windows, grace, safety polling and satisfaction policy
+  continue to own polling behavior.
+- Move an expectation when a valid, unambiguous replacement date appears. Persist
+  the new expectation before deactivating the superseded one and reload the
+  scheduler so aggressive polling follows the replacement date.
+- Preserve existing expectations when a fetch fails or is incomplete. On an
+  otherwise successful fetch, **absence alone does not cancel an expectation**:
+  without a valid replacement, retain the old expectation until its existing
+  polling window/grace expires. Aggressive polling then ends through the normal
+  window policy; low-frequency safety polling continues. This deliberately accepts
+  some unnecessary polling rather than suppressing discovery on an omission.
+- Keep stable company identity anchored to **CIK**, with ticker used for Yahoo
+  lookup. Do not replace the calendar schema with a ticker-only key. Multiple
+  announcements can fall within a lookahead; a new date must not cancel every
+  other event for that company.
+
+#### Live probe and observed coverage
+
+The authorized read-only probe ran on **2026-10-09, approximately 15:03–15:08 UTC**,
+in an isolated temporary environment: Python 3.14.8, macOS ARM64,
+`yfinance==1.7.0`, `pandas==3.0.6`, `curl_cffi==0.16.3`. **No API key or Yahoo
+account/login was needed.** yfinance initialized its ordinary anonymous
+cookie/crumb session. Do not add a `YAHOO_API_KEY` or credential secret for these
+tested calls.
+
+Calls used finite page/request/time limits, 20-second HTTP timeouts and serial
+request pacing. No AWS/SEC operations, Finbot configuration/dependency changes,
+company seeding, calendar checkpoint writes or shared-data writes occurred.
+
+| Probe | Observed result |
+| --- | --- |
+| Broad calendar, `start=2026-10-09`, `end=2026-10-16`, most-active filtering disabled | 288 rows / 288 symbols; pages 100, 100, 88; raw total 288 on every page; no overlapping event keys. Returned dates were Oct 9–15. |
+| Broad 90-day probe, `start=2026-10-09`, `end=2027-01-07` | Raw total 7,899 on all 50 fetched pages; stopped at the explicit cap. Returned 5,001 rows, 4,998 distinct symbol/time/title keys and 4,997 symbols. **Partial enumeration, not a complete snapshot.** Observed dates extended through Jan 6. |
+| Same-day query, `start=end=2026-10-13` | HTTP 200 with raw total zero and an empty DataFrame. |
+| Corrected day query, `start=2026-10-13`, `end=2026-10-14` | 192 rows / 192 symbols; pages 100 and 92; raw total 192. |
+| Six companies through `Ticker.calendar`, `Ticker.get_earnings_dates(limit=12)` and the broad calendar | All three methods returned matching next dates for all six. The per-ticker earnings method returned 25 rows per company despite requesting 12. |
+
+There were 74 HTTP attempts: 73 HTTP 200 and one initial `fc.yahoo.com` HTTP 404
+during successful cookie initialization. All 68 calendar/earnings data requests
+returned HTTP 200; no data-request errors or throttles were observed. This short
+probe is not a production reliability, rate-limit or latency guarantee. A complete
+standalone 30-day refresh was not tested; the earlier 90-day probe must not be
+described as validation of the subsequently agreed 30-day workflow.
+
+Sample observations, **not an approved production universe**:
+
+| Symbol | Next date returned | Broad-calendar timing |
+| --- | --- | --- |
+| AAPL | 2026-11-02 | AMC |
+| MSFT | 2026-10-28 | AMC |
+| JPM | 2026-10-13 | BMO |
+| WMT | 2026-11-19 | BMO |
+| NVDA | 2026-11-17 | AMC |
+| TSLA | 2026-10-21 | AMC |
+
+Microsoft's date was independently checked against its
+[investor page](https://www.microsoft.com/en-us/investor/default), and JPMorgan's
+against its [company announcement](https://jpmorganchaseco.gcs-web.com/news-releases/news-release-details/jpmorganchase-host-third-quarter-2026-earnings-call).
+JPMorgan distinguishes approximately 07:00 Eastern results from an 08:30 call.
+Yahoo's broad method returned 08:30 and its per-ticker method 08:00. WMT also had
+08:30 versus 08:00 across methods. These differences support coarse classification,
+not timestamp-based release scheduling. The other four dates were not independently
+confirmed in this probe.
+
+#### Adapter findings and requirements
+
+- **Date bounds:** Yahoo interpreted date-only query bounds as midnight at the
+  start of each date in the market timezone. To satisfy Finbot's inclusive
+  `[start_date, end_date]`, request the following day as the upper bound and then
+  filter normalized market-local dates explicitly. For a 30-day lookahead starting
+  on day D, the intended final date is D+29 and the Yahoo upper query date is D+30.
+  Cadence alone does not fix this; HTTP 200 and a consistent zero total can still
+  omit an entire intended day. Include timezone/DST/boundary tests.
+- **Broad API:** Prefer evaluating `yf.Calendars(...).get_earnings_calendar()`
+  with `filter_most_active=False`, no market-cap cutoff, explicit pagination and
+  `force=True`. The installed default most-active filter is omitted on nonzero
+  offsets, which can change scope across pages if left enabled. The US-region
+  feed includes foreign/OTC securities; filter by the approved company mapping,
+  not provider region alone.
+- **Pagination:** Raw responses include `total`, criteria and column metadata,
+  but the public DataFrame loses the total. Plan an adapter boundary that can
+  validate this evidence without leaking raw responses into domain/runtime code.
+  The probe returned 101 rows at offset 2,500 despite a requested size of 100,
+  plus repeated event keys for TOWN, EDN and ASPN across pages. The cause was not
+  established. Validate scope, total changes, terminal-page evidence, repeated
+  pages, duplicate/conflicting records and finite limits. Neither a short-page
+  heuristic nor naive offset arithmetic alone establishes completeness. Consider
+  bounded day/week slices and repeat/overlap checks during implementation planning.
+- **Timing:** The 288-row set contained AMC=155, BMO=43, TNS=85 and TAS=5. Map
+  BMO to `before_market`, AMC to `after_market`, and TNS/TAS to `unknown`; retain
+  the original code diagnostically. Unknown codes need an explicit conservative
+  policy. Do not infer timing from an apparent market-close timestamp. Wider
+  unknown windows affect SEC capacity even with one daily calendar refresh.
+- **Identity:** The queried payload did not supply CIK, a stable provider event
+  ID, a source-update timestamp or a confirmed/estimated flag. Use curated CIK,
+  ticker and name; initially keep `provider_event_id=None` and
+  `provider_updated_at=None`. Use an honest local observation/sync timestamp.
+  A fiscal-period title may help identify a replacement only after validating
+  its semantics; do not invent stable IDs or equate every new date for one CIK
+  with the same announcement. If replacement matching is ambiguous, preserve the
+  old expectation and surface the ambiguity instead of cancelling it.
+- **Per-ticker methods:** `get_earnings_dates()` in the installed release caches
+  by limit without offset in the key, rounds 12 requested rows to a 25-row HTML
+  page, and depends on HTML/time presentation. It is useful for spot checks but
+  is not the preferred complete-snapshot source. `Ticker.calendar` strips timing
+  and returns a date list; multiple dates may require range/uncertainty handling,
+  not creation of multiple definite announcements.
+- **Normalization:** Empty broad DataFrames had different column names/index
+  layout from populated results. Handle both, missing values, nonfinite pandas
+  values, schema changes and safe finite JSON diagnostics. Only scheduling
+  expectations belong here; EPS/revenue data must not turn the adapter into an
+  extraction or feature pipeline.
+- **Availability versus coverage:** The probe establishes successful live access
+  and sample agreement, not complete coverage of the future curated universe.
+  Record missing companies/events and timing coverage. Never claim that source
+  omission proves cancellation, even after collecting all reported rows.
+
+#### Existing code fit and implementation planning
+
+Start with `calendar/provider.py`, `calendar/contracts.py`, `calendar/service.py`,
+`calendar/config.py`, `domain/calendar.py`, `domain/satisfaction.py`, `main.py`,
+`runtime/application.py`, the scheduler/window policies, and Phase 5/6 tests.
+The runtime factory currently rejects providers other than `placeholder`.
+`CalendarSnapshot`, `ExpectedEarningsEvent`, the existing Calendar table
+`(expected_date, cik)` key, tombstones and durable sync/satisfaction records are
+the foundation; no new AWS table/index is justified by provider selection alone.
+An offline compatibility check constructed six existing Finbot event models from
+saved observations, with `CalendarSnapshot.complete=False` for the capped probe.
+
+**Required reconciliation change:** `CalendarSyncService.sync_once()` currently
+rejects incomplete snapshots and cancels every missing in-scope expectation after
+accepting a complete snapshot. That omission-based cancellation differs from the
+user-agreed Yahoo policy above. Separate collection completeness from authority to
+cancel by absence; accept validated observations and cancel only explicitly matched
+replacements. Keep failed/incomplete fetches from mutating expectations or advancing
+successful freshness. Do not bypass the completeness guard, silently relabel partial
+data as complete, or silently change other providers' reconciliation behavior.
+Plan and document the necessary contract/service distinction in the LLD/HLD/ADRs
+where relevant before implementing it.
+
+Replacement handling must account for multiple fiscal events, moves beyond the
+30-day range, ambiguous titles and provider omissions. Without a replacement in
+confirmed scope, keep the old event until its polling window/grace expires; this
+does not require physical deletion of historical rows. Preserve newer observations
+against stale refreshes and write the replacement before its cancellation tombstone.
+The scheduler should rebuild from durable active expectations, and successful
+satisfaction must still stop aggressive polling after refresh/restart. Date-based
+satisfaction identities cannot automatically link moves without a stable event ID;
+test the interaction instead of suppressing a new date using an unrelated match.
+
+Plan a `YahooEarningsCalendarProvider` behind the existing async provider interface,
+with dedicated bounded blocking execution/client lifecycle, finite HTTP timeouts,
+provider-specific pacing/backoff and sanitized errors. Yahoo work must not block
+the scheduler event loop or consume the SEC limiter's request budget. Force fresh
+daily reads and put yfinance's cookie/timezone caches in an explicitly writable
+temporary location suitable for the read-only container; cookies/crumbs are not
+application configuration or artifacts to log/commit.
+
+Review and pin the dependency choice against the tested release. Installing
+yfinance brought lxml and curl_cffi, among other dependencies; lxml had been
+removed in Phase 7 and any reintroduction needs a documented calendar dependency
+reason. Verify Python 3.12 Linux ARM64 compatibility and rebuild/test the container
+after dependency/runtime changes. The macOS Python 3.14 probe does not validate the
+ECS image, outbound cloud connectivity or deployment readiness.
+
+Implementation acceptance tests should remain offline and cover inclusive 30-day
+bounds/DST, daily completion-based cadence with near-term refresh disabled, all
+pages/limits/total changes, duplicates and conflicts, empty/schema-changed data,
+timing normalization, canonical CIK mapping, explicit versus ambiguous replacements,
+absence preservation, multiple announcements, out-of-range moves, stale writes,
+partial failures/lost acknowledgments, restart, satisfaction and window/grace expiry.
+Update README, `.env.example`, LLD/HLD and relevant migration/ADR records with the
+delivered behavior. Validate the affected application/CDK/container contracts as
+appropriate; live calls are manual and separately scoped, not routine CI.
+
+#### Sources, evidence retention and remaining inputs
+
+API references:
+[Calendars](https://ranaroussi.github.io/yfinance/reference/api/yfinance.Calendars.html),
+[get_earnings_dates](https://ranaroussi.github.io/yfinance/reference/api/yfinance.Ticker.get_earnings_dates.html),
+[calendar source](https://github.com/ranaroussi/yfinance/blob/main/yfinance/calendars.py),
+[ticker source](https://github.com/ranaroussi/yfinance/blob/main/yfinance/base.py),
+[company-calendar source](https://github.com/ranaroussi/yfinance/blob/main/yfinance/scrapers/quote.py).
+`main` and online documentation can change; the concrete observations above refer
+to installed release 1.7.0 on the stated date.
+
+Temporary evidence was saved under
+`/private/tmp/finbot-yahoo-probe.hrHARv/`: `REPORT.md`, `summary.json`,
+`broad_*.json`, `tickers.json`, `normalized_sample.json`, `probe.py`, `analyze.py`,
+`normalize_sample.py` and `requirements.lock`. These files may not survive a new
+session; this section intentionally preserves the essential evidence and decisions
+without depending on them. Raw live data and session caches were not committed.
+
+The authoritative approximately 500-company universe is still unresolved. Do not
+seed the six-company sample as production configuration. Technical keyless access
+does not settle ongoing automated-access/data-use permission: Yahoo's
+[terms](https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html) restrict automated
+collection without express prior permission, and
+[yfinance is unaffiliated with Yahoo](https://github.com/ranaroussi/yfinance).
+Record the appropriate access arrangement before ongoing production operation.
+Provider implementation and offline verification remain separate from authorized
+manual infrastructure deployment, live cloud checks and production activation.
+
+### 5.2 Yahoo calendar implementation delivery (2026-10-09)
+
+**Status: COMPLETE for authorized implementation and offline validation.**
+
+[YAHOO_CALENDAR_PLAN](YAHOO_CALENDAR_PLAN.md) and
+[ADR 009](adr/009-use-yahoo-calendar-observations-with-replacement-only-reconciliation.md)
+record the implementation. The factory supports `CALENDAR_PROVIDER=yahoo`, pinned
+`yfinance==1.7.0`/`curl_cffi==0.16.3`, 30 inclusive market-local days, completion-based
+daily refresh and disabled near-term refresh. Placeholder remains the explicit default.
+CDK JSON configuration exposes provider/cadence/cache fields and keeps desired count zero.
+
+Raw source pages are validated for query/schema/total/offset/count evidence, with
+terminal checks, repeated day-slice consistency and finite independent HTTP/row/
+page/deadline budgets. The public dataframe cannot preserve that evidence, so a
+pinned owned `YfData.post` seam supplies fresh raw responses. Yahoo blocking work,
+session and private writable caches are independent of SEC; shutdown closes new
+admissions and waits for bounded in-flight I/O before closing owner-thread resources.
+
+Missing observations preserve expectations. Unique quarterly-title date replacements
+are strongly confirmed durable before guarded cancellation of the unchanged old
+row. A versioned optional hint is additive; old records deserialize without it.
+Interrupted application is repaired by a fresh validated snapshot, including a
+replacement already upserted before shutdown. No new tables/indexes, financial
+features, provider event IDs or satisfaction identity changes were introduced.
+Midnight restarts reuse sufficient unexpired daily coverage; date moves require new
+satisfaction. Health reports actual scope and bounded metrics describe collection.
+
+Validation: 555 application tests passed (eight Docker cases skipped in the ordinary
+run); 16 CDK/workflow tests passed; credential-free strict synthesis passed. The
+Python 3.12 ARM64 image was rebuilt and separately exercised with network-disabled
+fixtures. Final distribution/container/tool results are recorded in the Yahoo plan.
+No live provider/SEC/AWS calls, cloud mutations, universe seeding or shared-data
+writes accompanied implementation. The preceding handoff's partial probe remains
+historical evidence rather than a full production coverage result.
 
 ## 6. Remaining unresolved external inputs
 
 | Input | Status | Required for |
 | --- | --- | --- |
-| Free earnings-calendar provider and available access | TBD; placeholder delivered by authorization | Deferred live provider adapter and production calendar use |
+| Earnings-calendar ongoing access and production coverage | Yahoo/yfinance adapter delivered offline (section 5.2); ongoing access arrangement and full 30-day live validation pending | Production calendar use |
 | Authoritative approximately 500-company universe with ticker/CIK/name/enabled fields | TBD | Production universe seeding; the legacy sample ticker list is insufficient |
 
 **Neither input blocked Phases 3–4.** Use fixture companies and mocked SEC responses
-for development. Do not invent a provider or silently choose a production universe.
-Exact windows, safety cadence, retry constants, and alarm thresholds remain
-configurable implementation choices within the approved design.
+for development. Follow the agreed Yahoo policy in section 5.1; do not silently
+choose a production universe. Exact windows, safety cadence, retry constants, and
+alarm thresholds remain configurable implementation choices within the approved design.
 
 ## 7. Progress conventions
 

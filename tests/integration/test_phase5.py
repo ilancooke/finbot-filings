@@ -160,7 +160,7 @@ def test_duplicates_aliases_and_multiple_quarters(db):
         await seed(db)
         value = event(ticker="PROVIDER_ALIAS")
         later = event(expected_date=NOW.date() + timedelta(days=60), provider_event_id="apple-q4")
-        result = await service(db, FakeProvider([value, value, later])).sync_full()
+        result = await service(db, FakeProvider([value, value, later]), lookahead_days=90).sync_full()
         assert result.event_count == 2
         assert all(row.ticker == "AAPL" for row in await db.calendar.get_events(NOW, NOW + timedelta(days=89)))
     asyncio.run(scenario())

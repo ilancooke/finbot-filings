@@ -12,7 +12,7 @@ from .contracts import provider_name
 @dataclass(frozen=True, slots=True)
 class CalendarConfig:
     provider: str = "placeholder"
-    lookahead_days: int = 90
+    lookahead_days: int = 30
     near_term_days: int = 3
     full_refresh_seconds: float = 86400
     near_term_refresh_seconds: float = 0
@@ -53,6 +53,8 @@ class CalendarConfig:
                 if key in values:
                     convert = str if name == "provider" else float if name.endswith("seconds") else int
                     options[name] = convert(values[key])
+            if options.get("provider") == "yahoo" and "provider_attempts" not in options:
+                options["provider_attempts"] = 1
             return cls(**options)
         except (TypeError, ValueError) as exc:
             raise ConfigurationError("invalid calendar configuration") from exc

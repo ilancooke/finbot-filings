@@ -50,6 +50,8 @@ class RuntimeApplication:
         self.worker.metrics = self.worker.discovery.metrics = self.metrics
         self.worker.control.metrics = self.metrics
         self.calendar_service.metrics = self.metrics
+        if hasattr(self.calendar_service.provider, "metrics"):
+            self.calendar_service.provider.metrics = self.metrics
         if hasattr(self.worker.discovery.sec, "metrics"):
             self.worker.discovery.sec.metrics = self.metrics
         self.recovery.progress = lambda: self.progress("recovery")
@@ -59,6 +61,9 @@ class RuntimeApplication:
         sec = self.worker.discovery.sec
         if hasattr(sec, "stop_admissions"):
             sec.stop_admissions()
+        provider = self.calendar_service.provider
+        if hasattr(provider, "stop_admissions"):
+            provider.stop_admissions()
         self.stop.set()
 
     def progress(self, name):
@@ -99,10 +104,16 @@ class RuntimeApplication:
             health = await self.calendar_service.health()
             state = health.state
             success = state.full_success if state is not None else None
-            utc_today = self.clock.now().date()
+            calendar_today = self.calendar_service.today()
+            required_end = calendar_today + timedelta(days=c.lookahead_days - 1)
+            if c.provider == "yahoo":
+                # A daily collection retains its declared coverage after midnight.
+                # Require usable scheduling coverage, not an uncollected rolling tail.
+                required_end = calendar_today + timedelta(days=max(c.near_term_days, self.windows.forward_days) - 1)
             self.scope_matches = success is not None and (
-                success.run.company_ciks == tuple(sorted(ciks)) and success.run.start_date <= utc_today
-                and success.run.end_date >= utc_today + timedelta(days=c.lookahead_days - 1))
+                success.run.company_ciks == tuple(sorted(ciks)) and success.run.start_date <= calendar_today
+                and success.run.end_date >= required_end
+                and (success.run.end_date - success.run.start_date).days + 1 >= c.lookahead_days)
             self.calendar_health = health
             self.scheduler.reload(companies, events, satisfied)
 
@@ -299,6 +310,10 @@ class RuntimeApplication:
         return {"heartbeat_at": self.clock.now().isoformat(), "live": live and not self.draining,
             "draining": self.draining, "tasks": statuses, "calendar_stale": calendar_stale,
             "calendar_full_sync_age_seconds": age, "calendar_scope_matches": self.scope_matches,
+            "calendar_coverage_start": (None if health is None or health.state is None or health.state.full_success is None
+                else health.state.full_success.run.start_date.isoformat()),
+            "calendar_coverage_end": (None if health is None or health.state is None or health.state.full_success is None
+                else health.state.full_success.run.end_date.isoformat()),
             "provider_configured": self.provider_configured, "startup_recovery_complete": self.startup_recovery_complete,
             "last_recovery_at": self.last_recovery.isoformat() if self.last_recovery else None,
             "recovery": self.recovery_summary, "queues": {"polls": self.polls.snapshot(),
@@ -364,6 +379,8 @@ class RuntimeApplication:
             done, _ = await asyncio.wait([stop_waiter, *self.tasks.values()], return_when=asyncio.FIRST_COMPLETED)
             for name, task in self.tasks.items():
                 if task in done:
+                    if self.stop.is_set() and task.cancelled():
+                        continue
                     LOGGER.error("Required runtime task stopped", extra={"task": name})
                     task.result()
                     raise RuntimeError(f"required task returned unexpectedly: {name}")
@@ -409,6 +426,9 @@ class RuntimeApplication:
         for queue in (self.polls, self.filings, self.artifacts):
             queue.discard()
         try:
+            provider = self.calendar_service.provider
+            if hasattr(provider, "close"):
+                await provider.close()
             self.metrics.flush()
         finally:
             self.health_file.remove()

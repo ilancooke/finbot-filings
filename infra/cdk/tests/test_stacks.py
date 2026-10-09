@@ -99,12 +99,32 @@ def test_stopped_fargate_and_no_ingress(templates):
     env = {e["Name"]: e["Value"] for e in c["Environment"]}
     assert env["RUNTIME_SEC_STARTUP_QUIET_SECONDS"] == "150"
     assert env["RUNTIME_METRICS_ENVIRONMENT"] == "example"
+    assert env["CALENDAR_PROVIDER"] == "placeholder"
+    assert env["CALENDAR_LOOKAHEAD_DAYS"] == "30"
     assert "@sha256:" in str(c["Image"])
     assert not resources(runtime, "AWS::EC2::SecurityGroupIngress")
     assert all(not r["Properties"].get("SecurityGroupIngress") for r in resources(runtime, "AWS::EC2::SecurityGroup"))
     assert not resources(runtime, "AWS::EC2::NatGateway")
     assert not resources(runtime, "AWS::ElasticLoadBalancingV2::LoadBalancer")
     assert not resources(runtime, "AWS::ApplicationAutoScaling::ScalableTarget")
+
+
+def test_yahoo_selection_is_explicit_and_does_not_activate_or_add_resources():
+    config = replace(InfraConfig.read(Path(__file__).parents[1] / "config.example.json"), calendar_provider="yahoo")
+    app = App()
+    env = Environment(account=config.account, region=config.region)
+    state = StateStack(app, "yahoo-state", config=config, env=env)
+    stack = IngestionStack(app, "yahoo-runtime", config=config, state=state, env=env)
+    template = Template.from_stack(stack).to_json()
+    container = resources(template, "AWS::ECS::TaskDefinition")[0]["Properties"]["ContainerDefinitions"][0]
+    values = {e["Name"]:e["Value"] for e in container["Environment"]}
+    assert values["CALENDAR_PROVIDER"] == "yahoo"
+    assert values["CALENDAR_PROVIDER_ATTEMPTS"] == "1"
+    assert values["CALENDAR_FULL_REFRESH_SECONDS"] == "86400"
+    assert values["CALENDAR_NEAR_TERM_REFRESH_SECONDS"] == "0"
+    assert values["YAHOO_CACHE_DIR"] == "/tmp/finbot-yahoo"
+    assert resources(template, "AWS::ECS::Service")[0]["Properties"]["DesiredCount"] == 0
+    assert not any("SECRET" in name or "API_KEY" in name for name in values)
 
 
 def test_oidc_and_liveness_alarms(templates):

@@ -31,6 +31,37 @@ def test_sdk_calendar_upsert_is_provider_and_timestamp_guarded(sdk):
     asyncio.run(DynamoDBCalendarRepository(execution).upsert_events([value]))
 
 
+def test_sdk_replacement_base_read_and_guarded_cancellation(sdk):
+    _, stub, execution = sdk
+    value = replace(event(), provider="yahoo", replacement_hint="quarterly-announcement-v1/2026/Q3")
+    at = NOW.replace(hour=1)
+    get = {"TableName":"calendar", "Key":encode({"expected_date":NOW.date().isoformat(), "cik":value.company_cik}),
+           "ConsistentRead":True}
+    stub.add_response("get_item", {"Item":encode(record(value))}, get)
+    stub.add_response("get_item", {"Item":encode(record(value))}, get)
+    tombstone = {**record(replace(value, synced_at=at)), "calendar_active":False}
+    stub.add_response("put_item", {}, {"TableName":"calendar", "Item":encode(tombstone),
+        "ConditionExpression":"attribute_exists(#date) AND #synced = :old",
+        "ExpressionAttributeNames":{"#date":"expected_date", "#synced":"synced_at"},
+        "ExpressionAttributeValues":encode({":old":timestamp(NOW)})})
+    async def scenario():
+        repository = DynamoDBCalendarRepository(execution)
+        assert await repository.get_event(value.expected_date, value.company_cik) == value
+        assert await repository.cancel_event(value, at=at, require_unchanged=True)
+    asyncio.run(scenario())
+
+
+def test_sdk_replacement_guard_rejects_changed_source_without_a_write(sdk):
+    _, stub, execution = sdk
+    value = replace(event(), provider="yahoo", replacement_hint="quarterly-announcement-v1/2026/Q3")
+    changed = replace(value, synced_at=NOW.replace(minute=1), replacement_hint="quarterly-announcement-v1/2026/Q4")
+    stub.add_response("get_item", {"Item":encode(record(changed))}, {"TableName":"calendar",
+        "Key":encode({"expected_date":NOW.date().isoformat(), "cik":value.company_cik}), "ConsistentRead":True})
+    async def scenario():
+        assert not await DynamoDBCalendarRepository(execution).cancel_event(value, at=NOW.replace(hour=1), require_unchanged=True)
+    asyncio.run(scenario())
+
+
 def test_sdk_tombstone_conditional_write_and_lost_acknowledgment_replay(sdk):
     _, stub, execution = sdk
     value = event()

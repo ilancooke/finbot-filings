@@ -308,11 +308,11 @@ are unchanged. Boto3's minimum is 1.43.110, the verified conditional-PUT model.
 
 ### 2.5 Phase 5 implementation notes
 
-Calendar synchronization is implemented with an explicitly unconfigured placeholder
-provider, as authorized by the user. No live provider is selected or contacted.
+Phase 5 delivered synchronization with an explicitly unconfigured placeholder,
+as authorized at that phase. The subsequent Yahoo adapter is described in section 7.
 See section 7 for concrete snapshot, service, cancellation and sync-state contracts.
 Phase 5 did not add scheduling/background refresh; Phase 6 supplies those below.
-Provider HTTP integration, authentication and rate limits await provider selection.
+The Yahoo extension implements separate bounded HTTP/authentication/pacing.
 
 ### 2.6 Phase 6 implementation notes
 
@@ -321,8 +321,8 @@ one SEC client/limiter/executor, shared repositories and IdentityLocks, and one
 CalendarSyncService. Existing explicit services remain usable. The legacy CLI was
 preserved at Phase 6 delivery and removed during Phase 7 cutover.
 The application validates settings before AWS client construction and requires
-existing resources and a nonempty enabled universe. The factory accepts only the
-placeholder until a live provider is selected; offline tests inject adapters.
+existing resources and a nonempty enabled universe. The factory accepts explicit
+placeholder/Yahoo selection; tests inject source responses and never call live providers.
 
 The default required task set has eleven loops: scheduler, recovery, refresh,
 reload, heartbeat, metrics, two company polls, one enumeration and two artifact
@@ -385,11 +385,12 @@ recovery command. Shared operational data and the user's ignored `.env` remain
 untouched. No downstream code relocation occurred.
 
 Runtime dependencies are Boto3, requests, BeautifulSoup and exchange-calendars.
-PyArrow and lxml direct requirements are removed; package enumeration already uses
+At Phase 7, PyArrow and lxml direct requirements were removed; enumeration uses
 the standard-library HTML parser. Exchange calendars still requires pandas, NumPy
 and timezone helpers. Development extras include pytest and the distribution build
 tool. Fresh wheel/sdist and installed-image checks validate the acquisition-only
-dependency boundary. No runtime/domain/storage/event schema changed.
+dependency boundary. The subsequent Yahoo integration pins yfinance/curl_cffi and
+reintroduces lxml transitively for calendar access, without document extraction.
 
 Docker uses a Python 3.12 slim build stage to create application/dependency wheels,
 then installs them without network access in the final stage. Its explicit source
@@ -413,7 +414,8 @@ production entry point/factory with real configuration, limiter and adapters.
 Opt-in containers have network disabled, dummy credentials, a read-only root and
 temporary `/tmp`. Real OS signals, PID 1, non-root installation/session lookup,
 artifact bytes/checkpoints, required-loop failure/return and blocking cleanup are
-tested. Ordinary pytest skips the six Docker cases unless explicitly enabled;
+tested. Phase 7 delivered six cases; the Yahoo extension adds two. Ordinary pytest
+skips all eight Docker cases unless explicitly enabled;
 actual execution is required for Phase 7 completion. See README and
 [PHASE_7_PLAN.md](PHASE_7_PLAN.md) for commands and validation.
 
@@ -488,10 +490,14 @@ ExpectedEarningsEvent(
     provider_updated_at: datetime | None,
     synced_at: datetime,
     raw_provider_payload: dict | None,
+    replacement_hint: str | None = None,
 )
 ```
 
 The provider abstraction must normalize external fields into this model.
+Optional `replacement_hint` accepts versioned quarterly announcement evidence
+(`quarterly-announcement-v1/YYYY/Qn`); it is neither a provider ID nor satisfaction
+identity. Existing records without the field read as None.
 
 ### 3.3 Filing
 
@@ -567,7 +573,8 @@ explicit scoped snapshot in section 7; no other package depends on provider fiel
 class CalendarRepository(Protocol):
     async def upsert_events(self, events: Sequence[ExpectedEarningsEvent]) -> None: ...
     async def get_events(self, start: datetime, end: datetime) -> list[ExpectedEarningsEvent]: ...
-    async def cancel_event(self, event: ExpectedEarningsEvent, *, at: datetime) -> bool: ...
+    async def get_event(self, expected_date: date, cik: str) -> ExpectedEarningsEvent | None: ...
+    async def cancel_event(self, event: ExpectedEarningsEvent, *, at: datetime, require_unchanged: bool = False) -> bool: ...
     async def get_sync_state(self, provider: str) -> CalendarSyncState | None: ...
     async def begin_sync(self, run: CalendarSyncRun) -> CalendarSyncRun: ...
     async def complete_sync(self, success: CalendarSyncSuccess) -> None: ...
@@ -721,6 +728,7 @@ Attributes:
 - provider;
 - provider_event_id;
 - provider_updated_at;
+- replacement_hint (optional, versioned matching evidence);
 - synced_at;
 - raw_provider_payload (optional).
 
@@ -979,6 +987,47 @@ No live resource inspection/mutation was performed.
 
 ## 7. Calendar synchronization
 
+### Yahoo integration contract
+
+[ADR 009](adr/009-use-yahoo-calendar-observations-with-replacement-only-reconciliation.md)
+separates collection completeness from authority to cancel. Yahoo requires explicit
+replacement-only reconciliation. `ExpectedEarningsEvent.replacement_hint` is an
+optional versioned quarterly-announcement title hint, distinct from provider event
+IDs and satisfaction identity. Old records default to no hint. Matching requires
+one old and one incoming event for the same provider/CIK/hint and a changed date;
+multiple candidates or both dates in the snapshot preserve all observations.
+Confirm replacement durability with a strong base-key read before guarded
+cancellation of the unchanged old observation. No new table/index is introduced.
+
+The pinned raw yfinance transport seam validates query/schema/total metadata,
+enumerates bounded day slices with explicit terminal evidence, and repeats each
+slice for consistency. It returns only normalized expectations. Its own blocking
+executor, bounded/paced session and temporary caches are independent of SEC.
+Delivery/validation is recorded in [YAHOO_CALENDAR_PLAN](YAHOO_CALENDAR_PLAN.md).
+`yfinance==1.7.0` and `curl_cffi==0.16.3` are pinned. The adapter uses the private
+`YfData.post` seam with an owned instance rather than the public Calendars dataframe,
+which discards pagination totals and cannot prove an empty collection. This pinned
+compatibility boundary must be reviewed when upgrading. Automatic native redirects
+are disabled; authenticated Yahoo HTTPS hops, retries and crumb requests all consume
+the independent admission budget. Errors/logs omit source bodies, URLs and credentials.
+
+`YahooConfig` defaults to HTTP timeout 20 seconds, request spacing 1 second,
+page size 100, 20 pages per slice, 300 HTTP attempts, 30000 raw rows, a 600-second
+aggregate fetch deadline, two per-request attempts and capped 30-second backoff.
+Bounds include repeated verification/restart work; they are not reset per pass.
+Each day is enumerated twice with equal normalized observations, totals and schema;
+an unstable slice gets at most one restart. Exact and partial final pages require
+an explicit empty query at the reported total. Raw financial extras are ignored.
+New York midnight query boundaries handle DST and adjacent-boundary duplicates;
+only requested inclusive market dates map to enabled unambiguous curated identities.
+Recognized BMO/AMC map to coarse timing; other labels map to unknown.
+
+The native session, yfinance cookie/timezone SQLite caches and all blocking work
+belong to one dedicated worker. Cache state is private temporary state (0700 at
+`/tmp/finbot-yahoo` by default) owned by the runtime UID, never durable calendar
+provenance. Stop closes admissions before waiting for in-flight bounded I/O; cache
+databases/session close on their owner thread before executor shutdown.
+
 ### 7.1 Delivered scope and contracts
 
 Phase 5 implements explicit async `CalendarSyncService.sync_once(start_date,
@@ -1013,22 +1062,28 @@ entire upsert batch before its first write. No raw SDK objects escape adapters.
    reserves strictly increasing observation times even after restart/clock rollback;
    retries of the same request ID return its original canonical run.
 3. Fetch and validate the entire snapshot within configured count/retry bounds.
-4. Strongly query/paginate the date range and upsert returned expectations.
-5. Cancel missing expectations only for that provider, covered enabled CIKs and
-   confirmed dates. Never reconcile a failed/incomplete fetch or unconfirmed range.
+4. Strongly query/paginate existing rows and validate the full upsert batch.
+   For Yahoo include the scheduling lookback to reconcile recent date moves.
+5. Upsert observations, then apply the selected reconciliation policy. Authoritative
+   providers cancel scoped omissions; Yahoo cancels only a unique matching replacement
+   after a strong read confirms the new row exactly. Never reconcile incomplete fetches.
 6. Commit the successful run only after all writes; record material changes/counts.
 
-Date moves within confirmed scope create the new row before cancelling the old.
-Moves across an unconfirmed boundary can temporarily retain the old row until
-coverage includes it. Disabled, other-provider and outside-range rows are not
-removed. Overlapping provider replacement fails; provider migration is explicit
-future work. Stable provider IDs identify date-change logs; without them log
-additions/removals rather than guessing fiscal-period identity.
+Date moves create the new row before cancelling the old. Yahoo matching groups
+provider/CIK/versioned quarterly-title hints; it requires one old candidate absent
+from the new snapshot and one incoming candidate on a different date. Existing
+incoming keys are excluded from old candidates, allowing a fresh snapshot to repair
+interruption after upsert. No missing hint or ambiguous group permits cancellation.
+Known different quarterly hints on the same CIK/date reject the snapshot rather
+than overwrite a distinct event. Disabled, other-provider and outside-reconciliation-
+range rows remain protected. Overlapping provider replacement fails; provider
+migration is future work. No independently verified fiscal identity is claimed.
 
 Cancellation is a conditional PutItem retaining event fields, advancing synced_at
 and setting calendar_active=False. Rows without this flag are active. Equal-time
 conflicting active/tombstone observations fail; older observations are ignored.
-Cancellation rereads on CAS races and cannot erase a newer observation. Repeating
+Cancellation rereads on CAS races and cannot erase a newer observation. Yahoo
+additionally requires the old row to remain exactly unchanged. Repeating
 the same tombstone reports the logical cancellation as applied after a lost ack.
 get_events strongly queries date partitions and skips tombstones after validation,
 continuing every page. No physical deletes, TTL or table scans are introduced.
@@ -1064,17 +1119,22 @@ Cancellation tombstones have no retention/compaction policy in this phase.
 CalendarConfig is isolated and reads process environment/injected mappings without
 implicit .env/credentials/client creation. README/.env.example list exact settings.
 Full cadence defaults daily; optional near-term cadence defaults disabled and
-near-term range to three days. Full lookahead defaults to 90 inclusive days.
+near-term range to three days. Full lookahead defaults to 30 inclusive days.
 Positive count/finite timing bounds are validated. Provider and checkpoint retries
 have separate finite budgets and reuse centralized jitter/backoff. Shared AWS
-permission/resource errors propagate. Future HTTP adapters must use bounded
-offloading, provider-specific budgets/timeouts and sanitized errors.
+permission/resource errors propagate. Yahoo defaults to one outer provider attempt;
+its finite internal request budget/deadline fits below runtime stall allowance with
+a 60-second margin. Other providers retain three outer attempts by default.
 
 health() exposes durable state, age since last full success and a configurable
 stale flag. Never-synchronized providers are stale; near-term success cannot make
 full synchronization fresh. Callers must inspect recorded coverage when the
 company universe or requested range changes. Phase 6 adds scheduling, market-window
-policy, SIGTERM lifecycle and local EMF emission; deployed CloudWatch collection
+policy, SIGTERM lifecycle and local EMF emission. Yahoo uses America/New_York for
+refresh and scheduling dates. An unexpired daily success is reused across a midnight
+restart if its original full span, company scope and current polling-window coverage
+are sufficient. It need not cover the next day's new rolling tail before the daily
+cadence expires. Health includes actual calendar coverage dates. Deployed CloudWatch collection
 and alarms remain Phase 8.
 
 ### 7.5 AWS verification and limits
@@ -1084,9 +1144,10 @@ reuse the existing SDK execution. The four-table/index contract is unchanged.
 AWS MCP confirmed [condition operator precedence](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.OperatorsAndFunctions.html)
 and [single-item conditional writes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/BestPractices_ImplementingVersionControl.html).
 The repository-local SDK model/Stubber validates wire parameters. No live AWS/SEC/
-calendar operations or resource changes are performed. Provider-specific HTTP
-timeouts, credentials, coverage evidence and request limits remain deferred until
-selection; the placeholder is deliberately unusable as a production calendar.
+calendar operations or resource changes were performed during implementation.
+Yahoo HTTP bounds and observed coverage evidence are tested offline; complete
+30-day live validation for an approved production universe remains pending.
+The placeholder is deliberately unusable as a production calendar.
 
 ## 8. Polling scheduler algorithm
 

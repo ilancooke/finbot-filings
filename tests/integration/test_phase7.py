@@ -90,8 +90,11 @@ def fixture_container(docker, scenario="normal"):
                "--health-interval", "1s", "--health-start-period", "5s",
                "--mount", f"type=bind,src={HARNESS},dst=/harness,readonly",
                "--mount", f"type=bind,src={ROOT / 'tests/integration'},dst=/support,readonly",
+               "--mount", f"type=bind,src={ROOT / 'tests'},dst=/test-support,readonly",
                "--mount", f"type=bind,src={ROOT / 'tests/fixtures/sec_package'},dst=/fixtures,readonly"]
-    for key, value in {**ENV, "PYTHONPATH": "/harness:/support", "FINBOT_TEST_SCENARIO": scenario}.items():
+    yahoo = ({"CALENDAR_PROVIDER":"yahoo", "CALENDAR_PROVIDER_ATTEMPTS":"1",
+        "YAHOO_MIN_REQUEST_INTERVAL_SECONDS":".005", "YAHOO_MAX_FETCH_SECONDS":"60"} if scenario.startswith("yahoo") else {})
+    for key, value in {**ENV, **yahoo, "PYTHONPATH": "/harness:/support:/test-support", "FINBOT_TEST_SCENARIO": scenario}.items():
         options.extend(["-e", key + "=" + value])
     try:
         docker(*options, IMAGE)
@@ -145,9 +148,12 @@ from importlib.metadata import distribution
 import finbot_ingestion
 from finbot_ingestion.scheduler.market_sessions import ExchangeMarketSessions
 assert os.getuid() == 10001
-for name in ("finbot_filings", "pyarrow", "lxml", "pytest", "runtime_fixture"):
+for name in ("finbot_filings", "pyarrow", "pytest", "runtime_fixture"):
     assert importlib.util.find_spec(name) is None, name
 assert not distribution("finbot-filings").entry_points
+assert distribution("yfinance").version == "1.7.0"
+for name in ("lxml", "curl_cffi", "yfinance"):
+    assert importlib.util.find_spec(name) is not None, name
 for item in pkgutil.walk_packages(finbot_ingestion.__path__, "finbot_ingestion."):
     __import__(item.name)
 assert ExchangeMarketSessions(start=date(2026,1,1), end=date(2026,12,31)).session(date(2026,10,8))
@@ -209,3 +215,38 @@ def test_required_loop_exit_fails_process(docker, scenario):
         result = final_result(docker, name)
         assert not result["health_exists"]
         assert any(t["kind"] == "shutdown" and t["tasks_done"] for t in result["trace"])
+
+
+@pytest.mark.container
+def test_installed_yahoo_factory_refreshes_with_private_caches_and_stops(docker):
+    with fixture_container(docker, "yahoo") as name:
+        def ready():
+            health = read_json(docker, name, "/tmp/finbot-ingestion-health.json")
+            return health if health and health["provider_configured"] and not health["calendar_stale"] else None
+        health = until(ready, docker, name)
+        assert health["calendar_coverage_start"] and health["calendar_coverage_end"]
+        assert docker("exec", name, "stat", "-c", "%a:%u", "/tmp/finbot-yahoo").stdout.strip() == "700:10001"
+        requests = sum(t["kind"] == "yahoo" for t in trace(docker, name))
+        assert requests >= 62  # every day verified, plus nonempty terminal pages
+        docker("kill", "--signal", "SIGTERM", name)
+        assert docker("wait", name).stdout.strip() == "0", docker("logs", name).stderr
+        result = final_result(docker, name)
+        kinds = [t["kind"] for t in result["trace"]]
+        assert kinds.index("yahoo_closed") < kinds.index("client_closed")
+        assert sum(t["kind"] == "yahoo" for t in result["trace"]) == requests
+
+
+@pytest.mark.container
+def test_installed_yahoo_shutdown_waits_for_http_without_new_admissions(docker):
+    with fixture_container(docker, "yahoo_blocking") as name:
+        until(lambda:any(t["kind"] == "yahoo_blocked" for t in trace(docker, name)), docker, name)
+        docker("kill", "--signal", "SIGTERM", name)
+        until(lambda:any(t["kind"] == "stop" for t in trace(docker, name)), docker, name)
+        assert not any(t["kind"] == "yahoo_closed" for t in trace(docker, name))
+        count = sum(t["kind"] == "yahoo" for t in trace(docker, name))
+        docker("exec", name, "touch", "/tmp/fixture/release")
+        assert docker("wait", name).stdout.strip() == "0", docker("logs", name).stderr
+        result = final_result(docker, name)
+        kinds = [t["kind"] for t in result["trace"]]
+        assert kinds.index("yahoo_released") < kinds.index("yahoo_closed") < kinds.index("client_closed")
+        assert sum(t["kind"] == "yahoo" for t in result["trace"]) == count

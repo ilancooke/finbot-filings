@@ -24,8 +24,24 @@ class InfraConfig:
     publish_error_threshold: int = 3
     discovery_latency_ms: float = 60000
     failed_work_age_seconds: float = 300
+    calendar_provider: str = "placeholder"
+    calendar_lookahead_days: int = 30
+    calendar_full_refresh_seconds: float = 86400
+    calendar_near_term_refresh_seconds: float = 0
+    yahoo_cache_dir: str = "/tmp/finbot-yahoo"
 
     def __post_init__(self):
+        if self.calendar_provider not in {"placeholder", "yahoo"}:
+            raise ValueError("calendar provider must be placeholder or yahoo")
+        if type(self.calendar_lookahead_days) is not int or not 3 <= self.calendar_lookahead_days <= 360:
+            raise ValueError("calendar lookahead must be 3–360 days including repository lookback margin")
+        for name in ("calendar_full_refresh_seconds", "calendar_near_term_refresh_seconds"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or (name == "calendar_full_refresh_seconds" and value == 0):
+                raise ValueError("invalid calendar refresh interval")
+        path = Path(self.yahoo_cache_dir)
+        if not path.is_absolute() or path == Path("/tmp") or Path("/tmp") not in path.parents or ".." in path.parts:
+            raise ValueError("ECS Yahoo cache must be a private directory below writable /tmp")
         if not re.fullmatch(r"\d{12}", self.account):
             raise ValueError("account must contain 12 digits")
         if not re.fullmatch(r"[a-z]{2}(?:-[a-z]+)+-\d", self.region):

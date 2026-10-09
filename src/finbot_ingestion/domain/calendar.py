@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
+import re
 
 from .identity import normalize_cik, normalize_ticker
 from .validation import utc_datetime
@@ -19,6 +20,7 @@ class ExpectedEarningsEvent:
     provider_event_id: str | None = None
     provider_updated_at: datetime | None = None
     raw_provider_payload: dict[str, Any] | None = None
+    replacement_hint: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "company_cik", normalize_cik(self.company_cik))
@@ -31,3 +33,6 @@ class ExpectedEarningsEvent:
         if self.provider_updated_at is not None:
             object.__setattr__(self, "provider_updated_at", utc_datetime(
                 self.provider_updated_at, "provider_updated_at"))
+        if self.replacement_hint is not None and (not isinstance(self.replacement_hint, str)
+                or not re.fullmatch(r"quarterly-announcement-v1/[12]\d{3}/Q[1-4]", self.replacement_hint)):
+            raise ValueError("invalid versioned calendar replacement hint")

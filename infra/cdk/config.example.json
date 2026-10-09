@@ -6,5 +6,10 @@
   "sec_user_agent": "Finbot your-email@example.com",
   "github_subject": "repo:EXAMPLE/finbot-filings:ref:refs/heads/main",
   "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "monitoring_enabled": false
+  "monitoring_enabled": false,
+  "calendar_provider": "placeholder",
+  "calendar_lookahead_days": 30,
+  "calendar_full_refresh_seconds": 86400,
+  "calendar_near_term_refresh_seconds": 0,
+  "yahoo_cache_dir": "/tmp/finbot-yahoo"
 }

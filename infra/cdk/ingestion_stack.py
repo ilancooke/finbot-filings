@@ -52,7 +52,12 @@ class IngestionStack(Stack):
                 operating_system_family=ecs.OperatingSystemFamily.LINUX))
         self.task.add_volume(name="heartbeat")
         env = {"AWS_REGION": config.region, "SEC_USER_AGENT": config.sec_user_agent,
-            "SEC_MAX_REQUESTS_PER_SECOND": "5", "CALENDAR_PROVIDER": "placeholder",
+            "SEC_MAX_REQUESTS_PER_SECOND": "5", "CALENDAR_PROVIDER": config.calendar_provider,
+            "CALENDAR_LOOKAHEAD_DAYS": str(config.calendar_lookahead_days),
+            "CALENDAR_FULL_REFRESH_SECONDS": str(config.calendar_full_refresh_seconds),
+            "CALENDAR_NEAR_TERM_REFRESH_SECONDS": str(config.calendar_near_term_refresh_seconds),
+            "CALENDAR_PROVIDER_ATTEMPTS": "1" if config.calendar_provider == "yahoo" else "3",
+            "YAHOO_CACHE_DIR": config.yahoo_cache_dir,
             "ARTIFACT_BUCKET": state.bucket.bucket_name,
             "ARTIFACT_READY_TOPIC_ARN": state.topic.topic_arn,
             "INGESTION_DEAD_LETTER_QUEUE_URL": state.failed_work.queue_url,

@@ -1,0 +1,96 @@
+{
+  "finance": {
+    "error": null,
+    "result": [
+      {
+        "total": 1,
+        "rawCriteria": "{\"sortType\": \"DESC\", \"entityIdType\": \"sp_earnings\", \"sortField\": \"intradaymarketcap\", \"includeFields\": [\"ticker\", \"companyshortname\", \"eventname\", \"startdatetime\", \"startdatetimetype\"], \"size\": 100, \"offset\": 0, \"query\": {\"operator\": \"AND\", \"operands\": [{\"operator\": \"EQ\", \"operands\": [\"region\", \"us\"]}, {\"operator\": \"OR\", \"operands\": [{\"operator\": \"EQ\", \"operands\": [\"eventtype\", \"EAD\"]}, {\"operator\": \"EQ\", \"operands\": [\"eventtype\", \"ERA\"]}]}, {\"operator\": \"GTE\", \"operands\": [\"startdatetime\", \"2026-10-13\"]}, {\"operator\": \"LTE\", \"operands\": [\"startdatetime\", \"2026-10-14\"]}]}}",
+        "criteriaMeta": {
+          "size": 100,
+          "offset": 0,
+          "sortField": "intradaymarketcap",
+          "sortType": "DESC",
+          "entityIdType": "SP_EARNINGS",
+          "topOperator": "AND",
+          "criteria": [
+            {
+              "field": "region",
+              "operators": [
+                "EQ"
+              ],
+              "values": [],
+              "labelsSelected": [
+                53
+              ]
+            },
+            {
+              "field": "eventtype",
+              "operators": [
+                "EQ",
+                "EQ"
+              ],
+              "values": [
+                "EAD",
+                "ERA"
+              ]
+            },
+            {
+              "field": "startdatetime",
+              "operators": [
+                "GTE"
+              ],
+              "values": [
+                "2026-10-13T00:00:00-04:00"
+              ]
+            },
+            {
+              "field": "startdatetime",
+              "operators": [
+                "LTE"
+              ],
+              "values": [
+                "2026-10-14T00:00:00-04:00"
+              ]
+            }
+          ]
+        },
+        "documents": [
+          {
+            "entityIdType": "SP_EARNINGS",
+            "columns": [
+              {
+                "id": "ticker",
+                "type": "STRING"
+              },
+              {
+                "id": "companyshortname",
+                "type": "STRING"
+              },
+              {
+                "id": "eventname",
+                "type": "STRING"
+              },
+              {
+                "id": "startdatetime",
+                "type": "DATE"
+              },
+              {
+                "id": "startdatetimetype",
+                "type": "STRING"
+              }
+            ],
+            "rows": [
+              [
+                "AAPL",
+                "Synthetic company",
+                "Q3 2026 Earnings Announcement",
+                "2026-10-13T20:00:00Z",
+                "AMC"
+              ]
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

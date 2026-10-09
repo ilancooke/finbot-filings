@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import threading
 import time
+from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import boto3.session
 
@@ -125,6 +127,46 @@ def install():
 
     import requests
     requests.Session = Session
+
+    # Native curl sockets bypass the Python socket guard in sitecustomize.
+    from curl_cffi.requests import Session as CurlSession
+    def forbidden(*args, **kwargs):
+        raise AssertionError("native network is forbidden in lifecycle tests")
+    CurlSession.request = forbidden
+
+    if scenario.startswith("yahoo"):
+        from yahoo_fakes import raw_page, row
+        from finbot_ingestion.calendar.providers.yahoo_client import YahooSession, YahooPageClient
+        blocked = False
+        def perform(session, method, url, **kwargs):
+            nonlocal blocked
+            trace("yahoo", operation="calendar" if "visualization" in url else "auth")
+            if url.endswith("getcrumb"):
+                return SimpleNamespace(status_code=200, content=b"fixture-crumb", text="fixture-crumb", headers={})
+            if "visualization" not in url:
+                return SimpleNamespace(status_code=404, content=b"", headers={})
+            if scenario == "yahoo_blocking" and not blocked:
+                blocked = True
+                trace("yahoo_blocked")
+                deadline = time.monotonic() + 20
+                while not (root / "release").exists():
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("Yahoo fixture blocking call was never released")
+                    time.sleep(.01)
+                trace("yahoo_released")
+            from datetime import date
+            body = kwargs["json"]
+            day = date.fromisoformat(body["query"]["operands"][2]["operands"][1])
+            today = datetime.now(ZoneInfo("America/New_York")).date()
+            rows = [row(day)] if day == today and body["offset"] == 0 else []
+            payload = raw_page(day, body["size"], body["offset"], rows, int(day == today))
+            return SimpleNamespace(status_code=200, content=b"{}", headers={}, json=lambda:payload)
+        YahooSession._perform = perform
+        original_yahoo_close = YahooPageClient.close
+        def close_yahoo(client):
+            original_yahoo_close(client)
+            trace("yahoo_closed")
+        YahooPageClient.close = close_yahoo
 
     original_stop = RuntimeApplication.request_stop
 

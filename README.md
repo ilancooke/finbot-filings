@@ -9,9 +9,10 @@ interpretation, earnings extraction, features and consumer queues belong downstr
 The supported runtime/container uses only `finbot_ingestion`; the superseded
 namespace and extraction commands were removed in Phase 7. Phase 8 adds CDK,
 application delivery, health alarms and the agreed conservative recovery policy.
-Infrastructure and workflows are validated offline; no AWS resources are deployed. No live earnings
-calendar adapter or authoritative production company universe has been selected.
-The placeholder reports unavailable calendar coverage; it cannot supply a calendar.
+Infrastructure and workflows are validated offline; no AWS resources are deployed.
+The Yahoo/yfinance earnings-calendar adapter is implemented and tested offline.
+Provider selection remains explicit; the default placeholder reports unavailable
+coverage. The authoritative production company universe and live validation remain pending.
 
 ## Install and validate
 
@@ -28,8 +29,10 @@ python3.12 -m venv .venv
 Routine tests block network access and use temporary data, fake transports and
 SDK Stubber/stateful clients. Docker lifecycle tests are separately enabled below.
 `build` creates an sdist and a wheel under ignored `dist/`. Runtime dependencies
-are Boto3, requests, BeautifulSoup and exchange-calendars. The latter needs pandas,
-NumPy and timezone/calendar helpers; ingestion does not depend on PyArrow or lxml.
+include Boto3, requests, BeautifulSoup, exchange-calendars, `yfinance==1.7.0`
+and `curl_cffi==0.16.3`. The calendar libraries need pandas, NumPy, lxml and timezone
+helpers. lxml is a yfinance dependency; no document extraction was reintroduced.
+Ingestion does not depend on PyArrow.
 
 ## Supported commands
 
@@ -40,7 +43,7 @@ NumPy and timezone/calendar helpers; ingestion does not depend on PyArrow or lxm
 .venv/bin/python -m finbot_ingestion.main --health-check
 ```
 
-Normal execution contacts AWS and SEC. It requires an identifying SEC User-Agent,
+Normal execution contacts AWS, SEC and, when selected, Yahoo. It requires an identifying SEC User-Agent,
 existing AWS resources/indexes, valid AWS credentials and a nonempty enabled
 company universe. It never provisions or seeds resources. Help needs no service
 configuration. Health checks need only runtime settings and make no AWS/SEC calls;
@@ -93,8 +96,8 @@ docker exec finbot-ingestion python -m finbot_ingestion.main --health-check
 docker stop --timeout 120 finbot-ingestion
 ```
 
-SIGTERM/SIGINT stops poll producers and all new SEC HTTP admissions, including
-retries and redirects. In-flight I/O and safe checkpoints can finish within the
+SIGTERM/SIGINT stops poll producers and all new SEC and Yahoo HTTP admissions,
+including authentication, retries and redirects. In-flight I/O and safe checkpoints can finish within the
 existing cleanup procedure; queued SEC work remains recoverable. Bounded queues
 drain within the configured grace, then remaining tasks cancel cooperatively. Blocking
 HTTP/SDK calls finish before clients close. The default 30-second drain grace is
@@ -117,13 +120,15 @@ FINBOT_CONTAINER_TESTS=1 FINBOT_CONTAINER_IMAGE=finbot-ingestion:phase8 \
 ```
 
 Docker must be accessible from the execution environment. Opted-in tests fail if
-Docker/the image is unavailable; ordinary pytest clearly skips these six cases.
+Docker/the image is unavailable; ordinary pytest clearly skips these eight cases.
 They mount a test-only startup shim and reusable stateful boundaries outside the
 image, leaving the production entry point, configuration, real SEC limiter,
 repositories and supervision intact. Containers have `--network none`, dummy
 credentials, read-only filesystems and temporary fixture state. Tests cover
 installed imports/dependencies, health, PID 1, SIGTERM/SIGINT, original bytes and
 publication, blocked I/O cleanup and unexpected required-loop failure/return.
+Yahoo cases exercise the installed factory through synthetic native-HTTP responses,
+private writable caches and shutdown during a blocked calendar request.
 No mock-mode switch is shipped in the application.
 
 ## Acquisition and durable contracts
@@ -212,12 +217,39 @@ command remains deferred; deleting raw objects is not a repair procedure.
 
 ## Calendar, scheduling and observability
 
-Only `CALENDAR_PROVIDER=placeholder` is wired. It raises
-`CalendarProviderNotConfigured`, never invents an empty snapshot and cannot clear
-expectations or establish freshness. Injected provider contracts require complete,
-validated snapshots of exact company/date scope before cancellation. Existing
-expectations survive failed/incomplete refreshes. Full and near-term success scopes
-are distinct; near-term refresh never establishes full freshness.
+Select `CALENDAR_PROVIDER=yahoo` to enable Yahoo observations for the enabled
+curated ticker/CIK universe. Defaults are 30 inclusive calendar days, one refresh
+daily after the previous refresh completes, and no near-term refresh. Dates use
+America/New_York; a refresh on D covers D through D+29. An unexpired success that
+still covers the polling window survives a midnight restart. Changed company
+scope or insufficient scheduling coverage triggers a refresh.
+
+The pinned yfinance transport collects raw day slices, checks query/schema/totals,
+requires terminal pagination evidence and repeats each slice for consistency.
+It uses its own single-worker executor, pacing and finite HTTP/row/page/deadline
+budgets. This establishes validated observed collection, not independently verified
+Yahoo coverage of every company. Malformed, capped or inconsistent collections
+preserve expectations and the last successful freshness checkpoint.
+
+Yahoo supplies scheduling hints, not cancellation authority. An empty or missing
+observation preserves an existing expectation. Only an unambiguous date move with
+the same provider, CIK and recognized quarterly-announcement title can replace an
+old row. The replacement is strongly confirmed durable before guarded cancellation
+of the unchanged old row. Unknown titles, multiple candidates and both dates in a
+snapshot remain active. A versioned `replacement_hint` is matching evidence;
+Yahoo event IDs remain null. Date moves do not inherit event satisfaction.
+No EPS, revenue, estimates or market-cap data are persisted.
+
+`CALENDAR_PROVIDER=placeholder` remains the default. It raises
+`CalendarProviderNotConfigured`, never invents an empty snapshot and cannot
+establish freshness. Authoritative fixture providers retain scoped omission-based
+reconciliation. Full and near-term success scopes remain distinct.
+
+Yahoo caches are private, process-local temporary state at `/tmp/finbot-yahoo` by
+default. Keep that directory writable by the runtime user, including with a
+read-only root filesystem. Cookies/crumbs never belong in DynamoDB, logs or images.
+Only one Yahoo client owns yfinance cache state per process. Help and health-check
+commands neither initialize Yahoo nor make provider requests.
 
 The runtime uses coarse five-minute durable reloads and memory-only scheduler ticks.
 Completion-based active polling defaults to ten seconds; all-day safety polling to
@@ -261,7 +293,8 @@ utilities need only their own relevant settings.
 | DynamoDB execution | Connect/read timeouts 5/10 seconds, 3 attempts, page size 100, 4 workers, 4 CAS attempts, maximum date span 366 days; `DYNAMODB_*` names in example |
 | Storage/messaging | Required `ARTIFACT_BUCKET`, same-region standard `ARTIFACT_READY_TOPIC_ARN`, standard `INGESTION_DEAD_LETTER_QUEUE_URL`; `MAX_ARTIFACT_BYTES=67108864` |
 | Ingestion | AWS connect/read 5/30 seconds, attempts/workers 3/2, stage failures 3, checkpoint/dead-letter attempts 3/3, inflight artifacts 2, recovery page 100, backoff 1/30 seconds; `INGESTION_*` names in example |
-| Calendar | Placeholder provider, lookahead/near-term 90/3 days, full/near-term refresh 86400/0 seconds, stale after 172800 seconds, maximum companies/events 1000/5000, company page 100, provider/checkpoint attempts 3/3, backoff 1/30 seconds |
+| Calendar | Provider `placeholder` or `yahoo` (default placeholder), lookahead/near-term 30/3 days, full/near-term refresh 86400/0 seconds, stale after 172800 seconds, maximum companies/events 1000/5000, company page 100, provider attempts 1 for Yahoo or 3 otherwise, checkpoint attempts 3, backoff 1/30 seconds |
+| Yahoo | HTTP timeout 20 seconds, request spacing 1 second, page size 100, maximum pages per slice 20, HTTP attempts 300, raw rows 30000, whole-fetch deadline 600 seconds, request attempts 2, backoff cap 30 seconds, cache `/tmp/finbot-yahoo`; `YAHOO_*` names in example |
 | Runtime | XNYS / America/New_York, active/safety 10/3600 seconds, reload/recovery/tick 300/60/1 seconds, refresh retry 60 seconds, poll/enumeration workers 2/1, company/filing/artifact queues 1000/100/200 |
 | Runtime startup/metrics | `RUNTIME_SEC_STARTUP_QUIET_SECONDS=0` locally (150 in ECS), `RUNTIME_METRICS_ENVIRONMENT=local` (deployment environment in ECS) |
 | Runtime health | Metrics/heartbeat 5/30 seconds, stall allowance 1800 seconds, shutdown grace 30 seconds, `RUNTIME_HEALTH_PATH=/tmp/finbot-ingestion-health.json` |
@@ -272,6 +305,8 @@ and is allowed for the SEC startup quiet period. Metrics environment must contai
 Backoff cap must be at least base; active cadence cannot exceed safety cadence.
 Runtime worker counts are bounded 1–16 and queues 1–10,000. Health path must be
 absolute; derived reload coverage must fit the repository date-span bound.
+Yahoo requires the America/New_York market timezone. Its aggregate fetch/retry
+budget must fit below the runtime stall allowance with a 60-second margin.
 SEC retries include network/timeouts, 403/429/5xx and package-index 404, with bounded
 jitter and Retry-After. Redirects stay on official HTTPS SEC hosts and consume budget.
 
@@ -306,8 +341,9 @@ git worktree add --detach ../finbot-filings-legacy 59cacd78a1da01d00b913c2e67185
 No permanent legacy subtree or compatibility CLI remains. Downstream relocation
 requires separate work. Global EDGAR feeds, Company Facts, multiple calendar
 providers, distributed rate limiting, multiple ingestion tasks, RAG and extraction
-remain outside v0. Next milestones: provider/universe selection, separately authorized manual
-infrastructure deployment, live validation and production activation.
+remain outside v0. Next milestones: production universe approval, ongoing provider
+access, full 30-day live validation, separately authorized manual infrastructure
+deployment and production activation.
 
 ## Phase 8 infrastructure and delivery
 
@@ -327,7 +363,12 @@ never deploy the default dummy inputs. CDK owns retained state and a runtime
 service at desired count zero. GitHub CI has no AWS credentials; delivery uses
 scoped OIDC, immutable tags/digests and an explicit STOPPED handoff. Stopped
 environments stay stopped until separate readiness approval and manual activation.
-The calendar provider and authoritative universe remain unresolved.
+For Yahoo, set `calendar_provider` to `yahoo` in the CDK JSON configuration.
+It emits the explicit provider, 30-day/daily defaults,
+one outer attempt and a writable `/tmp` cache path; desired count stays zero.
+See [YAHOO_CALENDAR_PLAN](docs/YAHOO_CALENDAR_PLAN.md) and
+[ADR 009](docs/adr/009-use-yahoo-calendar-observations-with-replacement-only-reconciliation.md)
+for delivery, reconciliation and remaining live-validation limits.
 
 Automatic ECS recovery uses min/max 0/100, a 120-second stop timeout and a
 150-second quiet period before SEC traffic. This is conservative protection,

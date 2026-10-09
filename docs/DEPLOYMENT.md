@@ -66,6 +66,14 @@ value and export `FINBOT_INFRA_CONFIG` as its absolute path. Fields:
 | sec_error_threshold / publish_error_threshold | Error alarm counts per minute; defaults 10 / 3 |
 | discovery_latency_ms / failed_work_age_seconds | Latency/queue-age thresholds; defaults 60000 / 300 |
 | cpu / memory_mib | Default 512/1024; validated v0 Fargate combinations |
+| calendar_provider | Explicit `placeholder` (default, unavailable) or `yahoo` |
+| calendar_lookahead_days | Inclusive full scope; default 30, range 3–360 with repository lookback margin |
+| calendar_full_refresh_seconds / calendar_near_term_refresh_seconds | Completion-based full cadence 86400; optional near-term cadence 0 (disabled) |
+| yahoo_cache_dir | Private directory below writable `/tmp`, default `/tmp/finbot-yahoo` |
+
+These fields are JSON configuration inputs, not `cdk -c` context overrides.
+The task sets `CALENDAR_PROVIDER_ATTEMPTS=1` for Yahoo and 3 for placeholder.
+Changing provider configuration does not activate the stopped service.
 
 Verify your repository's actual OIDC subject before setup, including any immutable
 subject customization. For an environment subject, restrict the production GitHub
@@ -165,12 +173,15 @@ interrupt restoration, so the manifest/manual recovery remain necessary.
 
 ## Production readiness and activation
 
-Both external inputs remain unresolved. Do not set the approval flag or start
-production until all of these are complete:
+The Yahoo adapter is implemented offline; production inputs and live verification
+remain pending. Do not set the approval flag or start production until these are complete:
 
-1. Select and implement the live earnings-calendar adapter, verify complete scoped
-   coverage/access and its credential mechanism. The current factory supports only
-   placeholder, which cannot establish calendar readiness. This is separate work.
+1. Verify complete 30-day scoped Yahoo coverage for the approved universe and
+   resolve the ongoing access arrangement. Set `calendar_provider` to `yahoo` in
+   reviewed CDK context/JSON configuration. The runtime uses keyless pinned yfinance,
+   private `/tmp/finbot-yahoo` caches, 30-day daily refresh and replacement-only
+   reconciliation. The default placeholder cannot establish readiness. Offline
+   fixture tests and the earlier partial live probe do not satisfy this live gate.
 2. Approve the authoritative company universe and explicitly authorize seeding.
    Use the existing repository Company contract (CIK padded to ten digits, ticker,
    name, enabled, repository_schema_version=1, enabled_marker=ENABLED for enabled

@@ -13,6 +13,9 @@ def offline_environment(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
     monkeypatch.setattr(socket, "create_connection", forbidden)
+    # curl_cffi performs native socket calls, bypassing Python's socket guard.
+    from curl_cffi.requests import Session
+    monkeypatch.setattr(Session, "request", forbidden)
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")

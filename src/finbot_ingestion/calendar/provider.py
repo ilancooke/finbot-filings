@@ -1,4 +1,4 @@
-"""A complete snapshot is authoritative only for its declared date/company scope."""
+"""Complete collection and authority to cancel are distinct provider contracts."""
 
 from collections.abc import Sequence
 from datetime import date

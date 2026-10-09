@@ -26,6 +26,9 @@ def build_application(stack, environ=None):
     from .repositories.dynamodb.satisfaction import DynamoDBSatisfactionRepository
     from .calendar.config import CalendarConfig
     from .calendar.service import CalendarSyncService
+    from .calendar.providers import PlaceholderCalendarProvider
+    from .calendar.reconciliation import ReplacementOnlyPolicy
+    from .calendar.providers.yahoo_config import YahooConfig
     from .ingestion.config import WorkflowConfig
     from .ingestion.work_control import WorkControl
     from .ingestion.discovery_service import DiscoveryService
@@ -46,12 +49,17 @@ def build_application(stack, environ=None):
     calendar, workflow = CalendarConfig.from_env(environ), WorkflowConfig.from_env(environ)
     if not 1 <= workflow.max_inflight_artifacts <= 16:
         raise ConfigurationError("runtime artifact worker count must be in [1, 16]")
-    if calendar.provider != "placeholder":
-        raise ConfigurationError("no live calendar provider is implemented; inject an adapter for offline runtime tests")
+    if calendar.provider not in {"placeholder", "yahoo"}:
+        raise ConfigurationError("calendar provider must be placeholder or yahoo")
+    yahoo = YahooConfig.from_env(environ) if calendar.provider == "yahoo" else None
+    if yahoo is not None and runtime.market_timezone != "America/New_York":
+        raise ConfigurationError("Yahoo date-only queries require America/New_York market timezone")
+    if yahoo is not None and (yahoo.max_fetch_seconds * calendar.provider_attempts
+            + calendar.backoff_cap_seconds * (calendar.provider_attempts - 1) >= runtime.stall_seconds - 60):
+        raise ConfigurationError("Yahoo fetch/retry budget requires runtime stall allowance plus checkpoint margin")
     if db_config.region != aws.region or aws.region != messaging.region:
         raise ConfigurationError("AWS regions must agree")
     clock = Clock()
-    today = clock.now().date()
     # Rebuild annually through a rolling adapter below, rather than expire a long-running task.
     class RollingSessions:
         def __init__(self):
@@ -63,9 +71,10 @@ def build_application(stack, environ=None):
             return self.adapter.session(day)
 
     windows = WindowPolicy(RollingSessions(), runtime)
+    today = clock.now().astimezone(windows.zone).date()
     if windows.lookback_days + max(calendar.near_term_days, windows.forward_days) > db_config.max_calendar_range_days:
         raise ConfigurationError("runtime lookback/near-term range exceeds DynamoDB maximum")
-    if calendar.lookahead_days > db_config.max_calendar_range_days:
+    if calendar.lookahead_days + (windows.lookback_days if yahoo is not None else 0) > db_config.max_calendar_range_days:
         raise ConfigurationError("calendar lookahead exceeds DynamoDB maximum")
     # Validate exchange adapter availability before any AWS client construction.
     windows.sessions.session(today)
@@ -81,9 +90,20 @@ def build_application(stack, environ=None):
     downloader = ArtifactDownloader(sec, sec_execution, S3ArtifactStore(s3, storage), max_artifact_bytes=storage.max_artifact_bytes)
     worker = IngestionWorker(discovery, downloader, SNSArtifactEventPublisher(sns, messaging),
         SQSDeadLetterPublisher(sqs, messaging), filings, artifacts, control)
+    if yahoo is not None:
+        from .calendar.providers.yahoo import YahooEarningsCalendarProvider
+        yahoo_execution = stack.enter_context(BlockingExecution(max_workers=1, name="yahoo"))
+        provider = YahooEarningsCalendarProvider(yahoo, yahoo_execution, market_timezone=runtime.market_timezone,
+                                                now=clock.now)
+        calendar_service = CalendarSyncService(provider, companies, events, calendar, now=clock.now,
+            reconciliation=ReplacementOnlyPolicy(), market_timezone=runtime.market_timezone,
+            reconciliation_lookback_days=windows.lookback_days)
+    else:
+        calendar_service = CalendarSyncService(PlaceholderCalendarProvider(), companies, events, calendar,
+                                               now=clock.now, market_timezone=runtime.market_timezone)
     application = RuntimeApplication(config=runtime, clock=clock, windows=windows, worker=worker,
         recovery=RecoveryService(worker), satisfaction=DynamoDBSatisfactionRepository(db, filings),
-        calendar_service=CalendarSyncService.with_placeholder(companies, events, calendar))
+        calendar_service=calendar_service)
     for execution in (db, *executions):
         execution.metrics = application.metrics
     return application

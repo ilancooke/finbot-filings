@@ -1,9 +1,10 @@
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from finbot_ingestion.domain import ExpectedEarningsEvent
 from finbot_ingestion.domain.validation import utc_datetime
+from finbot_ingestion.domain.identity import normalize_cik
 from finbot_ingestion.calendar.contracts import CalendarSyncRun, CalendarSyncState, provider_name
 from ..errors import RepositoryBusy, RepositoryConflict, RepositoryDataError
 from .base import DynamoDBRepository
@@ -48,7 +49,20 @@ class DynamoDBCalendarRepository(DynamoDBRepository):
                 if existing["synced_at"] == item["synced_at"] and (not active or existing != item):
                     raise RepositoryConflict("different calendar observations share synced_at")
 
-    async def cancel_event(self, event: ExpectedEarningsEvent, *, at: datetime) -> bool:
+    async def get_event(self, expected_date: date, cik: str) -> ExpectedEarningsEvent | None:
+        if type(expected_date) is not date:
+            raise ValueError("expected_date must be a date")
+        response = await self._call("get_item", Key=encode({
+            "expected_date": expected_date.isoformat(), "cik": normalize_cik(cik)}), ConsistentRead=True)
+        if "Item" not in response:
+            return None
+        event, active = active_event(decode(response["Item"]))
+        if event.expected_date != expected_date or event.company_cik != normalize_cik(cik):
+            raise RepositoryConflict("calendar get returned a different identity")
+        return event if active else None
+
+    async def cancel_event(self, event: ExpectedEarningsEvent, *, at: datetime,
+                           require_unchanged: bool = False) -> bool:
         """Keep an observation tombstone so delayed upserts cannot resurrect it."""
         at = utc_datetime(at, "at")
         key = encode({"expected_date": event.expected_date.isoformat(), "cik": event.company_cik})
@@ -64,7 +78,11 @@ class DynamoDBCalendarRepository(DynamoDBRepository):
             if current.synced_at > at:
                 return False
             if not active and current.synced_at == at:
+                if require_unchanged and replace(current, synced_at=event.synced_at) != event:
+                    return False
                 return True  # Repair an ambiguous acknowledgment for this cancellation.
+            if require_unchanged and current != event:
+                return False
             if current.synced_at == at:
                 raise RepositoryConflict("active and cancelled observations share synced_at")
             proposed = {**item, "synced_at": record(replace(current, synced_at=at))["synced_at"],

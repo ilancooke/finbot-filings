@@ -40,7 +40,7 @@ The service exists as a reusable platform component because the same SEC documen
 ## 4. Key assumptions
 
 - The initial company universe is curated and contains a stable mapping of ticker to SEC CIK.
-- One earnings-calendar provider will be used in v0. The exact provider is TBD and must be isolated behind an interface so it can be replaced.
+- Yahoo/yfinance is the selected v0 calendar adapter, isolated behind an interface so it can be replaced. Production coverage and ongoing access still require validation.
 - The earnings calendar is a scheduling hint, not a source of truth. EDGAR remains authoritative for actual filings.
 - Companies may publish earlier/later than expected and calendar data may change.
 - A filing may contain multiple child documents such as the primary filing, EX-99.1 earnings release, presentation PDFs, and other exhibits.
@@ -107,21 +107,30 @@ The universe is intentionally curated in v0. Automatic expansion and exchange-ma
 
 ### 6.2 Earnings calendar adapter
 
+Yahoo implementation follows [ADR 009](adr/009-use-yahoo-calendar-observations-with-replacement-only-reconciliation.md):
+daily 30-day observations, market-local dates, independently validated collection
+completeness and replacement-only reconciliation. Missing observations alone do not
+cancel expectations. Existing authoritative-snapshot providers retain their policy.
+The Yahoo adapter is delivered and validated offline under
+[YAHOO_CALENDAR_PLAN](YAHOO_CALENDAR_PLAN.md). Production universe approval,
+full 30-day live coverage validation and activation remain separate work.
+
 Responsibilities:
 
 - fetch upcoming expected earnings dates/times from one provider;
 - normalize provider-specific fields;
 - store/update expected events in DynamoDB;
-- preserve provider raw values where useful for debugging;
+- preserve bounded scheduling diagnostics where useful for debugging;
 - expose a provider-independent contract to the rest of the service.
 
-The exact provider is TBD.
-
-Phase 5 implements this boundary with a placeholder that fails explicitly until a
-provider is selected. Complete scoped snapshots drive safe expectation updates,
-date-move/cancellation reconciliation and durable full/near-term sync checkpoints.
-Failed or incomplete provider fetches preserve existing expectations. Recurring
-refresh scheduling is coordinated by the Phase 6 runtime.
+The factory supports `placeholder` (the default, explicitly unavailable) and
+`yahoo`. Yahoo uses pinned yfinance transport, an independent bounded executor and
+private temporary caches. Complete scoped observations permit updates and durable
+full/near-term sync checkpoints; cancellation authority is a separate policy.
+Failed or incomplete fetches preserve existing expectations. Yahoo missing rows
+also preserve expectations. Unique quarterly-title date replacements are confirmed
+durable before cancellation; ambiguous observations remain active. Recurring
+refresh scheduling is coordinated by the runtime and measured after completion.
 
 ### 6.3 Scheduler
 
@@ -458,10 +467,8 @@ Likely future changes:
 
 ## 15. Open decisions
 
-The following are intentionally unresolved:
-
-1. earnings-calendar provider;
-2. exact active-window timings and safety-poll cadence;
-3. exact DynamoDB partition/sort key layout, finalized in LLD/implementation;
-4. exact retry counts/backoff constants;
-5. exact CloudWatch alarm thresholds.
+The authoritative production universe, ongoing Yahoo access and full 30-day live
+coverage validation remain unresolved. Manual infrastructure deployment and
+production activation require separate authorization. Window/cadence/retry/alarm
+defaults and the four-table schema are implemented in LLD; production tuning remains
+configurable and must be informed by observed workload.

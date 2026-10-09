@@ -7,6 +7,7 @@ from datetime import datetime, time, timedelta, timezone
 import logging
 import json
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from finbot_ingestion.domain.validation import utc_datetime
 from finbot_ingestion.ingestion.retry_policy import RetryPolicy
@@ -15,6 +16,7 @@ from .config import CalendarConfig
 from .contracts import CalendarHealth, CalendarSnapshot, CalendarSyncRun, CalendarSyncSuccess, date_range
 from .provider import CalendarDataError, CalendarTransientError, IncompleteCalendarSnapshot
 from .providers import PlaceholderCalendarProvider
+from .reconciliation import AuthoritativeSnapshotPolicy, ReplacementOnlyPolicy
 
 LOGGER = logging.getLogger(__name__)
 
@@ -23,11 +25,19 @@ class CalendarSyncService:
     """Share one instance/lock in one event loop; no distributed task coordination."""
 
     def __init__(self, provider, companies, calendar, config=None, *, now=None,
-                 sleeper=asyncio.sleep, random_value=None):
+                 sleeper=asyncio.sleep, random_value=None, reconciliation=None,
+                 market_timezone="UTC", reconciliation_lookback_days=0):
         self.config = config or CalendarConfig()
         if provider.name != self.config.provider:
             raise ValueError("provider adapter and configuration disagree")
         self.provider, self.companies, self.calendar = provider, companies, calendar
+        if provider.name == "yahoo" and not isinstance(reconciliation, ReplacementOnlyPolicy):
+            raise ValueError("Yahoo requires replacement-only reconciliation")
+        self.reconciliation = reconciliation or AuthoritativeSnapshotPolicy()
+        self.zone = ZoneInfo(market_timezone)
+        if type(reconciliation_lookback_days) is not int or reconciliation_lookback_days < 0:
+            raise ValueError("reconciliation lookback must be a nonnegative integer")
+        self.reconciliation_lookback_days = reconciliation_lookback_days
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.sleep, self.random_value = sleeper, random_value
         self._lock = asyncio.Lock()
@@ -142,19 +152,35 @@ class CalendarSyncService:
                     snapshot = await self.provider.fetch_events(start_date, end_date, companies)
                     return self._normalize(snapshot, run, companies)
                 events = await self._retry(fetch, attempts=self.config.provider_attempts, operation="calendar_fetch")
-                start = datetime.combine(start_date, time.min, timezone.utc)
+                read_start = start_date - timedelta(days=self.reconciliation_lookback_days)
+                start = datetime.combine(read_start, time.min, timezone.utc)
                 end = datetime.combine(end_date, time.min, timezone.utc)
                 previous = await self._checkpoint(lambda: self.calendar.get_events(start, end), "calendar_read")
                 incoming = {(event.expected_date, event.company_cik): event for event in events}
                 existing = {(event.expected_date, event.company_cik): event for event in previous}
                 if any(key in existing and existing[key].provider != run.provider for key in incoming):
                     raise CalendarDataError("another provider owns an overlapping expectation")
-                obsolete = tuple(event for event in previous if event.provider == run.provider
-                    and event.company_cik in run.company_ciks
-                    and (event.expected_date, event.company_cik) not in incoming)
+                if isinstance(self.reconciliation, ReplacementOnlyPolicy) and any(
+                        key in existing and existing[key].replacement_hint is not None
+                        and value.replacement_hint is not None
+                        and existing[key].replacement_hint != value.replacement_hint
+                        for key, value in incoming.items()):
+                    raise IncompleteCalendarSnapshot("different announcements occupy the same calendar key")
+                scoped = tuple(event for event in previous if event.provider == run.provider
+                    and event.company_cik in run.company_ciks)
+                plan = self.reconciliation.plan(scoped, events)
                 await self._checkpoint(lambda: self.calendar.upsert_events(events), "calendar_upsert")
                 cancelled = []
-                for event in obsolete:
+                for pair in plan.replacements:
+                    canonical = await self._checkpoint(lambda pair=pair: self.calendar.get_event(
+                        pair.incoming.expected_date, pair.incoming.company_cik), "calendar_confirm_replacement")
+                    if canonical != pair.incoming:
+                        raise IncompleteCalendarSnapshot("replacement observation was not confirmed durable")
+                    applied = await self._checkpoint(lambda pair=pair: self.calendar.cancel_event(
+                        pair.previous, at=run.observed_at, require_unchanged=True), "calendar_replace")
+                    if applied:
+                        cancelled.append(pair.previous)
+                for event in plan.cancellations:
                     applied = await self._checkpoint(lambda event=event: self.calendar.cancel_event(
                         event, at=run.observed_at), "calendar_cancel")
                     if applied:
@@ -174,8 +200,14 @@ class CalendarSyncService:
                         "error_type": type(checkpoint_error).__name__})
                 raise
             self._log_changes(previous, events, cancelled, run)
+            if self.metrics is not None:
+                for name, count in (("CalendarPreservedOmissions", plan.preserved_count),
+                                    ("CalendarAmbiguousReplacements", plan.ambiguous_count),
+                                    ("CalendarReplacements", len(cancelled) if plan.replacements else 0)):
+                    self.metrics.count(name, count)
             LOGGER.info("Calendar sync completed", extra={"operation": "calendar_sync", "provider": run.provider,
                 "sync_kind": kind, "event_count": len(events), "cancelled_count": len(cancelled),
+                "preserved_count": plan.preserved_count, "ambiguous_count": plan.ambiguous_count,
                 "company_count": len(companies), "start_date": start_date.isoformat(), "end_date": end_date.isoformat()})
             return success
 
@@ -200,12 +232,15 @@ class CalendarSyncService:
                 "expected_date": event.expected_date.isoformat()})
 
     async def sync_full(self):
-        start = utc_datetime(self.now(), "now").date()
+        start = self.today()
         return await self.sync_once(start, start + timedelta(days=self.config.lookahead_days - 1), kind="full")
 
     async def sync_near_term(self):
-        start = utc_datetime(self.now(), "now").date()
+        start = self.today()
         return await self.sync_once(start, start + timedelta(days=self.config.near_term_days - 1), kind="near_term")
+
+    def today(self):
+        return utc_datetime(self.now(), "now").astimezone(self.zone).date()
 
     async def health(self):
         state = await self._checkpoint(lambda: self.calendar.get_sync_state(self.provider.name), "calendar_health")
