@@ -1,0 +1,29 @@
+{
+  "ClientRequestToken": "finbot-check-cleanup-20261009-1",
+  "TransactItems": [
+    {
+      "Delete": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-calendar",
+        "Key": {"expected_date": {"S": "__deployment_check__"}, "cik": {"S": "__deployment_check__:readiness-20261009-1"}},
+        "ConditionExpression": "deployment_check_id = :id",
+        "ExpressionAttributeValues": {":id": {"S": "readiness-20261009-1"}}
+      }
+    },
+    {
+      "Delete": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-filings",
+        "Key": {"accession_number": {"S": "__deployment_check__:readiness-20261009-1"}},
+        "ConditionExpression": "deployment_check_id = :id",
+        "ExpressionAttributeValues": {":id": {"S": "readiness-20261009-1"}}
+      }
+    },
+    {
+      "Delete": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-artifacts",
+        "Key": {"artifact_id": {"S": "__deployment_check__:readiness-20261009-1"}},
+        "ConditionExpression": "deployment_check_id = :id",
+        "ExpressionAttributeValues": {":id": {"S": "readiness-20261009-1"}}
+      }
+    }
+  ]
+}

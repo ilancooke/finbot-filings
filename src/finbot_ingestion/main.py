@@ -124,8 +124,18 @@ async def serve(application):
 
 def main(argv=None, *, builder=build_application):
     parser = argparse.ArgumentParser(description="Single-process SEC ingestion runtime")
-    parser.add_argument("--health-check", action="store_true", help="check only the local heartbeat; no AWS calls")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--health-check", action="store_true", help="check only the local heartbeat; no AWS calls")
+    modes.add_argument("--deployment-check", action="store_true", help="finite Fargate AWS/storage check; writes isolated test fixtures")
+    parser.add_argument("--check-id", help="unique deployment check identifier (required with --deployment-check)")
     args = parser.parse_args(argv)
+    if args.deployment_check:
+        if not args.check_id:
+            parser.error("--deployment-check requires --check-id")
+        from .deployment_check import main as check_main
+        return check_main(["--check-id", args.check_id])
+    if args.check_id:
+        parser.error("--check-id requires --deployment-check")
     if args.health_check:
         config = RuntimeConfig.from_env()
         return 0 if HealthFile.check(config.health_path, max_age_seconds=config.heartbeat_seconds * 3) else 1

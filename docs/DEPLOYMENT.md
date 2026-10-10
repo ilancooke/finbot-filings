@@ -95,6 +95,19 @@ if a fix is available, rebuild, retest and publish a new immutable image tag/dig
 If proceeding with an unresolved finding, record the operator's explicit decision
 and follow-up conditions. This assessment does not itself approve activation.
 
+Recheck after the alarm test: read-only ECR inspection of the currently deployed
+staged digest still returns the completed scan with one HIGH finding,
+`CVE-2026-85091`, for zlib source version `1.3.dfsg+really1.3.1-1`. This reads the
+existing scan (completed `2026-10-10T00:49:03Z`), not a newly initiated scan.
+The Debian tracker was rechecked and still lists trixie vulnerable with no fixed
+Debian package. The operator subsequently stated they are not concerned about
+this known zlib finding and wish to proceed toward activation. This records
+operator acceptance for the research deployment; remediation is not a prerequisite
+for proceeding. The finding remains open and is not suppressed or declared a
+false positive. Recheck vendor fixes and the actual image scan on subsequent image
+updates. This decision does not establish runtime/provider readiness or start
+ingestion.
+
 ## Tooling and offline validation
 
 From the repository root, use Python 3.12+ and Node 24:
@@ -578,10 +591,123 @@ daily refreshes or a license decision.
    memory headroom and actual subnet/AZ/egress behavior. Two artifact workflows can
    temporarily retain multiple 64-MiB byte buffers; 1 GiB is initial sizing, not a
    measured production guarantee.
-6. Set monitoring_enabled true in a reviewed manual runtime deployment and verify
-   alarm routing. Set FINBOT_ACTIVATION_APPROVED true only after readiness approval.
+6. Notification actions were enabled through the reviewed runtime deployment;
+   SNS email receipt and the liveness alarm's CloudWatch-originated SNS action
+   were verified as recorded below. Set FINBOT_ACTIVATION_APPROVED true only after readiness approval.
    Then manually dispatch activation. Verify a healthy task, configured/fresh full
    calendar coverage and resumed polling; task HEALTHY alone is not readiness.
+
+## Finite Fargate deployment check
+
+Prepared after the operator accepted the known zlib finding and asked to proceed.
+This check has not run in AWS. Current revision `3` predates the diagnostic: first
+commit/push it, pass CI, restore repository delivery and dispatch/approve a new
+**staged** release with `activate=false`. Keep production
+`FINBOT_ACTIVATION_APPROVED=false`. Use that manifest's exact new task-definition
+ARN below, not revision `3` or an unpinned family. No CDK deployment or IAM expansion
+is needed. The ingestion service remains desired zero.
+
+The saved [RunTask input](../infra/checks/run-task.prod.json) launches one standalone
+task in the deployed service's subnets/security group, with a public IP and Fargate
+platform `1.4.0`. It inherits the reviewed image, 512 CPU units, 1 GiB memory,
+task/execution roles, read-only root, UID 10001 and writable `/tmp`. Container
+command `--deployment-check --check-id readiness-20261009-1` dispatches the check
+before constructing ingestion. ECS command overrides replace the image command,
+not its Python entry point. See [RunTask overrides](https://docs.aws.amazon.com/sdk-for-ruby/v3/api/Aws/ECS/Types/RunTaskRequest.html).
+
+The check requires Fargate `container-role` credentials. A 180-second process
+alarm bounds the run; SDK calls use three-second connect/five-second read timeouts
+and at most two attempts. Enabled-company queries allow ten pages and strongly
+recheck the expected 50 base rows. No scan, company mutation, live SEC/Yahoo
+request, artifact-ready publication or failed-work message occurs.
+
+Exact AWS test writes for this check ID:
+
+| Resource | Fixture |
+| --- | --- |
+| Raw S3 bucket | `deployment-checks/readiness-20261009-1/probe.txt`, fewer than 100 bytes, SSE-S3, create with `IfNoneMatch="*"` |
+| Calendar | `expected_date=__deployment_check__`, `cik=__deployment_check__:readiness-20261009-1` |
+| Filings | `accession_number=__deployment_check__:readiness-20261009-1` |
+| Artifacts | `artifact_id=__deployment_check__:readiness-20261009-1` |
+| Existing log group | Sanitized report and `Finbot/DeploymentChecks` EMF, metric `DeploymentCheckSucceeded`, Service/Environment dimensions |
+
+Each DynamoDB row is conditionally created, updated under an ownership/state
+condition and read consistently. Rows have no application schema or sparse-index
+attributes. Reserved keys lie outside calendar date ranges and artifact paths,
+so ingestion/recovery cannot discover them. Existing fixtures cause failure rather
+than overwrite. S3 HEAD absence must return 404, duplicate conditional PUT must
+fail 412, unconditional PUT must fail 403, and HEAD/GET must preserve the original
+version and bytes. Only the check's own test key is targeted, even if policy
+enforcement unexpectedly fails. See [S3 conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html).
+
+The check exercises `HealthFile` atomics in a separate private `/tmp` directory,
+never the normal heartbeat path. Cache writes/reads/private permissions are checked
+there and local files are removed. Major calendar dependencies are loaded, then
+256 MiB of buffers are touched: two copies per default artifact workflow. Linux
+peak RSS is recorded and must leave at least 256 MiB of the initial 1 GiB
+allocation. This is synthetic headroom, not measured worst-case ingestion/provider
+memory. No `RuntimeHealthy` metric is emitted; the stopped service's liveness
+alarm remains truthful. The run fits within the existing 300-second health startup
+allowance.
+
+After reviewing the staged revision, replace `STAGED_TASK_DEFINITION_ARN` below
+with that exact ARN and run:
+
+```bash
+aws ecs run-task \
+  --cli-input-json file://infra/checks/run-task.prod.json \
+  --task-definition STAGED_TASK_DEFINITION_ARN \
+  --profile default --region us-east-1 \
+  --query '{Failures:failures,Tasks:tasks[].{Arn:taskArn,Status:lastStatus,TaskDefinition:taskDefinitionArn}}' \
+  --output json --no-cli-pager
+```
+
+Require no failures and exactly one returned task. Record its ARN, wait with
+`aws ecs wait tasks-stopped`, then `describe-tasks` to verify container `ingestion`
+exited zero with the expected image digest. Read `ingestion/ingestion/<task-id>`
+in `/finbot/finbot-prod` using `aws logs get-log-events`. Require `status=passed`
+with all checks present, then verify CloudWatch `Finbot/DeploymentChecks` /
+`DeploymentCheckSucceeded` value one for Service=`finbot-ingestion`,
+Environment=`prod`. Log receipt alone does not prove EMF extraction. Confirm the
+service remains at zero and the standalone task is STOPPED before activation.
+
+AWS fixtures remain because the task role intentionally cannot delete raw objects.
+Preserve the report/version ID before cleanup. After a complete successful check,
+the operator may remove only the owned rows using the reviewed
+[transaction input](../infra/checks/delete-checkpoints.prod.json):
+
+```bash
+aws dynamodb transact-write-items \
+  --cli-input-json file://infra/checks/delete-checkpoints.prod.json \
+  --profile default --region us-east-1 --no-cli-pager
+aws s3api delete-object \
+  --bucket finbot-prod-state-artifacts82dd59a1-8gt63rcgmaua \
+  --key deployment-checks/readiness-20261009-1/probe.txt \
+  --version-id REPORTED_TEST_VERSION_ID \
+  --profile default --region us-east-1 --no-cli-pager
+```
+
+Do not delete application objects or use an unversioned S3 delete. Partial failures
+require inspecting reported keys before cleanup; the complete transaction fails
+if any row is missing or has different ownership. A lost write acknowledgment may
+still leave a fixture at its reported key. For a new test change the check ID,
+matching cleanup keys and both client tokens. RunTask's token prevents duplicate
+submissions within its idempotency window; existing fixtures still require a fresh
+check ID after that window.
+
+This validates the sampled task's AWS access, filesystem, logs/EMF and synthetic
+memory behavior. It does not test both AZ placements, live SEC/Yahoo egress or
+actual ingestion peak memory. Verify those during the first controlled activation
+and stop/investigate if full calendar freshness or polling fails.
+
+Local preparation validation: application tests passed (`585 passed`, eight
+opt-in container cases skipped); infrastructure/workflow tests passed (`26
+passed`). Compilation and whitespace checks passed. Eighteen new offline
+diagnostic tests cover SDK request contracts, fixture/cleanup isolation, pagination,
+credential refusal, timeout handling and sanitized reports. The container
+installation test now exercises this mode through the image entry point; the
+rebuilt ARM64 image must pass it in CI before staging. No live AWS writes occurred
+during this preparation.
 
 ## Automatic recovery and alarms
 
@@ -666,12 +792,70 @@ gh variable set \
 The operator reapplied the file successfully. Read-only GitHub verification
 confirmed all seven production variables match it, including baseline revision
 `3` and `FINBOT_ACTIVATION_APPROVED=false`. Repository
-`FINBOT_DELIVERY_ENABLED=false` is also confirmed. Next, commit and push the
-prepared seed, diagnostic, notification definitions and deployment records for
-CI validation while delivery remains paused. Local validation passed 567
+`FINBOT_DELIVERY_ENABLED=false` is also confirmed. The operator committed and
+pushed the seed, diagnostic, notification definitions and deployment records as
+`3202a5010abb83fe360097607088aa4ddada0301` (`Add production seed, calendar check,
+and alarm notifications`). [CI run 38018758141](https://github.com/ilancooke/finbot-filings/actions/runs/38018758141)
+passed all application/infrastructure, workflow and ARM64 container/lifecycle
+checks. [Delivery run 38018924084](https://github.com/ilancooke/finbot-filings/actions/runs/38018924084)
+was skipped at the release-job condition, as expected while delivery is paused.
+Local validation passed 567
 application tests (eight opt-in container cases skipped), 26 infrastructure/
 workflow tests, compilation, strict offline production synthesis and whitespace
-checks; the pushed commit's CI result remains pending.
+checks.
+
+Next is notification-action enablement and CloudWatch-originated delivery testing.
+Ignored local CDK configuration now prepares `monitoring_enabled=true`; strict
+offline synthesis passed. Comparison with the deployed CloudFormation template
+found exactly 11 changes, each alarm's `ActionsEnabled` from false to true, with
+no other resource or template changes. This preparation has not changed AWS:
+ingestion remains stopped on revision 3 and deployed alarm actions remain disabled.
+The operator ran the runtime template diff and confirmed only the 11 alarm
+`ActionsEnabled` changes, matching the prepared template. The operator deployed
+this reviewed update successfully. Read-only verification confirmed
+`UPDATE_COMPLETE`, all 11 alarms with `ActionsEnabled=true`, the same SNS actions
+and unchanged baseline/service revision 3 with zero desired/running/pending tasks.
+The liveness alarm remains breached while ingestion is intentionally stopped;
+that condition is expected during notification testing. Enabling actions does
+not establish application readiness or approve activation. Delivery stays paused.
+
+### CloudWatch-originated email test
+
+Read-only inspection confirmed the metric alarm
+`finbot-prod-runtime-RuntimeMissing45510FB9-vOaXGeomAub4` is currently ALARM,
+uses `TreatMissingData=breaching`, has only the reviewed SNS ALARM action and has
+no OK/INSUFFICIENT_DATA actions or compute/scaling actions. To test a new transition,
+temporarily set its state to OK using the standard CloudWatch testing API:
+
+```bash
+aws cloudwatch set-alarm-state \
+  --alarm-name finbot-prod-runtime-RuntimeMissing45510FB9-vOaXGeomAub4 \
+  --state-value OK \
+  --state-reason 'Operator notification test; ingestion intentionally stopped.' \
+  --profile default \
+  --region us-east-1 \
+  --no-cli-pager
+```
+
+Metric-alarm evaluation restores its actual state. With no runtime heartbeat,
+the expected subsequent OK-to-ALARM transition should invoke CloudWatch's SNS
+publish and deliver email. This changes temporary operational state, not the
+IaC alarm configuration, thresholds, metric data or service desired count.
+The temporary state can disappear quickly; inspect alarm history rather than
+requiring a read to catch it. Verify both SNS action success in CloudWatch alarm
+history and receipt of the corresponding alarm email. The operator ran this test
+and confirmed the email arrived. Read-only history verification recorded:
+
+- `2026-10-10T03:15:20.695Z`: operator reset from ALARM to OK with the test reason.
+- `2026-10-10T03:15:59.644Z`: normal evaluation returned OK to ALARM because three
+  missing heartbeat periods were treated as breaching.
+- `2026-10-10T03:15:59.692Z`: SNS action executed successfully (`actionState=Succeeded`,
+  `error=null`) for the configured notification topic.
+
+The common CloudWatch-to-SNS-to-email path is verified for the liveness alarm;
+this does not test application-generated EMF or every other alarm's threshold.
+Read-only ECS inspection still showed revision 3 with zero desired/running/pending
+tasks. See the [SetAlarmState CLI reference](https://docs.aws.amazon.com/cli/latest/reference/cloudwatch/set-alarm-state.html).
 
 References: [SNS alarm publishing permissions](https://repost.aws/knowledge-center/cloudwatch-receive-sns-for-alarm-trigger)
 and [SNS subscription confirmation](https://docs.aws.amazon.com/sns/latest/dg/sns-access-policy-use-cases.html).
@@ -702,8 +886,9 @@ metric, Container Insights charge or metrics sidecar is assumed.
 
 Stopped environments still evaluate alarms; actions are disabled by default.
 Planned handoffs can breach liveness. Operators should understand this outage rather
-than infer data loss. Configure an existing action topic and its CloudWatch publish
-permissions; no email/subscription is created automatically.
+than infer data loss. Use `alarm_email` for the CDK-managed topic/subscription or
+`alarm_action_arn` for an existing topic with separately managed publishing
+permissions and subscriptions.
 
 ## Manual infrastructure changes and release recovery
 

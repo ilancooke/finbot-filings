@@ -18,7 +18,9 @@ coverage. The [initial production universe](docs/PRODUCTION_UNIVERSE.md) contain
 50 user-selected symbols. The operator applied the standard CLI seed input;
 read-only verification confirmed all 50 stored records match the reviewed SEC
 ticker/CIK/name mapping. The operator's enabled-index query also returned all 50
-companies. Live calendar and cloud application validation remain pending.
+companies. A complete local 30-day Yahoo collection passed with 49 observed
+companies; the operator confirmed NVDA's absence was expected. Cloud application
+validation and activation remain pending.
 
 ## Install and validate
 
@@ -47,6 +49,8 @@ Ingestion does not depend on PyArrow.
 .venv/bin/python -m finbot_ingestion.main
 # Separate process; checks only the local heartbeat:
 .venv/bin/python -m finbot_ingestion.main --health-check
+# Separately launched Fargate task only; finite AWS check with isolated test writes:
+.venv/bin/python -m finbot_ingestion.main --deployment-check --check-id readiness-20261009-1
 # One-shot live Yahoo collection check; no AWS calls, SEC calls or runtime startup:
 .venv/bin/python -m finbot_ingestion.calendar.check \
   --companies-file infra/seed/companies.prod.json \
@@ -66,6 +70,16 @@ complete, consistent collection for the requested scope; the report explicitly
 lists companies without observations. It does not prove Yahoo supplied every
 company's earnings date or approve activation. Raw payloads, cookies and provider
 exception messages are excluded. See [DEPLOYMENT](docs/DEPLOYMENT.md) for review.
+
+The deployment check refuses credentials outside the ECS task role. It checks
+all 50 enabled company records, private writable `/tmp`, atomic heartbeat files,
+bounded memory allocation, DynamoDB conditional test checkpoints and immutable
+SSE-S3 test bytes. Its process budget is 180 seconds. It emits a sanitized report
+and separate `Finbot/DeploymentChecks` EMF, without starting ingestion, fetching
+provider/SEC data or sending SNS/SQS messages. It leaves one small S3 object and
+three reserved DynamoDB rows for operator review/cleanup. See the
+[finite cloud check](docs/DEPLOYMENT.md#finite-fargate-deployment-check) for saved
+AWS CLI inputs, exact writes and prerequisites. Each new run needs a new check ID.
 
 Normal execution contacts AWS, SEC and, when selected, Yahoo. It requires an identifying SEC User-Agent,
 existing AWS resources/indexes, valid AWS credentials and a nonempty enabled

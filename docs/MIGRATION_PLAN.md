@@ -808,11 +808,12 @@ GitHub delivery executed or production inputs selected.
 
 ## 5. Next milestone
 
-**NEXT: Validate the full live Yahoo calendar scope, then complete the remaining
-production-readiness checks with ingestion stopped.
-Before activation, revisit the image's open HIGH finding, verify the seeded production company
-identities, resolve ongoing Yahoo access, validate a full 30-day live scope, and
-separately authorize activation.**
+**NEXT: Complete the remaining production-readiness checks with ingestion stopped.
+The 50-company seed, complete 30-day operator-machine Yahoo collection and
+CloudWatch-to-email notification path are verified. The operator accepts the known
+HIGH zlib finding for this research deployment. Before activation, resolve ongoing
+Yahoo access, cloud runtime permissions/networking/EMF/memory checks and the final
+validated image release; separately authorize activation.**
 
 Phase 8 implementation is delivered and validated offline. Initial CDK deployment
 remains manual. The operator reported successful deployment of the shared
@@ -961,13 +962,69 @@ Read-only GitHub inspection confirmed the environment baseline remains revision
 delivery flag is false. The operator subsequently reapplied the production
 variable file successfully. Read-only verification confirmed all seven variables
 match it, including baseline revision `3` and activation approval false; repository
-delivery remains disabled. Next, commit/push the prepared source/configuration/
-documentation and verify CI on that commit. Current local validation passed 567
+delivery remains disabled. The operator committed/pushed source, configuration
+and deployment records as `3202a5010abb83fe360097607088aa4ddada0301`. CI run
+`38018758141` passed on main, including application/infrastructure checks, workflow
+validation and ARM64 image/lifecycle checks. Delivery run `38018924084` was skipped
+at the release-job condition as expected with the repository flag false.
+Current local validation passed 567
 application tests (eight opt-in container cases skipped), 26 infrastructure/
 workflow tests, compilation, strict offline production synthesis and whitespace
-checks. Cloud runtime readiness, CloudWatch-originated publishing verification,
-ongoing provider access and the existing HIGH zlib finding remain unresolved
-before activation.
+checks. Local configuration now prepares notification-action enablement:
+`monitoring_enabled=true`. Strict offline synthesis and comparison with the live
+CloudFormation template confirmed exactly 11 `ActionsEnabled` false-to-true
+changes, with all other resources/template sections unchanged. No AWS update has
+been performed; the service is still stopped on revision 3 and deployed actions
+remain disabled. The operator ran the runtime template diff, confirming only
+the 11 alarm `ActionsEnabled` changes and then deployed the reviewed update
+successfully. Read-only verification confirmed `UPDATE_COMPLETE`, all 11 alarm
+actions enabled, unchanged baseline/service revision 3 and zero desired/running/
+pending tasks. The liveness alarm remains ALARM because ingestion is stopped;
+its only configured action is SNS, with no OK/INSUFFICIENT_DATA or compute/scaling
+actions. Next is an operator-issued temporary OK reset using `SetAlarmState`;
+normal metric evaluation should return it to ALARM and exercise CloudWatch-originated
+SNS publishing. The operator ran the test and confirmed the alarm email arrived.
+Read-only history recorded the reset at `2026-10-10T03:15:20.695Z`, automatic
+OK-to-ALARM transition at `03:15:59.644Z` and successful SNS action at
+`03:15:59.692Z` (`actionState=Succeeded`, no error). CloudWatch-to-SNS-to-email
+delivery is verified for the liveness alarm; application EMF and other thresholds
+were not exercised. ECS still reports revision 3 and zero desired/running/pending
+tasks. The CLI test and limits are recorded in DEPLOYMENT.md. Delivery
+stays paused; no activation approval has been given.
+Cloud runtime readiness and ongoing provider access remain unresolved before
+activation; the zlib finding remains open but is operator-accepted as described below.
+After the alarm test, read-only ECR inspection reconfirmed the current digest's
+existing completed scan has one HIGH `CVE-2026-85091` finding. A fresh Debian
+tracker check still lists trixie vulnerable with no fixed Debian package. The
+operator subsequently stated they are not concerned about the known zlib finding
+and wish to proceed toward activation; acceptance for the research deployment is
+recorded. No suppression or false-positive classification was introduced. Recheck
+vendor fixes and scan results on subsequent image updates. The next technical
+milestones are a bounded check of the actual Fargate runtime and delivery of the
+latest validated image, before setting activation approval true and explicitly
+dispatching the first active release.
+The operator then asked to proceed. A finite `--deployment-check --check-id ...`
+mode and saved `infra/checks/` RunTask/owned-fixture cleanup inputs are prepared.
+The check dispatches before ingestion wiring, refuses credentials outside the
+Fargate task role, and has a 180-second process deadline. It strongly validates
+50 indexed company rows, exercises private `/tmp`/heartbeat writes and a bounded
+256-MiB synthetic memory allocation, then tests conditional checkpoint roundtrips
+in three reserved rows and SSE-S3 absence/overwrite/version/byte behavior in one
+small test object. It emits separate `Finbot/DeploymentChecks` EMF and no runtime
+heartbeat metric. No company writes, SEC/Yahoo requests, SNS events or SQS work
+occur. No infrastructure or IAM change is needed. AWS fixtures remain for review
+and operator cleanup; they cannot enter ingestion's sparse indexes/date ranges.
+This code has not run in AWS. Revision `3` predates it: next commit/push, pass CI,
+stage the new image with activation approval false, and run the finite check
+against that exact new revision while the service remains zero. Verify its stopped
+task, report and extracted metric before the first controlled activation. Native
+provider egress and sustained ingestion memory remain live startup observations;
+the synthetic check does not establish those. Follow the finite-check section of
+DEPLOYMENT.md for exact writes and reviewable standard CLI commands.
+Local diagnostic preparation validation passed: 585 application tests, eight
+opt-in container cases skipped, 26 infrastructure/workflow tests, compilation and
+whitespace checks. Eighteen diagnostic tests are offline; the extended installed
+container check awaits CI's rebuilt ARM64 image. No AWS writes were performed.
 State-stack outputs and image
 preparation are recorded in DEPLOYMENT.md. Follow DEPLOYMENT.md for
 explicit account/network/OIDC configuration, staged infrastructure/image delivery,

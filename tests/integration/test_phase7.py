@@ -161,6 +161,17 @@ print("installed runtime and XNYS session verified")'''
     docker("run", "--rm", "--network", "none", "--entrypoint", "python", IMAGE, "-c", code)
     assert "No broken requirements" in docker("run", "--rm", "--network", "none", "--entrypoint", "python", IMAGE,
                                             "-m", "pip", "check").stdout
+    # Exercise the installed diagnostic through the real image ENTRYPOINT. Even
+    # with Fargate's marker, static credentials must fail before AWS or ingestion.
+    options = ["run", "--rm", "--network", "none"]
+    for key, value in {**ENV, "AWS_EXECUTION_ENV": "AWS_ECS_FARGATE"}.items():
+        options.extend(["-e", key + "=" + value])
+    probe = docker(*options, IMAGE, "--deployment-check", "--check-id", "container-check", check=False)
+    report, metric = map(json.loads, probe.stdout.splitlines())
+    assert probe.returncode == 1 and report["status"] == "failed"
+    assert report["error_type"] == "RuntimeError" and report["fixtures"] == {}
+    assert metric["DeploymentCheckSucceeded"] == 0
+    assert "Ingestion runtime failed" not in probe.stderr
 
 
 @pytest.mark.container
