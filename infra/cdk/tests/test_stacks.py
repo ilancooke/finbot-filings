@@ -45,6 +45,9 @@ def test_exact_retained_schema(templates):
         assert p["PointInTimeRecoverySpecification"]["PointInTimeRecoveryEnabled"]
         assert table["DeletionPolicy"] == table["UpdateReplacePolicy"] == "Retain"
         assert "TimeToLiveSpecification" not in p and "StreamSpecification" not in p
+        # Omitted SSESpecification selects DynamoDB's default AWS-owned encryption.
+        assert not p.get("SSESpecification", {}).get("SSEEnabled", False)
+        assert "KMSMasterKeyId" not in p.get("SSESpecification", {})
         assert all(a["AttributeType"] == "S" for a in p["AttributeDefinitions"])
         for index in p.get("GlobalSecondaryIndexes", []):
             assert index["Projection"] == {"ProjectionType": "KEYS_ONLY"}
@@ -60,22 +63,27 @@ def test_create_only_data_policies_and_encryption(templates):
     state, runtime = templates
     bucket = resources(state, "AWS::S3::Bucket")[0]
     assert bucket["Properties"]["VersioningConfiguration"]["Status"] == "Enabled"
-    assert bucket["Properties"]["BucketEncryption"]
+    assert bucket["Properties"]["BucketEncryption"] == {
+        "ServerSideEncryptionConfiguration": [{"ServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]}
     assert all(bucket["Properties"]["PublicAccessBlockConfiguration"].values())
     policy = resources(state, "AWS::S3::BucketPolicy")[0]["Properties"]["PolicyDocument"]["Statement"]
     assert any(s.get("Condition", {}).get("Null", {}).get("s3:if-none-match") == "true" and s["Effect"] == "Deny" for s in policy)
     assert any(s.get("Condition", {}).get("StringNotEquals", {}).get("s3:if-none-match") == "*" for s in policy)
     assert any(s.get("Condition", {}).get("Bool", {}).get("aws:SecureTransport") == "false" for s in policy)
-    assert resources(state, "AWS::SNS::Topic")[0]["Properties"]["KmsMasterKeyId"]
+    assert "KmsMasterKeyId" not in resources(state, "AWS::SNS::Topic")[0]["Properties"]
     queue = resources(state, "AWS::SQS::Queue")[0]
     assert queue["Properties"]["SqsManagedSseEnabled"] and queue["Properties"]["MessageRetentionPeriod"] == 1209600
-    for kind in ("AWS::S3::Bucket", "AWS::SNS::Topic", "AWS::SQS::Queue", "AWS::ECR::Repository", "AWS::KMS::Key"):
+    assert "KmsMasterKeyId" not in queue["Properties"]
+    assert not resources(state, "AWS::KMS::Key") and not resources(state, "AWS::KMS::Alias")
+    assert "TopicKeyArn" not in state.get("Outputs", {})
+    for kind in ("AWS::S3::Bucket", "AWS::SNS::Topic", "AWS::SQS::Queue", "AWS::ECR::Repository"):
         assert all(r["DeletionPolicy"] == r["UpdateReplacePolicy"] == "Retain" for r in resources(state, kind))
     for s in statements(runtime):
         ops = s["Action"] if isinstance(s["Action"], list) else [s["Action"]]
         if "s3:PutObject" in ops and s["Effect"] == "Allow":
             assert s["Condition"]["StringEquals"]["s3:if-none-match"] == "*"
         if s["Effect"] == "Allow":
+            assert not any(op.lower().startswith("kms:") for op in ops)
             assert not set(ops) & {"s3:DeleteObject", "dynamodb:Scan", "dynamodb:DeleteItem", "ecs:RunTask", "sqs:ReceiveMessage"}
         if "iam:PassRole" in ops:
             assert s["Resource"] != "*" and s["Condition"]["StringEquals"]["iam:PassedToService"] == "ecs-tasks.amazonaws.com"

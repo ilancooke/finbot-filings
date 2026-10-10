@@ -313,6 +313,13 @@ budget must fit below the runtime stall allowance with a 60-second margin.
 SEC retries include network/timeouts, 403/429/5xx and package-index 404, with bounded
 jitter and Retry-After. Redirects stay on official HTTPS SEC hosts and consume budget.
 
+The repository encryption policy is
+[ADR 010](docs/adr/010-use-service-managed-encryption-without-kms-integration.md):
+bootstrap/raw-artifact buckets use SSE-S3, DynamoDB uses AWS-owned encryption,
+and failed-work SQS uses SSE-SQS. SNS message bodies are intentionally unencrypted
+at rest. HTTPS and scoped publication remain required. No project KMS keys,
+aliases or application KMS permissions are needed.
+
 Deployment must supply encrypted/HTTPS storage and least-privilege permissions:
 conditional S3 PutObject, GetObject and scoped ListBucket for absence detection,
 DynamoDB table/index access, SNS Publish and operational SQS SendMessage. Ingestion
@@ -367,6 +374,15 @@ never deploy the default dummy inputs. CDK owns retained state and a runtime
 service at desired count zero. GitHub CI has no AWS credentials; delivery uses
 scoped OIDC, immutable tags/digests and an explicit STOPPED handoff. Stopped
 environments stay stopped until separate readiness approval and manual activation.
+The customized account/region bootstrap template is version-controlled under
+[infra/bootstrap](infra/bootstrap/README.md), with its pinned origin, SSE-S3
+policy, explicit deployment parameters and update procedure. Bootstrap remains a separately
+authorized manual prerequisite to deploying the application stacks.
+Pinned local CloudFormation schema and encryption-policy checks, their standard
+commands and reviewed warnings are documented in
+[infra/validation](infra/validation/README.md).
+GitHub production-environment settings and non-secret deployment variables are saved under
+[infra/github](infra/github/README.md), applied with the standard `gh` CLI.
 For Yahoo, set `calendar_provider` to `yahoo` in the CDK JSON configuration.
 It emits the explicit provider, 30-day/daily defaults,
 one outer attempt and a writable `/tmp` cache path; desired count stays zero.

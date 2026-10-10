@@ -1,7 +1,7 @@
 """Retained acquisition state; keys/indexes are the LLD adapter contract."""
 from aws_cdk import Stack, RemovalPolicy, Duration, CfnOutput
 from aws_cdk import aws_s3 as s3, aws_dynamodb as db, aws_sns as sns, aws_sqs as sqs
-from aws_cdk import aws_iam as iam, aws_kms as kms, aws_ecr as ecr
+from aws_cdk import aws_iam as iam, aws_ecr as ecr
 
 
 class StateStack(Stack):
@@ -35,7 +35,7 @@ class StateStack(Stack):
                 partition_key=db.Attribute(name=pk, type=db.AttributeType.STRING),
                 sort_key=db.Attribute(name=sk, type=db.AttributeType.STRING) if sk else None,
                 billing_mode=db.BillingMode.PAY_PER_REQUEST,
-                encryption=db.TableEncryption.AWS_MANAGED, deletion_protection=True,
+                encryption=db.TableEncryption.DEFAULT, deletion_protection=True,
                 point_in_time_recovery_specification=db.PointInTimeRecoverySpecification(
                     point_in_time_recovery_enabled=True), removal_policy=RemovalPolicy.RETAIN)
             for index, ipk, isk in indexes:
@@ -45,11 +45,8 @@ class StateStack(Stack):
                     projection_type=db.ProjectionType.KEYS_ONLY)
             self.tables[name] = table
             CfnOutput(self, name.capitalize() + "Table", value=table.table_name)
-        # A dedicated key provides precisely scoped publisher encryption permissions.
-        self.topic_key = kms.Key(self, "TopicKey", enable_key_rotation=True,
-            removal_policy=RemovalPolicy.RETAIN)
-        self.topic = sns.Topic(self, "ArtifactReady", topic_name=f"{config.name}-artifact-ready",
-            master_key=self.topic_key)
+        # ADR 010 accepts unencrypted SNS message bodies at rest; HTTPS is required.
+        self.topic = sns.Topic(self, "ArtifactReady", topic_name=f"{config.name}-artifact-ready")
         self.topic.apply_removal_policy(RemovalPolicy.RETAIN)
         self.topic.add_to_resource_policy(iam.PolicyStatement(effect=iam.Effect.DENY,
             principals=[iam.AnyPrincipal()], actions=["sns:Publish"], resources=[self.topic.topic_arn],
@@ -62,7 +59,7 @@ class StateStack(Stack):
             removal_policy=RemovalPolicy.RETAIN, empty_on_delete=False)
         for name, value in {
             "ArtifactBucket": self.bucket.bucket_name, "ArtifactTopicArn": self.topic.topic_arn,
-            "TopicKeyArn": self.topic_key.key_arn, "FailedWorkQueueUrl": self.failed_work.queue_url,
+            "FailedWorkQueueUrl": self.failed_work.queue_url,
             "ImageRepositoryUri": self.repository.repository_uri,
         }.items():
             CfnOutput(self, name, value=value)

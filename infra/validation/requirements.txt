@@ -1,0 +1,2 @@
+# Install into a separate validation environment, not the application image.
+cfn-lint==1.57.2

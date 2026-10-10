@@ -1,10 +1,98 @@
 # Phase 8 deployment and recovery runbook
 
 The CDK application and delivery workflows are implemented and tested offline.
-No AWS resources have been provisioned and no live AWS/SEC validation is implied.
+On 2026-10-09 the operator reported successful creation of the shared `CDKToolkit`
+bootstrap stack in account `559007813222`, region `us-east-1`, using the saved
+SSE-S3 template, administrative profile and termination protection. The preceding
+AWS `validate-template` command also succeeded. The operator subsequently supplied
+read-only `describe-stacks` output confirming `CREATE_COMPLETE`, termination
+protection enabled, bootstrap version `32`, and the expected bucket/repository
+outputs. The operator subsequently supplied successful deployment output for
+`finbot-prod-state`, after reviewing its additions-only template diff. The
+operator subsequently reviewed and successfully deployed `finbot-prod-runtime`.
+All three stacks are deployed. Operator-supplied read-only ECS output confirmed
+service `ACTIVE`, desired/running/pending counts all zero, no API failures and
+baseline task-definition revision `1`. Read-only task-definition output also
+confirmed `ACTIVE`, Linux ARM64 and the exact published ECR image digest. Basic
+infrastructure/deployed-image verification is complete; live task/application
+AWS/SEC validation, GitHub code publication/delivery enablement and activation
+remain pending. The GitHub production environment, branch rule and target variables
+have been configured and verified as recorded below.
 Commands in the infrastructure/release sections below make real AWS changes; run
 only against an explicitly authorized account/environment. Routine tests need no
 AWS credentials and must not contact SEC or provider services.
+
+State-stack outputs recorded from the operator's 2026-10-09 deployment:
+
+| Output | Value |
+| --- | --- |
+| ArtifactBucket | `finbot-prod-state-artifacts82dd59a1-8gt63rcgmaua` |
+| CompaniesTable / CalendarTable | `finbot-prod-companies` / `finbot-prod-calendar` |
+| FilingsTable / ArtifactsTable | `finbot-prod-filings` / `finbot-prod-artifacts` |
+| ArtifactTopicArn | `arn:aws:sns:us-east-1:559007813222:finbot-prod-artifact-ready` |
+| FailedWorkQueueUrl | `https://sqs.us-east-1.amazonaws.com/559007813222/finbot-prod-failed-work` |
+| ImageRepositoryUri | `559007813222.dkr.ecr.us-east-1.amazonaws.com/finbot-prod-ingestion` |
+
+Image preparation (2026-10-09): the operator built
+`finbot-ingestion:initial-20261009-1` using `--platform linux/arm64 --provenance=false`.
+The exact image passed all eight container tests (nine non-container cases
+deselected) in 23.77 seconds, using network-disabled fixtures. The operator also
+confirmed that the separate image-declared `/tmp` volume permission check passed.
+Local image checks are complete. The operator authenticated Docker to ECR and
+successfully pushed tag `initial-20261009-1` to the application repository above.
+The push reported digest
+`sha256:2066b10a21c57eb9a263ca6154eba08d7c3fd98fd4214915289c36998300b1f2`,
+matching the local build's manifest digest. Operator-supplied ECR output confirmed
+the same digest and scan status `COMPLETE`, with one `HIGH` finding:
+`CVE-2026-85091` in Debian's zlib package. The registry-confirmed digest is now
+in the ignored local runtime configuration for stopped-runtime preparation.
+The scan is not clean and the finding remains open; see the assessment below.
+The bootstrap's asset repository is separate.
+The operator reviewed the additions-only runtime diff, confirmed CDK's IAM
+approval prompt and successfully deployed `finbot-prod-runtime`. The template
+specifies desired count zero; the operator subsequently confirmed zero desired,
+running and pending tasks using read-only `ecs describe-services`, with no API
+failures, service status `ACTIVE` and task definition `finbot-prod-ingestion:1`.
+Activation has not been approved or performed.
+
+Runtime outputs recorded from the operator's 2026-10-09 deployment:
+
+| Output | Value |
+| --- | --- |
+| ClusterName / ServiceName | `finbot-prod` / `finbot-prod` |
+| TaskFamily | `finbot-prod-ingestion` |
+| BaselineTaskDefinitionArn | `arn:aws:ecs:us-east-1:559007813222:task-definition/finbot-prod-ingestion:1` |
+| ReleaseRoleArn | `arn:aws:iam::559007813222:role/finbot-prod-runtime-ReleaseRoleCAEFCF19-bb4IY5zrnh4M` |
+| TaskRoleArn | `arn:aws:iam::559007813222:role/finbot-prod-runtime-TaskRole30FC0FBB-qlMezUWRPAdq` |
+| ExecutionRoleArn | `arn:aws:iam::559007813222:role/finbot-prod-runtime-ExecutionRole605A040B-l4FWcg3aHqHV` |
+| LogGroupName | `/finbot/finbot-prod` |
+
+### Initial image vulnerability assessment (2026-10-09)
+
+An offline check of the exact local image found Debian 13 (trixie), installed
+`zlib1g:arm64` version `1:1.3.dfsg+really1.3.1-1+b1`, and Python reporting zlib
+build/runtime version `1.3.1`. ECR reports the corresponding zlib source package
+version `1.3.dfsg+really1.3.1-1` and HIGH severity. Debian's
+[tracker](https://security-tracker.debian.org/tracker/CVE-2026-85091) still lists
+trixie affected and no fixed Debian package. Upstream's
+[fix](https://github.com/madler/zlib/commit/df84af25dc1942490e1d1c899a07619152a46148)
+is available, but the scope of older versions remains under discussion in
+[issue 1310](https://github.com/madler/zlib/issues/1310) and
+[issue 1292](https://github.com/madler/zlib/issues/1292). Do not infer that 1.3.1
+is unaffected merely from the CVE description's narrower version range.
+
+The repository source contains no direct `gzwrite`, `gzprintf` or `gzvprintf`
+calls. The SEC client requests gzip/deflate HTTP responses; that observation is
+not proof that every native dependency cannot reach a vulnerable code path.
+The finding is not suppressed or accepted as a false positive. No custom zlib
+build, base-distribution switch or unverified package upgrade was introduced.
+
+Recommendation: continue preparing the runtime with desired count zero, retaining
+the finding for explicit review before activation. No containers run in that
+stopped ECS service. Before activation, recheck the Debian fix status and ECR scan;
+if a fix is available, rebuild, retest and publish a new immutable image tag/digest.
+If proceeding with an unresolved finding, record the operator's explicit decision
+and follow-up conditions. This assessment does not itself approve activation.
 
 ## Tooling and offline validation
 
@@ -53,12 +141,72 @@ is available for your repository before enabling delivery.
 Copy the example to ignored `infra/cdk/config.local.json`, replace every fixture
 value and export `FINBOT_INFRA_CONFIG` as its absolute path. Fields:
 
+Local deployment preparation (2026-10-09): an ignored configuration was created
+for account `559007813222`, `us-east-1`, prefix `finbot`, environment `prod`, Yahoo
+calendar and the repository's GitHub `production` environment subject. The SEC
+identity was reused from local `.env` and is not recorded here. The image digest
+was initially a placeholder for state-stack preparation and was subsequently
+replaced with the registry-confirmed digest above. Runtime preparation still
+requires OIDC/AZ checks and the remaining runbook steps; the open image finding
+must be reviewed before activation. Each machine must
+prepare its own local configuration; the file is not committed.
+Credential-free strict synthesis of this local configuration passed; both
+application templates passed encryption-policy checks, with zero lint errors
+and the previously reviewed CDK-generated redundant-dependency warning. The
+operator reviewed `cdk diff finbot-prod-state --method template`, then successfully
+deployed only the state stack with `--exclusively`. `FINBOT_INFRA_CONFIG` selects
+the local file. Do not deploy the runtime template with the placeholder image digest.
+
+Runtime prerequisite check (2026-10-09): the operator's read-only
+`iam list-open-id-connect-providers` returned `[]`. No existing GitHub provider
+needs to be imported; leave `github_oidc_provider_arn` unset so the runtime CDK
+stack creates it. The release role's trust is restricted to audience
+`sts.amazonaws.com` and subject
+`repo:ilancooke/finbot-filings:environment:production`. Operator-supplied EC2 output
+confirmed `us-east-1a` and `us-east-1b` are both `available`. This was the initial
+trust subject; the GitHub verification below requires a correction. The provider itself grants no
+permissions; the scoped release role defines permitted AWS actions.
+
+With the registry-confirmed image digest, credential-free strict synthesis and
+encryption-policy validation passed again for both application templates. Lint
+reported zero errors and the one previously reviewed CDK-generated redundant
+dependency warning. Direct template checks confirmed ARM64, the exact image digest
+and service desired count zero. The operator reviewed only the runtime stack using
+`cdk diff finbot-prod-runtime --exclusively --method template`, then successfully
+deployed it with `--exclusively`. Read-only ECS zero-task verification passed.
+Read-only `ecs describe-task-definition` confirmed the baseline is `ACTIVE`, uses
+Linux ARM64 and references the exact published image digest. Next prepare GitHub
+delivery configuration. The open image finding still requires activation review.
+
+GitHub prerequisite verification (2026-10-09): authenticated read-only GitHub CLI
+inspection confirmed `ilancooke/finbot-filings` is public, the default branch is
+`main`, and the operator has administrator access. No deployment environments or
+Finbot repository variables exist yet, so delivery remains disabled. The OIDC
+settings report `use_default=true`, `use_immutable_subject=true`, and subject prefix
+`repo:ilancooke@8453151/finbot-filings@1341430877`. The ignored local CDK configuration
+now uses the exact production subject
+`repo:ilancooke@8453151/finbot-filings@1341430877:environment:production`.
+The operator reviewed the single release-role trust change and successfully
+deployed the runtime stack correction with `--exclusively`. The baseline task
+definition remains revision 1; the output resource names and role ARNs are unchanged.
+The operator created the production environment with `ilancooke` as required
+reviewer (self-review allowed for the sole operator), then created the `main`
+branch rule. Read-only inspection confirmed that is the only deployment rule.
+Environment ID is `23924540932`; branch-policy ID is `62547638`. GitHub reports
+administrator bypass remains available under its default setting. Reviewed
+production variables are saved in `infra/github/production-variables.env`.
+The operator applied all seven variables with `gh variable set --env-file`, then
+supplied `gh variable list` output matching the reviewed AWS resource outputs and
+`FINBOT_ACTIVATION_APPROVED=false`. Read-only repository-variable inspection
+confirmed `FINBOT_DELIVERY_ENABLED` remains unset. Publishing code, enabling
+delivery, live application validation and activation remain pending.
+
 | Field | Meaning |
 | --- | --- |
 | account / region | Explicit 12-digit target account and AWS region |
 | environment / prefix | Lowercase resource names; metrics Environment uses environment |
 | sec_user_agent | Identifying application/contact address, no credentials |
-| github_subject | Exact `repo:OWNER/REPO:ref:refs/heads/main` or `repo:OWNER/REPO:environment:production` subject |
+| github_subject | Exact main-branch or protected-environment subject; copy the repository's actual prefix, including `OWNER@OWNER-ID/REPO@REPO-ID` when immutable subjects are enabled |
 | image_digest | Real validated ARM64 ECR image digest, `sha256:...` |
 | github_oidc_provider_arn | Optional existing account GitHub OIDC provider; import it instead of duplicating it |
 | alarm_action_arn | Optional existing same-region/account SNS notification topic |
@@ -81,19 +229,32 @@ environment to main and configure its protection rules. Branch subjects do not
 encode environment approval; the workflow still uses the production environment.
 No static AWS keys belong in variables, source or task definitions.
 
+Read the actual subject prefix with this read-only command:
+
+```bash
+gh api repos/OWNER/REPO/actions/oidc/customization/sub
+```
+
+For default subjects, append `:environment:production` to the returned
+`sub_claim_prefix` when using the workflow's production environment. Do not infer a
+name-only prefix from `use_default=true`; immutable IDs can also be enabled.
+The configuration accepts either format and emits an exact IAM `StringEquals`
+condition. See [GitHub's OIDC reference](https://docs.github.com/en/actions/reference/security/oidc).
+
 The default VPC uses two public subnets in region suffixes `a` and `b`, a task public
 IP and HTTPS-only egress. Verify those AZs are supported in the target account.
 There are no inbound rules, load balancer or ports. This avoids NAT for v0; private
 subnets/egress require a reviewed infrastructure change, not an automatic fallback.
-S3 has service-managed encryption/versioning; DynamoDB has on-demand capacity,
-encryption, PITR and deletion protection. SNS uses a retained, rotating dedicated
-KMS key so publisher permissions are scoped to one key. SQS uses service-managed
-SSE and a 14-day retention period. KMS is supporting encryption infrastructure,
-not an additional ingestion pipeline. Allow for its cost when sizing the environment.
+S3 uses SSE-S3/versioning; DynamoDB has on-demand capacity, AWS-owned encryption,
+PITR and deletion protection. SNS message bodies are intentionally unencrypted
+at rest, with HTTPS publication enforced. SQS uses SSE-SQS and a 14-day retention
+period. [ADR 010](adr/010-use-service-managed-encryption-without-kms-integration.md)
+records the accepted policy: no project KMS keys, aliases or application KMS
+permissions. AWS services can still use KMS internally for AWS-owned encryption.
 
 Bucket policies reject writes lacking exact If-None-Match `*`. Ingestion cannot
 remove objects/versions. No multipart/copy bypass or raw-data expiration is
-configured. Data tables, bucket, topic, queue, KMS key and ECR are retained across
+configured. Data tables, bucket, topic, queue and ECR are retained across
 stack deletion/replacement; both stacks have termination protection. Do not rename
 construct IDs or assume RETAIN makes resource replacement safe. Always review diff.
 CloudWatch logs retain 30 days. ECR tags are immutable, scanning is requested on
@@ -103,12 +264,32 @@ push, and no lifecycle expiration can remove a release needed for rollback.
 
 Infrastructure deployment is manual. Application workflows never run CDK deploy.
 Keep repository-level `FINBOT_DELIVERY_ENABLED` unset/false initially.
+Run the pinned local schema and encryption-policy checks described in
+[infra/validation/README.md](../infra/validation/README.md) before deploying the
+bootstrap, and again on the application templates synthesized from your actual
+environment configuration. Review lint warnings; fixture validation does not
+establish that a real account deployment will succeed.
 
 1. Authenticate using the approved local AWS credential mechanism. Verify target
    account/region and authorize CDK bootstrap separately if needed.
-2. Run `npm run cdk -- bootstrap aws://ACCOUNT/REGION` only after authorization.
+2. Review the checked-in customized template and parameter policy in
+   [infra/bootstrap/README.md](../infra/bootstrap/README.md). Bootstrap only after
+   authorization, using the saved template and your administrative profile:
+
+   ```bash
+   npm run cdk -- bootstrap aws://ACCOUNT/REGION \
+     --template infra/bootstrap/bootstrap-template.yaml \
+     --profile default \
+     --termination-protection \
+     --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
+   ```
+
+   This account/region stack is shared CDK deployment infrastructure, separate
+   from Finbot's state/runtime stacks. The saved template derives from the pinned
+   CLI and applies ADR 010's SSE-S3 policy with variant `Finbot: SSE-S3 v1`.
+   Always pass `--template`; the upstream default does not express this policy.
 3. Set the explicit local configuration; run strict synth and review
-   `npm run cdk -- diff PREFIX-ENV-state`.
+   `npm run cdk -- diff PREFIX-ENV-state --method template --profile default --no-lookups`.
 4. Deploy the state stack with `npm run cdk -- deploy PREFIX-ENV-state`.
 5. Obtain the ImageRepositoryUri output. Build/test an ARM64 image, authenticate
    Docker to that ECR registry, push an immutable tag and record its resolved digest.
@@ -131,6 +312,14 @@ Verify ownership/heartbeat on an authorized cloud check before activation. There
 is no local shared-data mount and no test shim in the production image.
 
 ## GitHub delivery configuration
+
+The reviewed JSON inputs and standard GitHub CLI commands for creating the
+production environment, requiring `ilancooke` approval and allowing only `main`
+are saved in [infra/github](../infra/github/README.md). The operator has applied
+the environment and branch rules, and applied and verified the seven non-secret
+production variables. The same folder preserves these inputs and their standard
+bulk CLI command for future updates. Code publication/CI verification and delivery
+enablement remain separate steps.
 
 Repository variable `FINBOT_DELIVERY_ENABLED=true` enables the release job. In the
 production GitHub environment, configure these variables from reviewed stack outputs:

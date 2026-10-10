@@ -37,8 +37,6 @@ class IngestionStack(Stack):
         policy(self.task_role, ["s3:DeleteObject", "s3:DeleteObjectVersion"],
             [state.bucket.arn_for_objects("*")], effect=iam.Effect.DENY)
         policy(self.task_role, ["sns:Publish"], [state.topic.topic_arn])
-        policy(self.task_role, ["kms:Decrypt", "kms:GenerateDataKey*"], [state.topic_key.key_arn],
-            conditions={"StringEquals": {"kms:ViaService": f"sns.{self.region}.amazonaws.com"}})
         policy(self.task_role, ["sqs:SendMessage"], [state.failed_work.queue_arn])
         state.repository.grant_pull(self.execution_role)
         log_group = logs.LogGroup(self, "Logs", log_group_name=f"/finbot/{config.name}",

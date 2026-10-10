@@ -20,6 +20,11 @@ The ingestion service publishes one generic `ArtifactReady` event to an **SNS to
 
 Each downstream service owns its own **SQS queue** subscribed to the topic.
 
+[ADR 010](010-use-service-managed-encryption-without-kms-integration.md) records
+the accepted encryption policy: the ingestion SNS topic has no encryption at
+rest; HTTPS publication remains required. The ingestion failed-work SQS queue
+retains SSE-SQS. Consumer-owned queue configuration remains downstream.
+
 ## Consequences
 
 ### Positive

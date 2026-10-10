@@ -685,11 +685,13 @@ image builds. Any live SEC smoke test remains explicitly manual.
   documented and tested. No unapproved distributed coordination is introduced.
 
 **Delivered:** Pinned Python CDK/Node toolchain, retained state/runtime stacks,
-four contract-compatible tables/GSIs, conditional immutable S3 policies, encrypted
+four contract-compatible tables/GSIs, conditional immutable S3 policies,
 SNS/SQS, retained ECR, scoped task/execution/OIDC release roles, ARM64 Fargate at
-count zero and eleven health/error/calendar/backlog/latency alarms. SNS uses a
-dedicated retained KMS key for precisely scoped encrypted publisher access. ECR
-lives in retained state so an image can be pushed before runtime deployment.
+count zero and eleven health/error/calendar/backlog/latency alarms. SNS used a
+dedicated retained KMS key in the original Phase 8 delivery; ADR 010 subsequently
+removed it and selected AWS-owned DynamoDB encryption before deployment. Current
+SNS message bodies are intentionally unencrypted at rest; SQS retains SSE-SQS.
+ECR lives in retained state so an image can be pushed before runtime deployment.
 
 Runtime adds configurable monotonic SEC startup quiet timing, deployed metrics
 environment and a shutdown admission guard across retries/redirects/limiter waits.
@@ -806,15 +808,92 @@ GitHub delivery executed or production inputs selected.
 
 ## 5. Next milestone
 
-**NEXT: Verify the selected production company identities, resolve ongoing Yahoo
-access, validate a full 30-day live scope, and separately authorize
-deployment/activation.**
+**NEXT: Publish the reviewed infrastructure/GitHub configuration changes, verify
+GitHub CI, then prepare staged delivery and the remaining production inputs.
+Before activation, revisit the image's open HIGH finding, verify the selected production company
+identities, resolve ongoing Yahoo access, validate a full 30-day live scope, and
+separately authorize activation.**
 
 Phase 8 implementation is delivered and validated offline. Initial CDK deployment
-remains manual; no infrastructure has been provisioned. Follow DEPLOYMENT.md for
+remains manual. The operator reported successful deployment of the shared
+`CDKToolkit` bootstrap stack on 2026-10-09 in account `559007813222`, region
+`us-east-1`, after successful AWS template validation. The saved SSE-S3 template
+was used with termination protection and the standard administrative execution
+policy. Operator-supplied read-only output confirmed `CREATE_COMPLETE`, termination
+protection enabled, bootstrap version `32` and expected bucket/repository outputs.
+Ignored local `finbot-prod` configuration is prepared using the existing local SEC
+identity, Yahoo calendar and the GitHub production environment subject; the image
+digest was initially a placeholder pending image publication. The operator reviewed the
+state stack's additions-only diff and successfully deployed `finbot-prod-state`
+with `--exclusively`, supplying its resource outputs. The operator built the Linux ARM64 image
+`finbot-ingestion:initial-20261009-1`; all eight network-disabled container tests
+passed (nine deselected) in 23.77 seconds. The operator also confirmed that the
+separate `/tmp` volume permission check passed. Docker authentication and image
+publication subsequently succeeded. The push reported digest
+`sha256:2066b10a21c57eb9a263ca6154eba08d7c3fd98fd4214915289c36998300b1f2`
+for `initial-20261009-1`, matching the local build. Operator-supplied ECR output
+confirmed the digest and scan status `COMPLETE`, with one `HIGH` finding.
+The HIGH finding is `CVE-2026-85091` in Debian trixie's zlib. Offline inspection
+confirmed zlib runtime 1.3.1; Debian still marks it affected with no fixed package,
+despite upstream fixes and affected-range discussion. No direct affected gzip-write
+calls were found in repository source; transitive unreachability is not proven.
+The finding remains open for activation review. The verified registry digest now
+replaces the placeholder in ignored local configuration for stopped-runtime
+preparation. Detailed evidence, sources and follow-up are in DEPLOYMENT.md.
+Operator-supplied read-only checks found no existing IAM OIDC providers and
+confirmed both configured availability zones (`us-east-1a`, `us-east-1b`) are
+available. The runtime stack defines its GitHub provider through CDK. Strict
+credential-free synthesis and encryption-policy checks passed with the real image
+digest; lint had zero errors and the existing redundant-dependency warning.
+The synthesized runtime was checked for ARM64, exact image digest and zero desired
+tasks. The operator reviewed the additions-only runtime diff, confirmed the IAM
+approval prompt and successfully deployed `finbot-prod-runtime`, supplying its
+outputs. Baseline task definition is `finbot-prod-ingestion:1`; cluster/service are
+`finbot-prod`. All three CloudFormation stacks are deployed. The operator's
+read-only `ecs describe-services` output confirmed no failures, service `ACTIVE`,
+desired/running/pending counts all zero and task-definition revision `1`.
+Read-only task-definition output confirmed revision `1` is `ACTIVE`, Linux ARM64,
+and pinned to the exact published ECR image digest. Basic deployed infrastructure
+verification is complete. Authenticated read-only GitHub inspection found the
+repository uses an immutable OIDC subject with permanent owner/repository IDs.
+The local CDK configuration was corrected to the exact production subject, and
+the operator reviewed and deployed the single release-role trust-policy change.
+The operator created the production GitHub environment with `ilancooke` as
+required reviewer, allowed the `main` branch only, and applied all seven reviewed
+target variables. Supplied variable-list output matched the deployed AWS targets
+and `FINBOT_ACTIVATION_APPROVED=false`. Read-only inspection confirmed delivery's
+repository enablement flag remains unset. GitHub setup inputs are saved under
+`infra/github/` and the exact subject/outputs in DEPLOYMENT.md. Code publication,
+CI/delivery execution, live application validation and activation remain pending.
+State-stack outputs and image
+preparation are recorded in DEPLOYMENT.md. Follow DEPLOYMENT.md for
 explicit account/network/OIDC configuration, staged infrastructure/image delivery,
 live verification and activation gates. Implementation does not authorize live
 cloud operations.
+
+The CDK account/region bootstrap template is saved under `infra/bootstrap/`,
+derived from pinned CLI 2.1145.0 (bootstrap version 32). It now applies
+[ADR 010](adr/010-use-service-managed-encryption-without-kms-integration.md) using
+SSE-S3 and variant `Finbot: SSE-S3 v1`. Its README and deployment runbook record
+the customization, CLI compatibility, explicit deployment parameters and upstream
+update procedure. Application infrastructure uses AWS-owned DynamoDB encryption,
+SSE-S3 and SSE-SQS, with SNS intentionally unencrypted at rest. The dedicated topic
+key, key output and application KMS permissions are removed. These local changes
+do not bootstrap AWS or authorize provisioning/activation. The standard bootstrap
+stack and deprecated key export were confirmed absent with read-only MCP calls
+before editing; no deployed data or resources were changed.
+
+Fresh validation for ADR 010 (2026-10-09): 555 application tests passed with eight
+opt-in Docker cases skipped; 19 infrastructure/workflow tests passed, including
+three checks for the customized bootstrap contract. Compilation, credential-free
+strict CDK synthesis, saved-template rendering and diff checks passed. Subsequently,
+approved isolated cfn-lint 1.57.2 and cfn-guard 3.2.1 checks covered the bootstrap
+and both application templates: zero lint errors, four reviewed warnings, zero
+encryption-policy violations and five passing Guard fixtures. Versions, commands,
+policy coverage and warning rationale are saved in
+[infra/validation](../infra/validation/README.md). At the offline-validation stage,
+no CloudFormation account-aware deployment validation had run; these local results
+alone did not establish deployment readiness.
 
 Yahoo/yfinance was chosen after an authorized live probe on 2026-10-09. The adapter
 is now implemented and validated offline; explicit Yahoo selection is supported

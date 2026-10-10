@@ -1,0 +1,120 @@
+# Guard's own test fixtures: prove permitted defaults and rejected regressions.
+- name: absent resource types skip their service rules
+  input:
+    Resources: {}
+  expectations:
+    rules:
+      no_project_kms_resources: PASS
+      s3_uses_sse_s3: SKIP
+      dynamodb_uses_aws_owned_encryption: SKIP
+      sns_has_no_kms_key: SKIP
+      sqs_uses_sse_sqs: SKIP
+      ecr_uses_default_or_aes256: SKIP
+      logs_have_no_custom_kms_key: SKIP
+
+- name: service-managed settings and plaintext SNS pass
+  input:
+    Resources:
+      Bucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketEncryption:
+            ServerSideEncryptionConfiguration:
+              - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      Table:
+        Type: AWS::DynamoDB::Table
+        Properties:
+          SSESpecification: {SSEEnabled: false}
+      Topic:
+        Type: AWS::SNS::Topic
+        Properties: {}
+      Queue:
+        Type: AWS::SQS::Queue
+        Properties: {SqsManagedSseEnabled: true}
+      Repository:
+        Type: AWS::ECR::Repository
+        Properties:
+          EncryptionConfiguration: {EncryptionType: AES256}
+      Logs:
+        Type: AWS::Logs::LogGroup
+        Properties: {}
+  expectations:
+    rules:
+      no_project_kms_resources: PASS
+      s3_uses_sse_s3: PASS
+      dynamodb_uses_aws_owned_encryption: PASS
+      sns_has_no_kms_key: PASS
+      sqs_uses_sse_sqs: PASS
+      ecr_uses_default_or_aes256: PASS
+      logs_have_no_custom_kms_key: PASS
+
+- name: omitted DynamoDB and ECR configuration uses permitted defaults
+  input:
+    Resources:
+      Table:
+        Type: AWS::DynamoDB::Table
+        Properties: {}
+      Repository:
+        Type: AWS::ECR::Repository
+  expectations:
+    rules:
+      no_project_kms_resources: PASS
+      dynamodb_uses_aws_owned_encryption: PASS
+      ecr_uses_default_or_aes256: PASS
+
+- name: KMS integration is rejected for every covered service
+  input:
+    Resources:
+      Key:
+        Type: AWS::KMS::Key
+      Alias:
+        Type: AWS::KMS::Alias
+      Bucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketEncryption:
+            ServerSideEncryptionConfiguration:
+              - ServerSideEncryptionByDefault:
+                  SSEAlgorithm: aws:kms
+                  KMSMasterKeyID: key
+      Table:
+        Type: AWS::DynamoDB::Table
+        Properties:
+          SSESpecification: {SSEEnabled: true, KMSMasterKeyId: key}
+      Topic:
+        Type: AWS::SNS::Topic
+        Properties: {KmsMasterKeyId: key}
+      Queue:
+        Type: AWS::SQS::Queue
+        Properties: {SqsManagedSseEnabled: false, KmsMasterKeyId: key}
+      Repository:
+        Type: AWS::ECR::Repository
+        Properties:
+          EncryptionConfiguration: {EncryptionType: KMS, KmsKey: key}
+      Logs:
+        Type: AWS::Logs::LogGroup
+        Properties: {KmsKeyId: key}
+  expectations:
+    rules:
+      no_project_kms_resources: FAIL
+      s3_uses_sse_s3: FAIL
+      dynamodb_uses_aws_owned_encryption: FAIL
+      sns_has_no_kms_key: FAIL
+      sqs_uses_sse_sqs: FAIL
+      ecr_uses_default_or_aes256: FAIL
+      logs_have_no_custom_kms_key: FAIL
+
+- name: S3 and SQS must explicitly enable service-managed encryption
+  input:
+    Resources:
+      Bucket:
+        Type: AWS::S3::Bucket
+        Properties: {}
+      Queue:
+        Type: AWS::SQS::Queue
+        Properties: {}
+  expectations:
+    rules:
+      no_project_kms_resources: PASS
+      s3_uses_sse_s3: FAIL
+      sqs_uses_sse_sqs: FAIL

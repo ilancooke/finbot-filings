@@ -1,6 +1,13 @@
 # Phase 8 implementation plan — CDK and application delivery
 
-Status: IMPLEMENTED (2026-10-09); validated offline, not deployed.
+Status at implementation completion: IMPLEMENTED (2026-10-09); validated offline,
+not yet deployed at that point. Current deployment status is in DEPLOYMENT.md.
+
+Subsequent decision: [ADR 010](adr/010-use-service-managed-encryption-without-kms-integration.md)
+supersedes the original SNS/DynamoDB KMS choices described below. Current code
+uses SSE-S3, DynamoDB AWS-owned encryption and SSE-SQS, with SNS unencrypted at
+rest. The customized checked-in bootstrap also uses SSE-S3. Original Phase 8
+delivery/validation below is historical; current commands are in DEPLOYMENT.md.
 
 Prepared against clean repository revision `6c5a2ac`. This plan supplements HLD,
 LLD, ADRs 001–007 and MIGRATION_PLAN. The initial request authorized planning, followed by explicit implementation

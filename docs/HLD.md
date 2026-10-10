@@ -462,6 +462,13 @@ Likely future changes:
 
 ## 14. Security considerations
 
+[ADR 010](adr/010-use-service-managed-encryption-without-kms-integration.md)
+defines the repository encryption policy: SSE-S3 for bootstrap and raw-artifact
+storage, DynamoDB AWS-owned encryption and SSE-SQS for failed work. SNS artifact
+messages are intentionally unencrypted at rest, with HTTPS publication required.
+No application-managed KMS keys, aliases or KMS integration are introduced.
+Service-managed storage encryption and existing access/retention controls remain.
+
 - No AWS credentials in source control.
 - ECS task role receives only required S3/DynamoDB/SNS/CloudWatch permissions.
 - GitHub Actions should authenticate to AWS using short-lived federation/OIDC rather than long-lived static credentials where practical.

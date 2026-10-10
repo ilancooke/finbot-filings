@@ -57,7 +57,12 @@ finbot-sec-ingestion/
 │   ├── replay/
 │   └── fixtures/
 ├── infra/
-│   └── cdk/
+│   ├── bootstrap/
+│   │   ├── bootstrap-template.yaml
+│   │   └── README.md
+│   ├── cdk/
+│   ├── github/
+│   └── validation/
 ├── docs/
 │   ├── HLD.md
 │   ├── LLD.md
@@ -425,10 +430,20 @@ Python CDK v2 defines retained state and stopped-by-default runtime stacks under
 `infra/cdk/`; synthesis uses explicit account/region/AZ fixture context without
 AWS lookups. The four tables and KEYS_ONLY indexes match section 6.5. Raw storage
 requires conditional create-only PUT, versioning/encryption, retention and scoped
-read/list access; ingestion cannot delete objects. SNS uses a dedicated retained
-KMS key for scoped encrypted publication. Standard operational SQS is encrypted
-and retains envelopes for 14 days; durable terminal facts remain authoritative.
+read/list access; ingestion cannot delete objects. SNS uses a retained topic
+without topic-level encryption at rest, as accepted by ADR 010.
+DynamoDB uses AWS-owned encryption; raw storage uses SSE-S3. Standard operational
+SQS uses SSE-SQS and retains envelopes for 14 days; durable terminal facts remain authoritative.
 ECR is retained in the state stack for initial image publication before runtime.
+
+`infra/bootstrap/` retains a customized bootstrap template derived from the
+pinned CDK CLI (resource version 32; variant `Finbot: SSE-S3 v1`), with provenance,
+deployment parameters and update instructions. ADR 010 selects SSE-S3, removes
+KMS resources/Allow statements and the deprecated key output, and preserves the
+CDK role/naming/version contract. The inert KMS-key input remains for CLI
+compatibility. It prepares shared account/region deployment infrastructure before
+the application stacks; it is deployed manually under separate authorization.
+Neither saving the template nor normal application delivery deploys bootstrap.
 
 The ARM64 Fargate task has no inbound port, HTTPS egress, non-root read-only root
 and image-declared writable `/tmp` volume. ECS health uses startPeriod 300s; the
@@ -1492,6 +1507,14 @@ more. This may materially delay discovery during expected earnings windows.
 Measure and revisit via [ARCH-001](BACKLOG.md#arch-001--reduce-recovery-delay-during-active-earnings-windows).
 
 ## 17. CDK infrastructure
+
+Apply [ADR 010](adr/010-use-service-managed-encryption-without-kms-integration.md)
+to all repository infrastructure: service-managed storage encryption, no project
+KMS resources or KMS-specific application grants, and explicitly unencrypted SNS
+message bodies at rest. This supersedes Phase 8's original dedicated topic key
+and AWS-managed DynamoDB encryption choices. The application emits no key-ARN
+output and its task role needs only `sns:Publish` for publication. A protective
+bootstrap lookup-role decryption deny is retained.
 
 CDK should provision at minimum:
 

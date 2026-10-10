@@ -1,0 +1,52 @@
+# Finbot policy-as-code for ADR 010. Run with cfn-guard 3.2.1.
+# These rules check encryption choices; they are not a general compliance framework.
+let kms = Resources.*[ Type == /^AWS::KMS::/ ]
+let buckets = Resources.*[ Type == 'AWS::S3::Bucket' ]
+let tables = Resources.*[ Type == 'AWS::DynamoDB::Table' ]
+let topics = Resources.*[ Type == 'AWS::SNS::Topic' ]
+let queues = Resources.*[ Type == 'AWS::SQS::Queue' ]
+let repositories = Resources.*[ Type == 'AWS::ECR::Repository' ]
+let logs = Resources.*[ Type == 'AWS::Logs::LogGroup' ]
+
+rule no_project_kms_resources {
+    %kms empty
+}
+
+rule s3_uses_sse_s3 when %buckets !empty {
+    %buckets.Properties.BucketEncryption.ServerSideEncryptionConfiguration[*].ServerSideEncryptionByDefault {
+        SSEAlgorithm == 'AES256'
+        KMSMasterKeyID !exists
+    }
+}
+
+rule dynamodb_uses_aws_owned_encryption when %tables !empty {
+    %tables.Properties {
+        SSESpecification !exists OR
+        SSESpecification.SSEEnabled == false
+        SSESpecification.KMSMasterKeyId !exists
+    }
+}
+
+# SNS plaintext at rest is an accepted decision, not a compliance violation.
+rule sns_has_no_kms_key when %topics !empty {
+    %topics.Properties.KmsMasterKeyId !exists
+}
+
+rule sqs_uses_sse_sqs when %queues !empty {
+    %queues.Properties {
+        SqsManagedSseEnabled == true
+        KmsMasterKeyId !exists
+    }
+}
+
+rule ecr_uses_default_or_aes256 when %repositories !empty {
+    %repositories {
+        Properties.EncryptionConfiguration !exists OR
+        Properties.EncryptionConfiguration.EncryptionType == 'AES256'
+        Properties.EncryptionConfiguration.KmsKey !exists
+    }
+}
+
+rule logs_have_no_custom_kms_key when %logs !empty {
+    %logs.Properties.KmsKeyId !exists
+}

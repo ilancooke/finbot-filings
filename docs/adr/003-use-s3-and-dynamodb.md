@@ -12,6 +12,8 @@ The service needs to preserve immutable SEC documents and maintain simple operat
 - Store companies, calendar records, filing metadata, artifact metadata, durable checkpoints, and failure metadata in **DynamoDB**.
 - Use deterministic S3 keys based on CIK, accession number, and filename.
 - Do not compute/store content hashes in v0.
+- Encryption follows [ADR 010](010-use-service-managed-encryption-without-kms-integration.md):
+  SSE-S3 artifacts and AWS-owned DynamoDB encryption, with no project KMS integration.
 
 ## Consequences
 
