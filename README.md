@@ -10,8 +10,10 @@ The supported runtime/container uses only `finbot_ingestion`; the superseded
 namespace and extraction commands were removed in Phase 7. Phase 8 adds CDK,
 application delivery, health alarms and the agreed conservative recovery policy.
 Infrastructure and workflows are validated offline. The bootstrap, state and
-runtime stacks are deployed, and GitHub delivery has staged an ARM64 image with
-ECS desired count zero. See [DEPLOYMENT](docs/DEPLOYMENT.md) for recorded results.
+runtime stacks are deployed. GitHub activation succeeded on 2026-10-10; one healthy
+ARM64 task is running with fresh calendar coverage and verified SEC acquisition,
+S3 storage and SNS publication checkpoints. See [DEPLOYMENT](docs/DEPLOYMENT.md)
+for recorded results and the initial oversized-document failure requiring review.
 The Yahoo/yfinance earnings-calendar adapter is implemented and tested offline.
 Provider selection remains explicit; the default placeholder reports unavailable
 coverage. The [initial production universe](docs/PRODUCTION_UNIVERSE.md) contains
@@ -19,8 +21,10 @@ coverage. The [initial production universe](docs/PRODUCTION_UNIVERSE.md) contain
 read-only verification confirmed all 50 stored records match the reviewed SEC
 ticker/CIK/name mapping. The operator's enabled-index query also returned all 50
 companies. A complete local 30-day Yahoo collection passed with 49 observed
-companies; the operator confirmed NVDA's absence was expected. Cloud application
-validation and activation remain pending.
+companies; the operator confirmed NVDA's absence was expected. The first full cloud
+refresh completed for October 10–November 8 with 47 observations across the same
+50-company scope. One Citigroup submission exceeded the configured 64-MiB artifact
+limit and was recorded as terminal failed work; ingestion continues.
 
 ## Install and validate
 
@@ -79,7 +83,9 @@ and separate `Finbot/DeploymentChecks` EMF, without starting ingestion, fetching
 provider/SEC data or sending SNS/SQS messages. It leaves one small S3 object and
 three reserved DynamoDB rows for operator review/cleanup. See the
 [finite cloud check](docs/DEPLOYMENT.md#finite-fargate-deployment-check) for saved
-AWS CLI inputs, exact writes and prerequisites. Each new run needs a new check ID.
+AWS CLI inputs, exact writes and prerequisites. Repeating an executed check needs
+a new check ID. A failed-to-start task can retry with a fresh request token and
+the same check ID after verifying that its fixtures are absent.
 
 Normal execution contacts AWS, SEC and, when selected, Yahoo. It requires an identifying SEC User-Agent,
 existing AWS resources/indexes, valid AWS credentials and a nonempty enabled
@@ -380,6 +386,8 @@ implemented Phase 8 recovery policy and its earnings-latency tradeoff.
 [DEPLOYMENT](docs/DEPLOYMENT.md) documents CDK, GitHub configuration, readiness,
 stop/wait/start releases and recovery; [PHASE_8_PLAN](docs/PHASE_8_PLAN.md) records
 delivery and validation.
+[DEPLOYMENT_WALKTHROUGH](docs/DEPLOYMENT_WALKTHROUGH.md) explains the first AWS
+deployment step by step, including each stack, GitHub's role and activation controls.
 [PHASE_7_PLAN](docs/PHASE_7_PLAN.md) records the cutover and validation. Prior phase
 plans/results are historical records; use this README for current commands.
 

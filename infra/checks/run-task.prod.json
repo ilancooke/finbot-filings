@@ -3,8 +3,8 @@
   "count": 1,
   "launchType": "FARGATE",
   "platformVersion": "1.4.0",
-  "startedBy": "finbot-readiness-20261009-1",
-  "clientToken": "finbot-readiness-20261009-1",
+  "startedBy": "finbot-readiness-20261009-2",
+  "clientToken": "finbot-readiness-20261009-2",
   "networkConfiguration": {
     "awsvpcConfiguration": {
       "subnets": ["subnet-062ea2c901f2c4feb", "subnet-0724d6c478bd6a219"],

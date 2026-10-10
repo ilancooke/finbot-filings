@@ -27,3 +27,32 @@ Keep this backlog linked to those documents rather than duplicating their contra
   complexity and cost of alternatives.
 - Completion: Record a new or superseding ADR, update HLD/LLD and schedule the
   approved work. Avoid promising uninterrupted earnings ingestion before validation.
+
+## DATA-001 — Review oversized SEC submission acquisition
+
+- Status: Observed during initial production activation; investigation pending.
+- Evidence: Citigroup 10-K artifact
+  `0000831001-26-000011/0000831001-26-000011.txt` exceeded the configured 64-MiB cap
+  at `2026-10-10T14:31:48.814400Z`. Its terminal acquisition/dead-letter checkpoints,
+  logs, metric and one visible failed-work queue message agree. See DEPLOYMENT.md.
+- Current contract: HLD section 8 explicitly bounds v0 acquisition to 64 MiB per
+  artifact; larger documents fail. The task stayed healthy and continued other work.
+- Investigation: Establish the document size and desired completeness policy;
+  assess bounded streaming/spooling and memory constraints before any cap increase.
+  Define a reviewed redrive procedure if supported acquisition behavior changes.
+- Completion: Record the approved policy/design and validate any new acquisition
+  behavior before redriving the durable failed artifact. Do not delete terminal
+  records or silently omit the original submission file.
+
+## OPS-001 — Distinguish historical catch-up from live discovery latency
+
+- Status: Observed during initial production activation; investigation pending.
+- Evidence: DiscoveryLatencyMs alarm fired during initial catch-up on 2026-10-10.
+  A verified example was accepted August 7 and first discovered during startup;
+  acceptance-to-discovery age exceeds the 60-second threshold by design.
+- Investigation: Assess separate metrics/labels or alarm applicability for initial
+  historical collection versus newly accepted filings. Preserve the observed
+  acceptance and discovery timestamps; do not relabel old filings as timely.
+- Completion: Review the intended timeliness contract and apply a tested metric or
+  alarm change through source-controlled infrastructure/application delivery.
+  No alarm suppression is authorized by this backlog entry.

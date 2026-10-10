@@ -1,5 +1,25 @@
 # Phase 8 deployment and recovery runbook
 
+## Current status — 2026-10-10
+
+Activation run `38059361548` succeeded. ECS service `finbot-prod` runs one healthy
+Linux ARM64 task on application revision `5`, using the exact cloud-tested digest
+`sha256:1fa4e71ad8b06d295e2ea9a8db561ca8084646a82e49066995f032ef7f7221fd`.
+CloudFormation baseline remains revision `3`. The full Yahoo calendar refresh
+completed at `14:32:05.877115Z` for the 50-company scope and October 10–November 8,
+with 47 stored events. Runtime metrics confirm live/fresh/matching scope; SEC
+acquisition, actual S3 storage and durable SNS publication checkpoints are verified.
+
+One Citigroup 10-K submission text exceeded the configured 64-MiB artifact limit
+and is terminal failed work. Initial historical catch-up also crossed the discovery
+latency threshold. Deployment/startup are verified, but artifact completeness is
+not an all-clear; see the activation evidence below and [BACKLOG.md](BACKLOG.md).
+[DEPLOYMENT_WALKTHROUGH.md](DEPLOYMENT_WALKTHROUGH.md) explains the full first-deployment
+process for learning. The following deployment history preserves earlier stopped
+states and pending checks as observations at those times.
+
+## Deployment history
+
 The CDK application and delivery workflows are implemented and tested offline.
 On 2026-10-09 the operator reported successful creation of the shared `CDKToolkit`
 bootstrap stack in account `559007813222`, region `us-east-1`, using the saved
@@ -708,6 +728,218 @@ credential refusal, timeout handling and sanitized reports. The container
 installation test now exercises this mode through the image entry point; the
 rebuilt ARM64 image must pass it in CI before staging. No live AWS writes occurred
 during this preparation.
+
+CI subsequently passed for commit `d2098df65caba8f8bcf84808970260b4ab8deec2`,
+[run 38025079649](https://github.com/ilancooke/finbot-filings/actions/runs/38025079649),
+completed `2026-10-10T04:46:31Z`. Application/infrastructure, workflow validation
+and the rebuilt ARM64 image/offline lifecycle step all succeeded, including the
+new diagnostic entry-point check. Read-only inspection afterward confirmed
+repository delivery still disabled, production activation approval false and
+baseline revision `3`. ECS remained at zero desired/running/pending with no listed
+running tasks. The next operator action is to restore delivery using the saved
+repository variables, then dispatch `activate=false` to stage this validated
+commit. The finite cloud check remains unperformed.
+The operator subsequently reapplied `infra/github/repository-variables.env` with
+`gh variable set` and reported `FINBOT_DELIVERY_ENABLED` updated to the saved
+value `true`. Production activation approval remains false; next manually dispatch
+`deploy.yml` on `main` with `activate=false` and review/approve its staged release.
+The operator dispatched that staged release:
+[run 38025568665](https://github.com/ilancooke/finbot-filings/actions/runs/38025568665).
+Read-only GitHub inspection confirmed `workflow_dispatch`, the CI-tested commit
+`d2098df65caba8f8bcf84808970260b4ab8deec2`, and a waiting release job with no
+steps executed. Its pending production environment is `23924540932`, with the
+operator eligible to approve. Staged delivery and the finite cloud check are
+still pending; dispatch is not evidence of image publication or runtime execution.
+The operator approved the pending production deployment for run `38025568665`
+with an explicit `activate=false` comment. GitHub returned deployment ID
+`6976296179`, targeting the same validated commit. Subsequent read-only inspection
+showed the release running its application validation step; delivery completion
+and the new revision/digest remain to be verified.
+Staged run `38025568665` subsequently succeeded, completed
+`2026-10-10T04:57:43Z`. Its downloaded manifest reports `outcome=staged`,
+`checkpoint=verified`, previous count zero and no observed tasks. The new
+task definition is
+`arn:aws:ecs:us-east-1:559007813222:task-definition/finbot-prod-ingestion:4`,
+using image digest
+`sha256:1fa4e71ad8b06d295e2ea9a8db561ca8084646a82e49066995f032ef7f7221fd`
+and tag `d2098df65caba8f8bcf84808970260b4ab8deec2-38025568665-1`.
+Read-only AWS inspection confirmed the same digest on Linux ARM64, identical
+task configuration to baseline revision `3` except image, matching saved RunTask
+subnets/security group/public-IP settings, and service rollout `COMPLETED` with
+zero desired/running/pending tasks. Baseline GitHub variable remains `:3` because
+that is the CloudFormation-managed baseline, not the application release revision.
+The new image scan is `COMPLETE` with only the previously accepted HIGH
+`CVE-2026-85091`; no new findings were reported. The next operator command is the
+finite RunTask input with the exact verified revision `:4`. That task has not
+been launched, and production ingestion remains inactive.
+The operator then launched the saved readiness input against revision `4`.
+RunTask returned no failures and task
+`arn:aws:ecs:us-east-1:559007813222:task/finbot-prod/605da5eb37444f879400aee4bb9f367d`
+in `PROVISIONING`. Initial read-only inspection found it `PENDING`, with the
+expected image, `startedBy=finbot-readiness-20261009-1` and only the diagnostic
+command override. The ingestion service remained at zero. Exit status, report,
+fixture results and CloudWatch metric extraction are not yet verified.
+The task subsequently stopped at `2026-10-10T05:02:46.995Z` with
+`stopCode=TaskFailedToStart`, no `startedAt` or container exit code, and
+`CannotPullContainerError`: the pinned registry reference was reported not found
+while resolving it for schema1 conversion. Its log stream was empty. The Python
+check did not start, so none of its test writes or EMF ran. Activation readiness
+is not established.
+
+Read-only investigation confirmed the exact digest/tag still exists, is ACTIVE,
+and has a Docker Schema 2 manifest with gzip layers; BatchGetImage returned that
+manifest without failures. There is no repository policy. The execution role has
+repository-scoped BatchGetImage/GetDownloadUrlForLayer/BatchCheckLayerAvailability
+and wildcard GetAuthorizationToken, with no permissions boundary or attached
+managed policies. CloudTrail shows the failed task's execution-role session
+reached ECR and requested the exact digest with compatible media types; the
+recorded calls had no top-level error. These checks do not explain the registry
+pull failure or prove all registry operations succeeded. Next compare a Docker
+pull of the exact pinned digest before choosing a retry or a source fix. Any retry
+must use a new RunTask client token; the original token can return the stopped
+task rather than launch a new one. The service remains stopped.
+The operator's subsequent local ARM64 Docker pull of the exact pinned digest
+succeeded and reported the same digest. Read-only inspection reconfirmed the first
+task fully STOPPED, no running tasks, and service desired/running/pending all zero.
+Consistent reads found all three diagnostic rows absent, and S3 HEAD returned 404
+for its exact fixture key. This rules out leftover diagnostic fixtures and shows
+the registry image can be pulled locally; it does not identify Fargate's failure
+cause. A controlled retry is prepared without changing the image, platform,
+network or IAM: saved RunTask `clientToken` and `startedBy` are now
+`finbot-readiness-20261009-2`. The diagnostic check ID remains
+`readiness-20261009-1` because Python never started and no fixtures exist. No image
+rebuild, CI rerun or CDK deployment is needed for this request-token-only retry.
+Repeating an executed/partially executed check would instead require a new check
+ID and matching cleanup input. The retry has not been launched.
+See [RunTask idempotency](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ECS_Idempotency.html).
+
+The operator then launched retry task
+`arn:aws:ecs:us-east-1:559007813222:task/finbot-prod/efbd89a0313c42daa996cd03b033ecb6`
+with no RunTask failures. Read-only inspection confirmed revision `4`, the same
+pinned image digest, diagnostic command and attempt-2 startedBy. It started at
+`2026-10-10T05:10:58.060Z`, fully stopped `2026-10-10T05:11:28.049Z`, and exited
+`0` (`EssentialContainerExited`). The unchanged image/config pulled successfully
+on retry; the first pull failure's root cause remains undetermined.
+
+Actual CloudWatch log report `status=passed` records 2.908 seconds of diagnostic
+execution, `container-role` credentials, 50 enabled company records validated,
+three checkpoint roundtrips, writable private `/tmp`/atomic heartbeat and S3
+absence/conditional overwrite rejection/original bytes. Peak Linux RSS was
+`366.0 MiB` while touching 256 MiB of synthetic buffers, below the 768-MiB ceiling;
+this is not measured worst-case production memory. Report/EMF timestamp is
+`2026-10-10T05:11:04.376Z`. GetMetricStatistics independently returned
+`DeploymentCheckSucceeded` Maximum `1` / Count for the `05:11:00Z` minute in
+`Finbot/DeploymentChecks`, with the expected Service/Environment dimensions.
+Application-originated log/EMF delivery is verified.
+
+Consistent reads independently confirmed all three owned test rows in state
+`verified`. S3 HEAD confirmed the 45-byte AES256 test object and exact version
+`A31uuXti4t.pfT0kjgR5b2hKG1W5UUFB`. Service revision `4` still has zero
+desired/running/pending counts and ListTasks returned no running tasks. Next
+apply the saved owned-row cleanup transaction and delete only that S3 fixture
+version with the standard CLI commands above. Cleanup was pending at that point. The finite AWS
+readiness check is complete; normal ingestion, live cloud SEC/Yahoo behavior and
+sustained memory remain untested.
+
+The operator subsequently deleted the exact S3 test version. Read-only verification
+confirmed all three DynamoDB fixture rows absent with consistent reads and S3 HEAD
+returning 404 for the fixture key. Cleanup is complete. The service still selects
+revision `4` with desired/running/pending counts of zero, and no tasks are running.
+
+The saved production variables now prepare `FINBOT_ACTIVATION_APPROVED=true` for
+the operator to apply through `gh variable set --env-file`. This local edit has
+not changed GitHub or started ingestion. Keep the CloudFormation baseline variable
+at revision `3`. Next manually dispatch `activate=true` with the exact tested digest
+`sha256:1fa4e71ad8b06d295e2ea9a8db561ca8084646a82e49066995f032ef7f7221fd`
+and approve the production environment. Selecting the existing digest avoids
+rebuilding the validated image. After startup, verify normal runtime health,
+full calendar freshness/scope and SEC polling from cloud logs/metrics; the finite
+diagnostic did not exercise those live providers.
+
+The operator applied the saved production variables successfully. Read-only GitHub
+verification confirms `FINBOT_ACTIVATION_APPROVED=true`, baseline revision `3`,
+the reviewed deployment targets and repository `FINBOT_DELIVERY_ENABLED=true`.
+ECS still selects revision `4` with zero desired/running/pending tasks and no
+running task ARNs. The next operator command is the manual activation dispatch
+using the exact tested digest above; production environment review remains required.
+
+The operator dispatched [activation run 38059361548](https://github.com/ilancooke/finbot-filings/actions/runs/38059361548)
+on `main` with `activate=true` and the exact tested digest
+`sha256:1fa4e71ad8b06d295e2ea9a8db561ca8084646a82e49066995f032ef7f7221fd`.
+Read-only GitHub inspection confirms commit
+`d2098df65caba8f8bcf84808970260b4ab8deec2`, `workflow_dispatch`, status `waiting`
+and pending production environment `23924540932`, with the operator permitted
+to approve. Approval and ingestion startup have not yet been observed.
+
+The operator approved production deployment `6982142650` for this activation run
+at `2026-10-10T14:22:42Z`. The release job started at `14:24:08Z` and is running
+application validation before obtaining AWS credentials. Approval authorizes
+normal ingestion startup using the selected tested image; workflow completion,
+task health and live provider behavior still await verification.
+
+The activation workflow subsequently completed successfully. Its downloaded
+`release-manifest.json` records `outcome=running`, `checkpoint=verified`, source
+commit `d2098df65caba8f8bcf84808970260b4ab8deec2`, previous revision/count `4`/`0`
+and new revision `5`, with the exact tested image digest above. Read-only ECS
+inspection confirmed desired/running/pending `1`/`1`/`0`, rollout `COMPLETED`, zero
+failed deployment tasks, and healthy task
+`arn:aws:ecs:us-east-1:559007813222:task/finbot-prod/23138c44eee34761a6c8617f01b55b7a`
+in `us-east-1a`. Image pull completed and the task started at `14:26:30.673Z`.
+Normal command has no diagnostic override. The quiet-period log is timestamped
+`14:26:36.502Z`; normal runtime/calendar/SEC work began after that period.
+
+Consistent calendar-state reads and the completion log confirm full Yahoo sync
+`d9e58a34fdae48928e156b8dea62f927`: observed `14:29:07.228349Z`, completed
+`14:32:05.877115Z`, 50 companies, 47 events, zero cancellations, no failure record,
+covering `2026-10-10` through `2026-11-08`. The persisted date-partition rows also
+contain 47 events. Compared with the preceding local report, DAL and HOVR's
+October 9 observations are outside today's window; GLDG is now observed on October
+12 rather than October 9. NVDA remains without an observation. Complete collection
+does not establish dates for companies without observations or guarantee future
+daily refreshes.
+
+CloudWatch independently returned `RuntimeHealthy=1` for the 14:29–14:33 minutes,
+`CalendarScopeMatches=1` and `CalendarStale=0` from the 14:32 minute, and full-sync
+age samples of 31.10 and 91.11 seconds. SEC request counts are nonzero in every
+observed active minute. Initial AWS/ECS service memory-utilization maxima were
+14.31–18.55% in the 14:29–14:32 minutes; this is a short startup sample, not a
+worst-case guarantee. Health and metric readings are independent of workflow success.
+
+For an actual stored/published artifact, consistent reads confirmed Citigroup 10-Q
+artifact `0000831001-26-000045/R1.htm`, S3 URI
+`s3://finbot-prod-state-artifacts82dd59a1-8gt63rcgmaua/0000831001/0000831001-26-000045/R1.htm`,
+size 73,390 bytes and durable `stored_at`/`published_at` facts. S3 HEAD independently
+confirmed 73,390 bytes, AES256 encryption and a version ID. This verifies actual
+cloud acquisition/storage/publication checkpoint flow; no downstream consumer
+receipt was tested.
+
+One real exception is recorded: Citigroup 10-K artifact
+`0000831001-26-000011/0000831001-26-000011.txt` failed `ACQUIRE` with
+`SECDocumentTooLarge` at `14:31:48.814400Z`. Its consistent DynamoDB record has
+`last_error="SEC document exceeds MAX_ARTIFACT_BYTES"`, terminal stage/time and
+`dead_lettered_at=14:31:48.966167Z`, without storage/publication facts. Logs and
+`TerminalFailures=1` agree; SQS reported one visible failed-work message. The v0
+64-MiB cap is explicit in HLD section 8. No cap increase, deletion, redrive or
+failure suppression was performed. The task continued healthy and other artifacts
+continued to store/publish. Review [DATA-001](BACKLOG.md#data-001--review-oversized-sec-submission-acquisition)
+before claiming complete acquisition of this package.
+
+The liveness alarm returned to OK at `14:30:59.637Z`. Calendar scope/stale alarms
+fired while the first sync was incomplete; their recovery awaits alarm evaluation
+of the new matching/fresh metrics. The discovery-latency alarm crossed during
+historical catch-up; the verified Citigroup 10-Q was accepted August 7 and first
+discovered today. This measures acceptance-to-first-discovery age, not download
+duration. See [OPS-001](BACKLOG.md#ops-001--distinguish-historical-catch-up-from-live-discovery-latency).
+Terminal-failure/failed-work conditions are real and remain operational follow-ups.
+
+Final read-only startup check at `2026-10-10T14:36:47Z` confirmed the same task
+still RUNNING/HEALTHY, service `1`/`1`/`0` and completed rollout with no failed
+deployment tasks. Calendar scope and stale alarms returned to OK at
+`14:34:54.914Z` and `14:34:56.017Z`, respectively. Discovery-latency and terminal
+failure alarms remain ALARM; SQS still reports one visible failed-work message.
+The non-HeadObject warning query returned only the three log entries for the one
+known oversized document. Initial activation verification is complete with those
+explicit follow-ups; no additional AWS mutations were made during inspection.
 
 ## Automatic recovery and alarms
 

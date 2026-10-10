@@ -51,7 +51,10 @@ Code publication is a separate setup step.
 `production-variables.env` contains seven non-secret environment variables copied
 from the operator's reviewed CloudFormation outputs. It includes the region,
 release role, ECS cluster/service, ECR repository, CDK baseline task definition,
-and `FINBOT_ACTIVATION_APPROVED=false`. The filename is a dotenv input format for
+and `FINBOT_ACTIVATION_APPROVED`. The saved activation flag is now `true`, prepared
+after the finite cloud readiness check and fixture cleanup passed. Applying it
+allows an explicitly approved activation workflow; it does not start ingestion.
+The filename is a dotenv input format for
 the CLI, not an application credentials file. It is intended for version control.
 Do not add AWS access keys or SEC contact details here.
 

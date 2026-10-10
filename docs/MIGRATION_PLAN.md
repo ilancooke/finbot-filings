@@ -722,7 +722,8 @@ remain deferred.
 ## 4. Current migration status
 
 **Phases 1–4: COMPLETE. Phase 5: COMPLETE for authorized placeholder-provider scope.
-Phases 6–7: COMPLETE. Phase 8: IMPLEMENTED and validated offline; not deployed.**
+Phases 6–7: COMPLETE. Phase 8: DEPLOYED; first activation and live startup verified
+on 2026-10-10. Oversized-document failed work remains an operational follow-up.**
 
 Phase 1 delivered typed contracts, deterministic identities, UTC timestamp
 validation, offline submissions parsing, and configuration validation while
@@ -808,12 +809,11 @@ GitHub delivery executed or production inputs selected.
 
 ## 5. Next milestone
 
-**NEXT: Complete the remaining production-readiness checks with ingestion stopped.
-The 50-company seed, complete 30-day operator-machine Yahoo collection and
-CloudWatch-to-email notification path are verified. The operator accepts the known
-HIGH zlib finding for this research deployment. Before activation, resolve ongoing
-Yahoo access, cloud runtime permissions/networking/EMF/memory checks and the final
-validated image release; separately authorize activation.**
+**NEXT: Review the real oversized-document failed-work case (DATA-001), historical
+discovery-latency alarm behavior (OPS-001), and ongoing daily refresh/recovery
+observations. Deployment and initial activation are complete: one healthy task,
+fresh full calendar scope and actual SEC/S3/SNS checkpoint flow are verified.
+Long-term reliability and worst-case production memory remain unproven.**
 
 Phase 8 implementation is delivered and validated offline. Initial CDK deployment
 remains manual. The operator reported successful deployment of the shared
@@ -1025,6 +1025,98 @@ Local diagnostic preparation validation passed: 585 application tests, eight
 opt-in container cases skipped, 26 infrastructure/workflow tests, compilation and
 whitespace checks. Eighteen diagnostic tests are offline; the extended installed
 container check awaits CI's rebuilt ARM64 image. No AWS writes were performed.
+CI then passed for `d2098df65caba8f8bcf84808970260b4ab8deec2` in run
+`38025079649` (completed `2026-10-10T04:46:31Z`), including workflow and rebuilt
+ARM64 container/lifecycle validation. Read-only verification still showed delivery
+disabled, activation approval false, baseline/service revision `3`, zero service
+counts and no running tasks. Next restore delivery and dispatch a staged release
+with `activate=false`; the finite cloud check has not run yet.
+The operator then restored repository delivery using the saved variables file;
+the CLI reported `FINBOT_DELIVERY_ENABLED` updated. Next dispatch/approve staged
+delivery on `main` with `activate=false`, preserving activation approval false.
+The operator dispatched staged run `38025568665` with `activate=false`. Read-only
+inspection confirmed the CI-tested `d2098df...` commit and production environment
+`23924540932` awaiting approval; the release job had executed no steps yet.
+The operator approved staged run `38025568665`; GitHub returned deployment
+`6976296179` for the validated commit. The release proceeded to application checks;
+completion and the staged task revision/digest remain unverified.
+Staged run `38025568665` then succeeded (`2026-10-10T04:57:43Z`). Manifest
+`outcome=staged` / `checkpoint=verified` identifies revision `4`, digest
+`sha256:1fa4e71ad8b06d295e2ea9a8db561ca8084646a82e49066995f032ef7f7221fd`
+and the validated `d2098df...` source commit, with previous count zero and no
+observed tasks. Read-only ECS inspection matched that image/platform, baseline
+configuration except image, saved check network and completed zero-count rollout.
+ECR scan completed with only the operator-accepted HIGH zlib finding. The
+CloudFormation baseline remains revision `3`; next launch the finite readiness
+check explicitly against application revision `4`. No readiness task or normal
+ingestion has started yet.
+The operator launched the finite check against revision `4`; RunTask returned
+task `605da5eb37444f879400aee4bb9f367d` and no failures. Read-only inspection
+confirmed the diagnostic override/expected image and `PENDING` status, with the
+service still zero. Check completion/report/EMF verification remain pending.
+The task failed to start at `2026-10-10T05:02:46.995Z`: Fargate reported a
+CannotPullContainerError resolving the pinned digest for schema1 conversion.
+No Python startup, diagnostic writes or metrics occurred. Read-only ECR inspection
+still returned the exact ACTIVE Docker Schema 2 image/manifest. Execution-role
+policies contain the expected pull permissions, and CloudTrail records that task's
+ECR requests without a top-level error. Root cause remains unresolved; next compare
+a Docker pull of the exact digest before retrying with a fresh RunTask client token.
+Do not activate ingestion until image pulling and the finite check are verified.
+The operator then successfully pulled the exact ARM64 registry digest locally.
+Read-only checks confirmed the failed task STOPPED, service zero, no running tasks,
+all three diagnostic rows absent and S3 fixture HEAD 404. A retry is prepared by
+changing only RunTask client token/startedBy to `finbot-readiness-20261009-2`.
+The diagnostic check ID and cleanup keys stay at `readiness-20261009-1` because
+the application never started and its fixtures are absent. No rebuilt image or
+infrastructure change is required. Root cause remains undetermined; the retry
+has not been launched and readiness/activation remain pending.
+Retry task `efbd89a0313c42daa996cd03b033ecb6` then ran the same revision `4` and
+image digest, started `2026-10-10T05:10:58.060Z`, stopped
+`2026-10-10T05:11:28.049Z` and exited zero. Actual report `status=passed` records
+2.908 seconds, task-role credentials, 50 company reads, three checkpoint
+roundtrips, private `/tmp`/heartbeat, S3 absence/immutability and peak RSS 366 MiB
+while touching 256 MiB of buffers. CloudWatch independently extracted
+`DeploymentCheckSucceeded=1` for the 05:11 UTC minute. All three owned fixture
+rows read `verified`; S3 HEAD confirmed 45 bytes/AES256 and version
+`A31uuXti4t.pfT0kjgR5b2hKG1W5UUFB`. Service counts remain zero, with no running
+tasks. The finite cloud readiness check is complete; next operator cleanup of
+exactly those fixtures, then explicit activation approval/dispatch and live
+SEC/Yahoo/startup-memory observations. First pull failure cause remains
+undetermined; no image/platform/network/IAM change was needed for the successful
+retry. The operator subsequently deleted the exact S3 test version; consistent
+read-only DynamoDB reads and S3 HEAD verified all fixtures absent. Cleanup is
+complete, and service revision `4` still has zero desired/running/pending tasks.
+The saved production variables prepare `FINBOT_ACTIVATION_APPROVED=true`; the
+operator has not yet applied that change to GitHub. CloudFormation baseline remains
+revision `3`. Next apply the gate, manually activate the same tested image digest
+and approve the production environment, then observe normal runtime/provider
+behavior. Ingestion activation has not occurred.
+The operator then applied the saved production variables. Read-only GitHub checks
+confirm activation approval and delivery flags both `true`, with baseline still
+revision `3`; ECS revision `4` remains stopped with no running tasks. Manual
+activation dispatch and production environment approval are next.
+The operator dispatched activation run `38059361548` on `main` using
+`activate=true` and the exact tested digest. Read-only GitHub inspection confirms
+the validated source commit `d2098df65caba8f8bcf84808970260b4ab8deec2` and status
+`waiting` for production environment `23924540932`. Approval/startup are pending.
+The operator subsequently approved deployment `6982142650`; the activation job
+started at `2026-10-10T14:24:08Z`. Workflow completion and normal runtime/provider
+verification remain in progress.
+Activation subsequently succeeded with a verified release manifest and ECS revision
+`5`, desired/running/pending `1`/`1`/`0`, healthy task and completed rollout. The
+CloudFormation baseline remains `3`. Full Yahoo cloud sync completed at
+`2026-10-10T14:32:05.877115Z` for 50 companies and October 10–November 8, with 47
+persisted events. Matching/fresh/live metrics and actual SEC acquisition, S3 object
+storage and durable SNS publication checkpoints are verified. One Citigroup 10-K
+submission text exceeded the v0 64-MiB cap and was recorded as terminal failed work,
+with a durable dead-letter checkpoint and one visible SQS message. The application
+continues running; this is incomplete acquisition for that document, not an
+unverified deployment. See DEPLOYMENT.md for evidence, DATA-001 for size-policy review
+and OPS-001 for historical discovery-latency alarm interpretation. No cap change,
+redrive, failed-record deletion or alarm suppression accompanied activation.
+The final startup check at `2026-10-10T14:36:47Z` confirmed the task remains healthy
+and calendar scope/stale alarms have recovered to OK. One failed-work message and
+the historical-latency/terminal-failure alarms remain documented follow-ups.
 State-stack outputs and image
 preparation are recorded in DEPLOYMENT.md. Follow DEPLOYMENT.md for
 explicit account/network/OIDC configuration, staged infrastructure/image delivery,
@@ -1322,7 +1414,7 @@ historical evidence rather than a full production coverage result.
 
 | Input | Status | Required for |
 | --- | --- | --- |
-| Earnings-calendar ongoing access and production coverage | Complete 30-day operator-machine collection passed with 49 matches; NVDA absence reviewed as expected. Ongoing access arrangement and cloud runtime validation remain pending | Production calendar use |
+| Earnings-calendar ongoing access and production coverage | Keyless Yahoo selected; complete local collection passed with 49 matches and full cloud collection passed with 47 observations in the next day's window. Scope/freshness verified after activation; ongoing access and daily reliability remain operational observations | Initial cloud use verified; continued operation monitored |
 | Production universe with ticker/CIK/name/enabled fields | All 50 SEC identities verified, create-only seed applied and stored attributes/EnabledCompanies index verified on 2026-10-09; see [PRODUCTION_UNIVERSE.md](PRODUCTION_UNIVERSE.md) | Complete for initial universe seeding |
 
 **Neither input blocked Phases 3–4.** Use fixture companies and mocked SEC responses
