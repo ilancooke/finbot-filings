@@ -800,7 +800,7 @@ dependency checks pass. Only offline fixture containers were run.
 
 Phase 8 delivered CDK, scoped delivery roles, observability and controlled image
 releases. See PHASE_8_PLAN.md for exact commands and DEPLOYMENT.md for the runbook.
-**Current validation (2026-10-09):** 473 application tests and 15 infrastructure/
+**Historical Phase 8 implementation validation (2026-10-09):** 473 application tests and 15 infrastructure/
 workflow tests pass; six opt-in ARM64 Docker lifecycle cases pass separately.
 Strict credential-free synthesis, actionlint, distribution build, compilation,
 heartbeat-volume probe and diff checks pass. No AWS resources were provisioned,
@@ -808,9 +808,9 @@ GitHub delivery executed or production inputs selected.
 
 ## 5. Next milestone
 
-**NEXT: Publish the capacity-replay synchronization fix and verify GitHub CI,
-then prepare staged delivery and the remaining production inputs.
-Before activation, revisit the image's open HIGH finding, verify the selected production company
+**NEXT: Validate the full live Yahoo calendar scope, then complete the remaining
+production-readiness checks with ingestion stopped.
+Before activation, revisit the image's open HIGH finding, verify the seeded production company
 identities, resolve ongoing Yahoo access, validate a full 30-day live scope, and
 separately authorize activation.**
 
@@ -871,8 +871,103 @@ The test driver now synchronizes at actual wait boundaries and retains all
 capacity/rate/recovery assertions, with an additional deliberately slower SDK
 case. Local validation passed 556 application tests (eight opt-in container
 cases skipped), 19 infrastructure tests, compilation and whitespace checks.
-Publishing the fix and hosted CI verification remain next; delivery execution,
-live application validation and activation remain pending.
+The operator published the fix as `8d67228`; hosted CI run `38009224575` passed
+application/infrastructure checks, workflow lint and ARM64 image/lifecycle checks.
+Delivery was skipped because its repository flag remains unset. Read-only GitHub
+inspection reconfirmed the production variables and activation approval `false`.
+The repository-scope delivery enablement input is saved under `infra/github/`.
+The operator applied it, and read-only inspection confirmed delivery `true` and
+production activation approval `false`. The operator dispatched staged release
+run `38010178736` from `main` with `activate=false`; read-only inspection confirmed
+the tested commit `8d67228` and a pending production review. The operator approved
+the review (GitHub deployment `6973914445`), and the workflow succeeded. Its
+release manifest reports a verified staged revision 2. Read-only AWS inspection
+confirmed Linux ARM64, the exact published image digest, a completed service
+rollout and desired/running/pending counts of zero. The digest and immutable tag
+are recorded in DEPLOYMENT.md. The operator confirmed the new digest's ECR scan
+is `COMPLETE` with one `HIGH` finding. Subsequent finding details confirmed the
+same `CVE-2026-85091` zlib source-package version as the initial image. It remains
+open; company identity/seed preparation, live application validation and activation
+were pending at that checkpoint. The operator subsequently confirmed the Companies
+table is empty with a strongly consistent scan. All 50 symbols were matched
+uniquely against the current SEC ticker mapping, and the exact registry names,
+ten-digit CIKs, source provenance and review status are in PRODUCTION_UNIVERSE.md.
+`infra/seed/companies.prod.json` prepares one create-only DynamoDB transaction,
+validated offline against the repository company contract and AWS SDK input shape.
+The operator applied the initial transaction successfully (`150.0` write capacity
+units). A strongly consistent read-only base-table scan returned exactly 50 records
+with no continuation key; all attributes matched the reviewed input, with no
+missing, extra or mismatched records. The operator's subsequent enabled-index
+query returned `Count=50`, `ScannedCount=50`; company setup is complete. Tasks
+have not been activated. Seed preparation validation passed 557
+application tests (eight opt-in container cases skipped), including an offline
+seed guard checking all 50 selected symbols, unique canonical CIKs, repository
+schema/index compatibility, the account-specific table target and create-only
+transaction conditions. Request-shape validation and whitespace checks also passed.
+The maintained `finbot_ingestion.calendar.check` command prepares the next bounded
+live provider check without AWS calls, SEC calls, calendar writes or runtime
+startup. It uses the reviewed company seed, the production Yahoo adapter and a
+new private temporary cache, and reports scope/completeness, normalized events
+and companies without observations. The operator subsequently completed the live
+check on 2026-10-09 local time, observed at `2026-10-10T01:22:55+00:00`: all 30
+dates (2026-10-09 through 2026-11-07), 50 requested companies, 49 events and 49
+matched companies, in 180.061 seconds with default bounds. NVDA was the sole
+company without observations; the operator confirmed that absence is expected.
+The report is `/private/tmp/finbot-calendar-check-20261009.json`, outside git.
+No AWS writes occurred. Complete collection and production per-company coverage
+remain distinct claims; this does not verify Fargate networking or permissions.
+Calendar-command preparation validation passed 567 application tests (eight
+opt-in container cases skipped), compilation, offline entry-point help and
+whitespace checks. Alarm notification routing is the next preparation step.
+CDK now accepts an optional private `alarm_email` input to create a retained SNS
+topic and email subscription, attach all 11 alarms and scope CloudWatch publishing
+to this account's exact alarm ARNs. Existing `alarm_action_arn` remains supported
+as an alternative; ambiguous destinations or enabled monitoring without a
+destination fail validation. Actions remain disabled by default and ECS count
+remains zero. The operator selected the alert recipient; its address is saved only
+in ignored `infra/cdk/config.local.json`. Deployment, SNS email confirmation and
+delivery verification are pending; no topic has been provisioned during preparation.
+Offline validation passed all 26 infrastructure/workflow tests, including stable
+existing resources, exact publishing scope, no KMS integration and both action
+states. Saved fixture-template lint found no errors (the two explicit-AZ warnings
+and CDK OIDC helper's redundant dependency are existing patterns); Guard found
+zero encryption-policy violations. Runtime deployment must first preserve the
+staged service digest in CDK inputs and serialize against GitHub delivery.
+Read-only inspection reconfirmed revision 2, zero desired/running/pending tasks,
+no listed running tasks and the staged digest `sha256:1693bde7e53ff91af39668c7b115610572b43eedada23268c32c0e8cc12b2fb8`.
+That digest is now preserved in ignored local CDK inputs. Strict credential-free
+production synthesis passed with one email subscription, 11 routed alarms,
+all notification actions disabled and ECS desired count zero. The latest delivery
+run is completed. The operator subsequently set `FINBOT_DELIVERY_ENABLED=false`;
+read-only GitHub inspection confirmed the flag and completed recent delivery runs.
+The operator ran the runtime template diff; review confirmed only the planned SNS
+topic/policy/email subscription, routing on all 11 alarms, `AlarmTopicArn` output
+and baseline task-definition replacement to the staged digest. No action-enable
+or desired-count changes appeared. The operator deployed the runtime update;
+read-only verification confirmed `UPDATE_COMPLETE`, baseline/service revision `3`,
+completed rollout and zero desired/running/pending tasks, with no running task ARNs.
+All 11 alarms route to
+`arn:aws:sns:us-east-1:559007813222:finbot-prod-runtime-AlarmNotificationsA4AFC78C-PywcSrOpIKGt`
+and actions remain disabled. Liveness is in ALARM as expected during the intentional
+stop. The recipient subsequently confirmed the email subscription; read-only SNS
+inspection returned an actual subscription ARN rather than `PendingConfirmation`.
+The operator issued the SNS test publish and reported the email arrived;
+SNS-to-email delivery is verified separately from CloudWatch's publishing path.
+The production variables file was updated
+locally to baseline revision `3`; applying it to GitHub remains pending. Repository
+delivery stays paused and production activation approval stays false.
+Read-only GitHub inspection confirmed the environment baseline remains revision
+`1`, the other six production variables match the saved file, and the repository
+delivery flag is false. The operator subsequently reapplied the production
+variable file successfully. Read-only verification confirmed all seven variables
+match it, including baseline revision `3` and activation approval false; repository
+delivery remains disabled. Next, commit/push the prepared source/configuration/
+documentation and verify CI on that commit. Current local validation passed 567
+application tests (eight opt-in container cases skipped), 26 infrastructure/
+workflow tests, compilation, strict offline production synthesis and whitespace
+checks. Cloud runtime readiness, CloudWatch-originated publishing verification,
+ongoing provider access and the existing HIGH zlib finding remain unresolved
+before activation.
 State-stack outputs and image
 preparation are recorded in DEPLOYMENT.md. Follow DEPLOYMENT.md for
 explicit account/network/OIDC configuration, staged infrastructure/image delivery,
@@ -908,7 +1003,8 @@ is now implemented and validated offline; explicit Yahoo selection is supported
 alongside the default placeholder. Section 5.1 preserves the original due-diligence
 evidence and handoff; section 5.2 records delivery. The
 [initial production ticker universe](PRODUCTION_UNIVERSE.md) was subsequently
-selected on 2026-10-09; verified identities remain pending. Implementation does
+selected on 2026-10-09; its identities, seed and enabled index are now verified
+as recorded above. Implementation does
 not authorize deployment/activation. Terminal operator redrive
 and completed-package recheck remain future work.
 
@@ -1169,8 +1265,8 @@ historical evidence rather than a full production coverage result.
 
 | Input | Status | Required for |
 | --- | --- | --- |
-| Earnings-calendar ongoing access and production coverage | Yahoo/yfinance adapter delivered offline (section 5.2); ongoing access arrangement and full 30-day live validation pending | Production calendar use |
-| Production universe with ticker/CIK/name/enabled fields | 50 symbols selected on 2026-10-09 in [PRODUCTION_UNIVERSE.md](PRODUCTION_UNIVERSE.md); SCHW correction confirmed, verified identities pending | Authorized production universe seeding |
+| Earnings-calendar ongoing access and production coverage | Complete 30-day operator-machine collection passed with 49 matches; NVDA absence reviewed as expected. Ongoing access arrangement and cloud runtime validation remain pending | Production calendar use |
+| Production universe with ticker/CIK/name/enabled fields | All 50 SEC identities verified, create-only seed applied and stored attributes/EnabledCompanies index verified on 2026-10-09; see [PRODUCTION_UNIVERSE.md](PRODUCTION_UNIVERSE.md) | Complete for initial universe seeding |
 
 **Neither input blocked Phases 3–4.** Use fixture companies and mocked SEC responses
 for development. Follow the agreed Yahoo policy in section 5.1; do not silently

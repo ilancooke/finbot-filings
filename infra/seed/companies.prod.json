@@ -1,0 +1,1306 @@
+{
+  "ClientRequestToken": "finbot-prod-companies-20261009-v1",
+  "ReturnConsumedCapacity": "TOTAL",
+  "TransactItems": [
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "DAL"
+          },
+          "cik": {
+            "S": "0000027904"
+          },
+          "name": {
+            "S": "DELTA AIR LINES, INC."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "GLDG"
+          },
+          "cik": {
+            "S": "0001538847"
+          },
+          "name": {
+            "S": "GoldMining Inc."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "HOVR"
+          },
+          "cik": {
+            "S": "0001930021"
+          },
+          "name": {
+            "S": "New Horizon Aircraft Ltd."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "NRIX"
+          },
+          "cik": {
+            "S": "0001549595"
+          },
+          "name": {
+            "S": "Nurix Therapeutics, Inc."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "JPM"
+          },
+          "cik": {
+            "S": "0000019617"
+          },
+          "name": {
+            "S": "JPMORGAN CHASE & CO"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "JNJ"
+          },
+          "cik": {
+            "S": "0000200406"
+          },
+          "name": {
+            "S": "JOHNSON & JOHNSON"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "GS"
+          },
+          "cik": {
+            "S": "0000886982"
+          },
+          "name": {
+            "S": "GOLDMAN SACHS GROUP INC"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "WFC"
+          },
+          "cik": {
+            "S": "0000072971"
+          },
+          "name": {
+            "S": "WELLS FARGO & COMPANY/MN"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "UNH"
+          },
+          "cik": {
+            "S": "0000731766"
+          },
+          "name": {
+            "S": "UNITEDHEALTH GROUP INC"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "C"
+          },
+          "cik": {
+            "S": "0000831001"
+          },
+          "name": {
+            "S": "CITIGROUP INC"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "DPZ"
+          },
+          "cik": {
+            "S": "0001286681"
+          },
+          "name": {
+            "S": "DOMINOS PIZZA INC"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "ACI"
+          },
+          "cik": {
+            "S": "0001646972"
+          },
+          "name": {
+            "S": "Albertsons Companies, Inc."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "AZZ"
+          },
+          "cik": {
+            "S": "0000008947"
+          },
+          "name": {
+            "S": "AZZ INC"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "FBK"
+          },
+          "cik": {
+            "S": "0001649749"
+          },
+          "name": {
+            "S": "FB Financial Corp"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "ASML"
+          },
+          "cik": {
+            "S": "0000937966"
+          },
+          "name": {
+            "S": "ASML HOLDING NV"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "BAC"
+          },
+          "cik": {
+            "S": "0000070858"
+          },
+          "name": {
+            "S": "BANK OF AMERICA CORP /DE/"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "MS"
+          },
+          "cik": {
+            "S": "0000895421"
+          },
+          "name": {
+            "S": "MORGAN STANLEY"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "BLK"
+          },
+          "cik": {
+            "S": "0002012383"
+          },
+          "name": {
+            "S": "BlackRock, Inc."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "PGR"
+          },
+          "cik": {
+            "S": "0000080661"
+          },
+          "name": {
+            "S": "PROGRESSIVE CORP/OH/"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "FAST"
+          },
+          "cik": {
+            "S": "0000815556"
+          },
+          "name": {
+            "S": "FASTENAL CO"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "STT"
+          },
+          "cik": {
+            "S": "0000093751"
+          },
+          "name": {
+            "S": "STATE STREET CORP"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "HOMB"
+          },
+          "cik": {
+            "S": "0001331520"
+          },
+          "name": {
+            "S": "HOME BANCSHARES INC"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "TSM"
+          },
+          "cik": {
+            "S": "0001046179"
+          },
+          "name": {
+            "S": "TAIWAN SEMICONDUCTOR MANUFACTURING CO LTD"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "SCHW"
+          },
+          "cik": {
+            "S": "0000316709"
+          },
+          "name": {
+            "S": "SCHWAB CHARLES CORP"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "PLD"
+          },
+          "cik": {
+            "S": "0001045609"
+          },
+          "name": {
+            "S": "Prologis, Inc."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "BNY"
+          },
+          "cik": {
+            "S": "0001390777"
+          },
+          "name": {
+            "S": "Bank of New York Mellon Corp"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "USB"
+          },
+          "cik": {
+            "S": "0000036104"
+          },
+          "name": {
+            "S": "US BANCORP DE"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "PNC"
+          },
+          "cik": {
+            "S": "0000713676"
+          },
+          "name": {
+            "S": "PNC FINANCIAL SERVICES GROUP, INC."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "MRSH"
+          },
+          "cik": {
+            "S": "0000062709"
+          },
+          "name": {
+            "S": "MARSH & MCLENNAN COMPANIES, INC."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "IBKR"
+          },
+          "cik": {
+            "S": "0001381197"
+          },
+          "name": {
+            "S": "Interactive Brokers Group, Inc."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "ERIC"
+          },
+          "cik": {
+            "S": "0000717826"
+          },
+          "name": {
+            "S": "ERICSSON LM TELEPHONE CO"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "JBHT"
+          },
+          "cik": {
+            "S": "0000728535"
+          },
+          "name": {
+            "S": "HUNT J B TRANSPORT SERVICES INC"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "WIT"
+          },
+          "cik": {
+            "S": "0001123799"
+          },
+          "name": {
+            "S": "WIPRO LTD"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "AA"
+          },
+          "cik": {
+            "S": "0001675149"
+          },
+          "name": {
+            "S": "Alcoa Corp"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "FHN"
+          },
+          "cik": {
+            "S": "0000036966"
+          },
+          "name": {
+            "S": "FIRST HORIZON CORP"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "CBSH"
+          },
+          "cik": {
+            "S": "0000022356"
+          },
+          "name": {
+            "S": "COMMERCE BANCSHARES INC /MO/"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "CMC"
+          },
+          "cik": {
+            "S": "0000022444"
+          },
+          "name": {
+            "S": "COMMERCIAL METALS Co"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "INDB"
+          },
+          "cik": {
+            "S": "0000776901"
+          },
+          "name": {
+            "S": "INDEPENDENT BANK CORP"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "CNS"
+          },
+          "cik": {
+            "S": "0001284812"
+          },
+          "name": {
+            "S": "COHEN & STEERS, INC."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "SFNC"
+          },
+          "cik": {
+            "S": "0000090498"
+          },
+          "name": {
+            "S": "SIMMONS FIRST NATIONAL CORP"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "TRV"
+          },
+          "cik": {
+            "S": "0000086312"
+          },
+          "name": {
+            "S": "TRAVELERS COMPANIES, INC."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "TFC"
+          },
+          "cik": {
+            "S": "0000092230"
+          },
+          "name": {
+            "S": "TRUIST FINANCIAL CORP"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "MTB"
+          },
+          "cik": {
+            "S": "0000036270"
+          },
+          "name": {
+            "S": "M&T BANK CORP"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "CFG"
+          },
+          "cik": {
+            "S": "0000759944"
+          },
+          "name": {
+            "S": "CITIZENS FINANCIAL GROUP INC/RI"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "RF"
+          },
+          "cik": {
+            "S": "0001281761"
+          },
+          "name": {
+            "S": "REGIONS FINANCIAL CORP"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "BANF"
+          },
+          "cik": {
+            "S": "0000760498"
+          },
+          "name": {
+            "S": "BANCFIRST CORP /OK/"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "AMZN"
+          },
+          "cik": {
+            "S": "0001018724"
+          },
+          "name": {
+            "S": "AMAZON COM INC"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "AAPL"
+          },
+          "cik": {
+            "S": "0000320193"
+          },
+          "name": {
+            "S": "Apple Inc."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "NVDA"
+          },
+          "cik": {
+            "S": "0001045810"
+          },
+          "name": {
+            "S": "NVIDIA CORP"
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "arn:aws:dynamodb:us-east-1:559007813222:table/finbot-prod-companies",
+        "Item": {
+          "repository_schema_version": {
+            "N": "1"
+          },
+          "ticker": {
+            "S": "META"
+          },
+          "cik": {
+            "S": "0001326801"
+          },
+          "name": {
+            "S": "Meta Platforms, Inc."
+          },
+          "enabled": {
+            "BOOL": true
+          },
+          "enabled_marker": {
+            "S": "ENABLED"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(cik)"
+      }
+    }
+  ]
+}

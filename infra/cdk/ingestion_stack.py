@@ -3,6 +3,7 @@ from aws_cdk import Stack, Duration, RemovalPolicy, CfnOutput
 from aws_cdk import aws_ec2 as ec2, aws_ecs as ecs, aws_iam as iam
 from aws_cdk import aws_logs as logs, aws_cloudwatch as cw, aws_cloudwatch_actions as actions
 from aws_cdk import aws_sns as sns
+from aws_cdk import aws_sns_subscriptions as subscriptions
 
 
 class IngestionStack(Stack):
@@ -100,6 +101,14 @@ class IngestionStack(Stack):
             [f"arn:aws:ecs:{self.region}:{self.account}:task-definition/{family}:*"])
         policy(self.release_role, ["iam:PassRole"], [self.task_role.role_arn, self.execution_role.role_arn],
             conditions={"StringEquals": {"iam:PassedToService": "ecs-tasks.amazonaws.com"}})
+        alarm_topic = None
+        if config.alarm_email:
+            alarm_topic = sns.Topic(self, "AlarmNotifications", enforce_ssl=True)
+            alarm_topic.apply_removal_policy(RemovalPolicy.RETAIN)
+            alarm_topic.add_subscription(subscriptions.EmailSubscription(config.alarm_email))
+            CfnOutput(self, "AlarmTopicArn", value=alarm_topic.topic_arn)
+        elif config.alarm_action_arn:
+            alarm_topic = sns.Topic.from_topic_arn(self, "AlarmNotifications", config.alarm_action_arn)
         dimensions = {"Service": "finbot-ingestion", "Environment": config.environment}
         def metric(name, statistic="Maximum"):
             return cw.Metric(namespace="Finbot/Ingestion", metric_name=name,
@@ -117,14 +126,23 @@ class IngestionStack(Stack):
             "FailedWorkInflight": (state.failed_work.metric_approximate_number_of_messages_not_visible(period=Duration.minutes(1)), 1, cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD, cw.TreatMissingData.NOT_BREACHING),
             "FailedWorkAge": (state.failed_work.metric_approximate_age_of_oldest_message(period=Duration.minutes(1)), config.failed_work_age_seconds, cw.ComparisonOperator.GREATER_THAN_THRESHOLD, cw.TreatMissingData.NOT_BREACHING),
         }
+        alarm_arns = []
         for name, (m, threshold, comparison, missing) in alarm_specs.items():
             alarm = cw.Alarm(self, name, metric=m, threshold=threshold, comparison_operator=comparison,
                 evaluation_periods=3 if name == "RuntimeMissing" else 2,
                 datapoints_to_alarm=3 if name == "RuntimeMissing" else 1,
                 treat_missing_data=missing, actions_enabled=config.monitoring_enabled,
                 alarm_description="See docs/DEPLOYMENT.md; intentional stops also breach liveness.")
-            if config.alarm_action_arn:
-                alarm.add_alarm_action(actions.SnsAction(sns.Topic.from_topic_arn(self, name + "Action", config.alarm_action_arn)))
+            alarm_arns.append(alarm.alarm_arn)
+            if alarm_topic:
+                alarm.add_alarm_action(actions.SnsAction(alarm_topic))
+        if config.alarm_email:
+            # Exact alarm ARNs constrain CloudWatch publishing to this stack's alarms.
+            alarm_topic.add_to_resource_policy(iam.PolicyStatement(
+                principals=[iam.ServicePrincipal("cloudwatch.amazonaws.com")],
+                actions=["sns:Publish"], resources=[alarm_topic.topic_arn],
+                conditions={"StringEquals": {"aws:SourceAccount": self.account},
+                    "ArnEquals": {"aws:SourceArn": alarm_arns}}))
         for name, value in {"ClusterName": self.cluster.cluster_name, "ServiceName": self.service.service_name,
             "TaskFamily": family, "BaselineTaskDefinitionArn": self.task.task_definition_arn,
             "ReleaseRoleArn": self.release_role.role_arn, "TaskRoleArn": self.task_role.role_arn,

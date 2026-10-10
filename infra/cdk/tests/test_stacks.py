@@ -149,10 +149,49 @@ def test_oidc_and_liveness_alarms(templates):
     assert any(a.get("MetricName") == "CalendarStale" for a in alarms)
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_managed_email_alarm_routing_preserves_runtime(templates, enabled):
+    config = replace(InfraConfig.read(Path(__file__).parents[1] / "config.example.json"),
+        alarm_email="operator@example.invalid", monitoring_enabled=enabled)
+    app = App()
+    env = Environment(account=config.account, region=config.region)
+    state = StateStack(app, "state", config=config, env=env)
+    stack = IngestionStack(app, "runtime", config=config, state=state, env=env)
+    app.synth()  # Also rejects circular dependencies between alarms and topic policy.
+    template = Template.from_stack(stack).to_json()
+    _, baseline = templates
+    for key, value in baseline["Resources"].items():
+        if value["Type"] != "AWS::CloudWatch::Alarm":
+            assert template["Resources"][key] == value
+    topic = resources(template, "AWS::SNS::Topic")[0]
+    assert topic["DeletionPolicy"] == topic["UpdateReplacePolicy"] == "Retain"
+    assert "KmsMasterKeyId" not in topic.get("Properties", {})
+    subscription = resources(template, "AWS::SNS::Subscription")[0]["Properties"]
+    assert subscription["Protocol"] == "email"
+    assert subscription["Endpoint"] == config.alarm_email
+    alarms = resources(template, "AWS::CloudWatch::Alarm")
+    assert len(alarms) == 11
+    assert all(a["Properties"]["ActionsEnabled"] == enabled for a in alarms)
+    assert all(len(a["Properties"]["AlarmActions"]) == 1 for a in alarms)
+    policy = resources(template, "AWS::SNS::TopicPolicy")[0]["Properties"]["PolicyDocument"]["Statement"]
+    allow = [s for s in policy if s["Effect"] == "Allow"]
+    assert len(allow) == 1
+    assert allow[0]["Principal"] == {"Service": "cloudwatch.amazonaws.com"}
+    assert allow[0]["Action"] == "sns:Publish"
+    assert allow[0]["Condition"]["StringEquals"]["aws:SourceAccount"] == config.account
+    assert len(allow[0]["Condition"]["ArnEquals"]["aws:SourceArn"]) == len(alarms)
+    assert any(s.get("Condition", {}).get("Bool", {}).get("aws:SecureTransport") == "false"
+        and s["Effect"] == "Deny" for s in policy)
+    assert not resources(template, "AWS::KMS::Key")
+
+
 @pytest.mark.parametrize("changes", [{"github_subject": "repo:org/repo:*"}, {"image_digest": "latest"},
     {"account": "123"}, {"region": "invalid"}, {"cpu": 1024, "memory_mib": 512},
     {"monitoring_enabled": "false"}, {"discovery_latency_ms": float("nan")},
-    {"publish_error_threshold": 0}, {"github_oidc_provider_arn": "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com"}])
+    {"publish_error_threshold": 0}, {"github_oidc_provider_arn": "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com"},
+    {"alarm_email": ""}, {"alarm_email": "operator"}, {"alarm_email": "person@example.invalid\n"},
+    {"alarm_email": "operator@example.invalid", "alarm_action_arn": "arn:aws:sns:us-east-1:123456789012:existing"},
+    {"monitoring_enabled": True}])
 def test_invalid_config_fails_without_aws(changes):
     config = InfraConfig.read(Path(__file__).parents[1] / "config.example.json")
     with pytest.raises(ValueError):

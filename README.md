@@ -9,11 +9,16 @@ interpretation, earnings extraction, features and consumer queues belong downstr
 The supported runtime/container uses only `finbot_ingestion`; the superseded
 namespace and extraction commands were removed in Phase 7. Phase 8 adds CDK,
 application delivery, health alarms and the agreed conservative recovery policy.
-Infrastructure and workflows are validated offline; no AWS resources are deployed.
+Infrastructure and workflows are validated offline. The bootstrap, state and
+runtime stacks are deployed, and GitHub delivery has staged an ARM64 image with
+ECS desired count zero. See [DEPLOYMENT](docs/DEPLOYMENT.md) for recorded results.
 The Yahoo/yfinance earnings-calendar adapter is implemented and tested offline.
 Provider selection remains explicit; the default placeholder reports unavailable
 coverage. The [initial production universe](docs/PRODUCTION_UNIVERSE.md) contains
-50 user-selected symbols; verified company identities and live validation remain pending.
+50 user-selected symbols. The operator applied the standard CLI seed input;
+read-only verification confirmed all 50 stored records match the reviewed SEC
+ticker/CIK/name mapping. The operator's enabled-index query also returned all 50
+companies. Live calendar and cloud application validation remain pending.
 
 ## Install and validate
 
@@ -42,7 +47,25 @@ Ingestion does not depend on PyArrow.
 .venv/bin/python -m finbot_ingestion.main
 # Separate process; checks only the local heartbeat:
 .venv/bin/python -m finbot_ingestion.main --health-check
+# One-shot live Yahoo collection check; no AWS calls, SEC calls or runtime startup:
+.venv/bin/python -m finbot_ingestion.calendar.check \
+  --companies-file infra/seed/companies.prod.json \
+  --days 30 \
+  --output /private/tmp/finbot-calendar-check-20261009.json
 ```
+
+The calendar check reads the reviewed seed file as company input; it never applies
+the write requests. It uses the production Yahoo adapter, normal bounded request
+settings and a new private temporary cache, then closes the provider and worker.
+It fetches 30 inclusive calendar dates starting on today's America/New_York date.
+Optional `--start-date YYYY-MM-DD` selects a reproducible starting date. Help is
+offline; running the check makes live Yahoo requests. `YAHOO_*` environment
+overrides apply to request bounds; no AWS credentials or SEC identity are needed.
+The output path must be new so prior evidence is preserved. Exit zero means
+complete, consistent collection for the requested scope; the report explicitly
+lists companies without observations. It does not prove Yahoo supplied every
+company's earnings date or approve activation. Raw payloads, cookies and provider
+exception messages are excluded. See [DEPLOYMENT](docs/DEPLOYMENT.md) for review.
 
 Normal execution contacts AWS, SEC and, when selected, Yahoo. It requires an identifying SEC User-Agent,
 existing AWS resources/indexes, valid AWS credentials and a nonempty enabled
@@ -283,6 +306,10 @@ Sanitized JSON logs go to stderr; bounded CloudWatch EMF records go to stdout wi
 Service/Environment dimensions. Local health separates liveness from calendar
 age/scope/provider configuration. CloudWatch collection, DLQ-depth monitoring and
 alarms are defined by Phase 8 CDK and require manual infrastructure deployment.
+CDK can provision an alarm SNS topic and email subscription using `alarm_email`
+in ignored `infra/cdk/config.local.json`, or route to an existing `alarm_action_arn`.
+Email subscriptions require recipient confirmation; `monitoring_enabled` controls
+notification actions independently of ingestion. See [DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Configuration reference
 
@@ -354,10 +381,9 @@ git worktree add --detach ../finbot-filings-legacy 59cacd78a1da01d00b913c2e67185
 No permanent legacy subtree or compatibility CLI remains. Downstream relocation
 requires separate work. Global EDGAR feeds, Company Facts, multiple calendar
 providers, distributed rate limiting, multiple ingestion tasks, RAG and extraction
-remain outside v0. Next milestones: production identity verification, authorized
-universe seeding, ongoing provider access, full 30-day live validation, separately
-authorized manual infrastructure
-deployment and production activation.
+remain outside v0. Next milestones: ongoing provider access,
+full 30-day live validation, separately
+authorized cloud application checks, alarm routing and production activation.
 
 ## Phase 8 infrastructure and delivery
 

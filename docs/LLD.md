@@ -463,6 +463,12 @@ stopped environments. Controlled rollback/maintenance use the same stop/wait/sta
 procedure; automatic replacement accepts ADR 008's conservative overlap limit.
 EMF alarms cover liveness, calendar scope/configuration/freshness, failure backlog,
 SEC/publication errors and acceptance-based latency.
+Optional CDK `alarm_email` provisions a retained SNS alarm topic, email subscription
+and account/exact-alarm-scoped CloudWatch publishing policy without KMS. Existing
+topics remain supported through the mutually exclusive `alarm_action_arn` input.
+Monitoring actions default off, require a destination when enabled, and are
+independent of the stopped-by-default ECS service. Email confirmation and delivery
+verification precede enabling actions.
 
 [DEPLOYMENT.md](DEPLOYMENT.md) documents manual infrastructure/image bootstrap,
 OIDC variables, intentional application-revision drift, readiness, alarms and
@@ -1046,6 +1052,18 @@ belong to one dedicated worker. Cache state is private temporary state (0700 at
 `/tmp/finbot-yahoo` by default) owned by the runtime UID, never durable calendar
 provenance. Stop closes admissions before waiting for in-flight bounded I/O; cache
 databases/session close on their owner thread before executor shutdown.
+
+The operator diagnostic `python -m finbot_ingestion.calendar.check` reads the
+reviewed DynamoDB seed file as company input and calls this provider directly for
+30 inclusive market dates by default. It creates no AWS clients, invokes no SEC
+client, starts no runtime and writes no durable calendar records. Its dedicated
+worker owns a fresh private temporary cache and closes the provider before
+shutdown. Snapshot scope/completeness and normalized event identities are checked
+before reporting success. A new local JSON report preserves requested scope,
+observations, unmatched companies and request bounds, excluding raw payloads and
+authentication details. Exit zero establishes collection consistency for that
+check, not authoritative per-company coverage or production readiness. See
+DEPLOYMENT.md for operator commands and live-validation status.
 
 ### 7.1 Delivered scope and contracts
 

@@ -17,6 +17,7 @@ class InfraConfig:
     image_digest: str = "sha256:" + "0" * 64
     github_oidc_provider_arn: str | None = None
     alarm_action_arn: str | None = None
+    alarm_email: str | None = None
     monitoring_enabled: bool = False
     cpu: int = 512
     memory_mib: int = 1024
@@ -58,6 +59,13 @@ class InfraConfig:
             raise ValueError("image must be a resolved SHA256 digest")
         if type(self.monitoring_enabled) is not bool:
             raise ValueError("monitoring_enabled must be boolean")
+        if self.alarm_email is not None and (not isinstance(self.alarm_email, str) or
+                not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", self.alarm_email)):
+            raise ValueError("alarm_email must be an email address")
+        if self.alarm_email and self.alarm_action_arn:
+            raise ValueError("choose alarm_email or an existing alarm_action_arn")
+        if self.monitoring_enabled and not (self.alarm_email or self.alarm_action_arn):
+            raise ValueError("monitoring requires a notification destination")
         for value in (self.sec_error_threshold, self.publish_error_threshold, self.discovery_latency_ms, self.failed_work_age_seconds):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError("alarm thresholds must be finite and positive")
