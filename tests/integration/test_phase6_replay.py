@@ -31,6 +31,8 @@ from finbot_ingestion.scheduler.window_policy import WindowPolicy
 from finbot_ingestion.sec.client import SecClient
 from finbot_ingestion.sec.rate_limiter import SECRateLimiter
 from finbot_ingestion.config import IngestionConfig
+from finbot_ingestion.execution import BlockingExecution
+from finbot_ingestion.ingestion.work_queue import WorkQueue
 
 
 class ReplayClock:
@@ -39,6 +41,8 @@ class ReplayClock:
         self.condition = threading.Condition()
         self.waiters = []
         self.serial = 0
+        self.blocking_deadlines = {}
+        self.sleepers = {}
 
     def now(self):
         return NOW + timedelta(seconds=self.monotonic())
@@ -60,17 +64,95 @@ class ReplayClock:
         with self.condition:
             until = self.elapsed + seconds
             deadline = time.monotonic() + 10
-            while self.elapsed < until:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise AssertionError("replay clock driver stopped")
-                self.condition.wait(remaining)
+            thread = threading.get_ident()
+            self.blocking_deadlines[thread] = until
+            try:
+                while self.elapsed < until:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise AssertionError("replay clock driver stopped")
+                    self.condition.wait(remaining)
+            finally:
+                del self.blocking_deadlines[thread]
 
     async def sleep(self, seconds):
         future = asyncio.get_running_loop().create_future()
         self.serial += 1
         heapq.heappush(self.waiters, (self.monotonic() + seconds, self.serial, future))
-        await future
+        task = asyncio.current_task()
+        self.sleepers[task] = future
+        try:
+            await future
+        finally:
+            del self.sleepers[task]
+
+
+class ReplayDriver:
+    """Advance virtual time only after real worker execution has settled.
+
+    Track the application's wait boundaries through test-only wrappers. SDK work
+    must finish; SEC callers may remain blocked on the single shared executor
+    only when its worker is sleeping on the replay clock. No runner-speed sleep
+    is used as evidence that work completed.
+    """
+
+    def __init__(self, clock, sec_execution, monkeypatch, *, sdk_delay=0):
+        self.clock, self.sec_execution = clock, sec_execution
+        self.calls, self.queues = {}, {}
+        original_call, original_get = BlockingExecution.call, WorkQueue.get
+
+        async def call(execution, operation, **params):
+            task = asyncio.current_task()
+            self.calls[task] = execution
+            try:
+                if sdk_delay and execution is not sec_execution:
+                    await asyncio.sleep(sdk_delay)
+                return await original_call(execution, operation, **params)
+            finally:
+                del self.calls[task]
+
+        async def get(queue):
+            task = asyncio.current_task()
+            self.queues[task] = queue
+            try:
+                return await original_get(queue)
+            finally:
+                del self.queues[task]
+
+        monkeypatch.setattr(BlockingExecution, "call", call)
+        monkeypatch.setattr(WorkQueue, "get", get)
+
+    def waiting(self, name, task, app):
+        sleeper = self.clock.sleepers.get(task)
+        if sleeper is not None:
+            return not sleeper.done()
+        queue = self.queues.get(task)
+        if queue is not None:
+            return queue.queue.empty()
+        execution = self.calls.get(task)
+        if execution is not None:
+            with self.clock.condition:
+                deadlines = self.clock.blocking_deadlines.values()
+                return (execution is self.sec_execution and len(self.clock.blocking_deadlines) == 1
+                        and all(deadline > self.clock.elapsed for deadline in deadlines))
+        return (name == "reload" and not app.reload_requested.is_set()
+                and not app.activity.get(name, (0, False))[1])
+
+    async def settle(self, app, task):
+        async with asyncio.timeout(10):
+            while True:
+                if task.done():
+                    task.result()
+                    raise AssertionError("runtime ended before replay completed")
+                for worker in app.tasks.values():
+                    if worker.done():
+                        worker.result()
+                        raise AssertionError("runtime worker ended before replay completed")
+                if app.tasks and all(self.waiting(name, worker, app)
+                                     for name, worker in app.tasks.items()):
+                    return
+                # Yield to executor completions; elapsed wall time is not the barrier.
+                await asyncio.sleep(.001)
 
 
 class Response:
@@ -132,9 +214,10 @@ def percentile(values, q):
     return sorted(values)[min(len(values) - 1, int((len(values) - 1) * q))]
 
 
-@pytest.mark.parametrize("active", [5, 10, 25, 50])
-@pytest.mark.parametrize("interval", [5, 10])
-def test_500_company_capacity_replay(system, tmp_path, active, interval):
+@pytest.mark.parametrize("active,interval,sdk_delay",
+    [(active, interval, 0) for interval in (5, 10) for active in (5, 10, 25, 50)]
+    + [(25, 10, .003)])
+def test_500_company_capacity_replay(system, tmp_path, monkeypatch, active, interval, sdk_delay):
     async def scenario():
         clock = ReplayClock()
         companies = [Company("AAPL", "320193", "Apple")] + [Company(f"S{i}", str(i), f"Synthetic {i}") for i in range(1, 500)]
@@ -185,12 +268,9 @@ def test_500_company_capacity_replay(system, tmp_path, active, interval):
             calendar_service=CalendarSyncService.with_placeholder(system.db.companies, system.db.calendar,
                 CalendarConfig(provider="placeholder"), now=clock.now), metrics=Metrics(sink=sink, now_ms=lambda: int(clock.now().timestamp() * 1000)),
             windows=WindowPolicy(ExchangeMarketSessions(start=date(2026, 1, 1), end=date(2026, 12, 31)), config))
+        driver = ReplayDriver(clock, worker.discovery.execution, monkeypatch, sdk_delay=sdk_delay)
         task = asyncio.create_task(app.run())
-        async with asyncio.timeout(10):
-            while not app.tasks:
-                if task.done():
-                    task.result()
-                await asyncio.sleep(.001)
+        await driver.settle(app, task)
         while clock.monotonic() < 120:
             clock.advance(.1)
             if clock.monotonic() >= 60:
@@ -198,9 +278,7 @@ def test_500_company_capacity_replay(system, tmp_path, active, interval):
             queue_samples.append(app.polls.queue.qsize())
             for name, queue in (("poll", app.polls), ("filing", app.filings), ("artifact", app.artifacts)):
                 queue_maxima[name] = max(queue_maxima[name], queue.queue.qsize())
-            await asyncio.sleep(.001)
-            if task.done():
-                task.result()
+            await driver.settle(app, task)
         intervals = [b - a for c in companies[:active] for a, b in zip(transport.polls.get(c.cik, []), transport.polls.get(c.cik, [])[1:])]
         all_starts = [value for value, _ in transport.starts]
         assert all(sum(t <= other <= t + 1 for other in all_starts) <= 5 for t in all_starts)
@@ -213,6 +291,7 @@ def test_500_company_capacity_replay(system, tmp_path, active, interval):
         assert app.last_recovery is not None
         assert (await system.db.artifacts.get(child.artifact_id)).published_at is not None
         report = {"companies": 500, "active": active, "interval_seconds": interval, "duration_seconds": 120,
+            "injected_sdk_wall_delay_seconds": sdk_delay,
             "http_attempts": len(all_starts), "http_by_class": {k: sum(op == k for _, op in transport.starts) for k in ("poll", "index", "directory", "download")},
             "queue_delay_p50_seconds": percentile(latency_samples, .5) / 1000 if latency_samples else None,
             "queue_delay_p99_seconds": percentile(latency_samples, .99) / 1000 if latency_samples else None,

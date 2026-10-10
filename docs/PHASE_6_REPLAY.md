@@ -1,6 +1,8 @@
 # Phase 6 offline capacity replay
 
-Measured 2026-10-08 with repository-local Python 3.14; eight scenarios pass.
+Historical measurements from 2026-10-08 with repository-local Python 3.14; eight
+scenarios passed with the original driver. The driver correction below changes
+test synchronization; the saved historical figures have not been regenerated.
 [Machine-readable results](PHASE_6_REPLAY_RESULTS.json) retain per-active-company
 attempt counts/interval percentiles, HTTP class/status counts, queue maxima, task
 count, latency sample counts, database calls and recovery outcome.
@@ -21,6 +23,19 @@ one poll gets HTTP 429 and retries through the same limiter. Normal packages hav
 four documents. The 50-active/five-second case adds 32 exhibits (36 documents).
 Repeated recovery runs every 30 virtual seconds. The old disabled company's
 publication index entry stays hidden until virtual second 60 and is then recovered.
+
+On 2026-10-09, GitHub CI exposed a timing dependency in the original driver:
+each simulated tick gave worker threads only one millisecond of wall time before
+advancing again. Slower mocked SDK execution could exhaust the simulated window
+before all companies were polled or delayed publication recovery completed.
+The driver now waits for runtime tasks to reach explicit wait boundaries before
+advancing simulated time. Mock SDK calls must finish; pending SEC calls can remain
+on the single shared executor when its thread is waiting for a future replay-clock
+deadline. Queue waits and async clock sleeps are tracked through test-only wrappers.
+The existing eight capacity scenarios retain their assertions. A ninth scenario
+(25 active companies, ten-second target) adds three milliseconds of wall delay to
+each SDK execution to exercise the previously runner-sensitive boundary. That
+delay is test synchronization stress, not modeled AWS latency or virtual time.
 
 The default eleven required loops are retained, with two poll workers, one
 enumeration worker, two artifact workers and one serialized blocking SEC executor.

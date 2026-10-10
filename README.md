@@ -267,6 +267,9 @@ One HTTP attempt is in flight at a time through reused synchronous transport and
 bounded executor. Slow responses and competing work reduce throughput. Target poll
 cadence and downstream latency are not unconditional guarantees. See the synthetic
 [Phase 6 capacity replay](docs/PHASE_6_REPLAY.md).
+The offline replay synchronizes virtual-time advances with worker wait boundaries
+and includes a deliberately slower mocked SDK case so runner speed does not
+determine whether polling and recovery complete in the simulated window.
 
 Version `earnings-satisfaction-v1` stops aggressive polling only after a durable
 satisfaction checkpoint for the same CIK and acceptance within window/grace. Exact

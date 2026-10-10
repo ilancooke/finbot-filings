@@ -808,8 +808,8 @@ GitHub delivery executed or production inputs selected.
 
 ## 5. Next milestone
 
-**NEXT: Publish the reviewed infrastructure/GitHub configuration changes, verify
-GitHub CI, then prepare staged delivery and the remaining production inputs.
+**NEXT: Publish the capacity-replay synchronization fix and verify GitHub CI,
+then prepare staged delivery and the remaining production inputs.
 Before activation, revisit the image's open HIGH finding, verify the selected production company
 identities, resolve ongoing Yahoo access, validate a full 30-day live scope, and
 separately authorize activation.**
@@ -863,8 +863,16 @@ required reviewer, allowed the `main` branch only, and applied all seven reviewe
 target variables. Supplied variable-list output matched the deployed AWS targets
 and `FINBOT_ACTIVATION_APPROVED=false`. Read-only inspection confirmed delivery's
 repository enablement flag remains unset. GitHub setup inputs are saved under
-`infra/github/` and the exact subject/outputs in DEPLOYMENT.md. Code publication,
-CI/delivery execution, live application validation and activation remain pending.
+`infra/github/` and the exact subject/outputs in DEPLOYMENT.md. The operator
+published commit `deba29f`. Hosted CI failed three capacity-replay cases because
+the test advanced simulated time without waiting for real SDK worker progress;
+552 tests passed and eight container cases were skipped. Delivery was skipped.
+The test driver now synchronizes at actual wait boundaries and retains all
+capacity/rate/recovery assertions, with an additional deliberately slower SDK
+case. Local validation passed 556 application tests (eight opt-in container
+cases skipped), 19 infrastructure tests, compilation and whitespace checks.
+Publishing the fix and hosted CI verification remain next; delivery execution,
+live application validation and activation remain pending.
 State-stack outputs and image
 preparation are recorded in DEPLOYMENT.md. Follow DEPLOYMENT.md for
 explicit account/network/OIDC configuration, staged infrastructure/image delivery,

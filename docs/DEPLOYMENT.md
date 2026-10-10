@@ -198,8 +198,17 @@ production variables are saved in `infra/github/production-variables.env`.
 The operator applied all seven variables with `gh variable set --env-file`, then
 supplied `gh variable list` output matching the reviewed AWS resource outputs and
 `FINBOT_ACTIVATION_APPROVED=false`. Read-only repository-variable inspection
-confirmed `FINBOT_DELIVERY_ENABLED` remains unset. Publishing code, enabling
-delivery, live application validation and activation remain pending.
+confirmed `FINBOT_DELIVERY_ENABLED` remains unset. The operator published commit
+`deba29f` with these changes. [CI run 38007413522](https://github.com/ilancooke/finbot-filings/actions/runs/38007413522)
+failed in three offline capacity-replay cases (552 application tests passed,
+eight container tests skipped); infrastructure, workflow lint and image checks
+were not reached. Application delivery was skipped. The replay driver now waits
+for actual worker wait boundaries instead of treating one millisecond of wall time
+as completion. The test-only correction includes a slower-SDK regression case.
+Local validation passed: 556 application tests, eight opt-in container cases
+skipped, 19 infrastructure tests, compilation and whitespace checks. Publishing
+this correction and passing hosted CI are the next steps; delivery enablement,
+live application validation and activation remain pending.
 
 | Field | Meaning |
 | --- | --- |
