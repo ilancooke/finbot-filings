@@ -129,32 +129,24 @@ before applying the seed; no ticker substitutions or inferred aliases were used.
 | NVDA | `0001045810` | NVIDIA CORP | Nasdaq |
 | META | `0001326801` | Meta Platforms, Inc. | Nasdaq |
 
-## Initial seed input and deployment status
+## Reviewed seed and maintenance
 
-The operator's strongly consistent one-item scan returned `Count=0` and
-`ScannedCount=0` on 2026-10-09, confirming the target Companies table was empty.
-The user confirmed `SCHW` (Charles Schwab) on 2026-10-09, correcting a typo in
-the original selection.
+[`infra/seed/companies.prod.json`](../infra/seed/companies.prod.json) is the
+create-only DynamoDB transaction for these 50 enabled companies, in the selected
+order, targeting account `559007813222`, `us-east-1`, `finbot-prod-companies`.
+Each item contains repository schema version and enabled-index marker; every Put
+requires `attribute_not_exists(cik)`. This input cannot overwrite an existing CIK.
+Keep the initial seed unchanged once applied; later universe changes need separate
+reviewed inputs. The runtime reads the Companies table, not this document/seed.
 
-[`infra/seed/companies.prod.json`](../infra/seed/companies.prod.json) contains one
-standard DynamoDB `TransactWriteItems` request for these 50 enabled companies,
-in the supplied order, targeting only account `559007813222`, `us-east-1`,
-`finbot-prod-companies`. Each item includes the existing repository schema
-version and enabled-index marker. Each Put requires `attribute_not_exists(cik)`;
-the transaction either creates every company or writes none. It cannot overwrite
-an existing CIK. The initial seed is separate from CloudFormation resource
-creation and from later company-universe edits.
+On 2026-10-09 local time the seed was applied and strong base-table verification
+matched all 50 records, with no missing, extra or mismatched attributes. The enabled
+index subsequently returned 50 records. Initial seeding is complete; it is not a
+recurring readiness check. See [deployment procedures](DEPLOYMENT.md#company-universe)
+for initial setup and [dated verification](DEPLOYMENT.md#last-recorded-verification)
+for service delivery evidence.
 
-Offline validation checked the AWS SDK request shape, the domain/repository
-serialization of every item, the exact selected-symbol order and unique CIKs.
-The operator authorized and applied the file through the standard CLI command in
-[DEPLOYMENT.md](DEPLOYMENT.md#production-readiness-and-activation). The successful
-transaction returned `150.0` write capacity units. Read-only AWS MCP verification
-used a strongly consistent full-table scan: 50 records were returned, with no
-continuation key. Every stored attribute matched the reviewed seed input, with
-zero missing, extra or mismatched records. The operator subsequently queried the
-runtime's `EnabledCompanies` index and confirmed `Count=50`, `ScannedCount=50`.
-Company seeding and index verification are complete. Seeding does not activate the stopped ECS
-service. Ongoing Yahoo access, full
-30-day live coverage validation, cloud application checks and activation remain
-pending.
+The first ordered `text` block is read by `tests/unit/test_production_seed.py`
+to verify the seed against the independently selected ticker list. Preserve its
+order/format when maintaining this document. The mapping is a reviewed initial
+snapshot, not a live registry or historical ticker mapping.

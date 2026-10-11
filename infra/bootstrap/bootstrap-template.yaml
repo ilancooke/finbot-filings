@@ -8,7 +8,7 @@ Metadata:
     ref:
       - at: infra/bootstrap/README.md
         has: bootstrap origin, customization, compatibility and deployment procedure
-      - at: docs/adr/010-use-service-managed-encryption-without-kms-integration.md
+      - at: docs/DECISIONS.md#adr-010
         has: repository encryption policy
 Parameters:
   TrustedAccounts:

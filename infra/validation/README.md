@@ -65,7 +65,7 @@ command reports warnings while returning nonzero only for errors; it does not
 suppress rules. Review new warnings rather than assuming they match this baseline.
 
 `encryption.guard` is a repository-owned implementation of
-[ADR 010](../../docs/adr/010-use-service-managed-encryption-without-kms-integration.md),
+[ADR 010](../../docs/DECISIONS.md#adr-010),
 not a downloaded industry compliance framework. Its seven rules prohibit KMS
 resources and enforce the accepted S3, DynamoDB, SNS, SQS, ECR and Logs encryption
 choices. SNS plaintext at rest is intentional. Five Guard fixtures verify accepted

@@ -6,27 +6,16 @@ original document bytes, stores immutable artifacts in S3, maintains DynamoDB
 metadata/checkpoints and publishes `ArtifactReady` events to SNS. Document
 interpretation, earnings extraction, features and consumer queues belong downstream.
 
-The supported runtime/container uses only `finbot_ingestion`; the superseded
-namespace and extraction commands were removed in Phase 7. Phase 8 adds CDK,
-application delivery, health alarms and the agreed conservative recovery policy.
-Infrastructure and workflows are validated offline. The bootstrap, state and
-runtime stacks are deployed. Initial GitHub activation succeeded on 2026-10-10,
-with verified calendar, SEC acquisition, S3 storage and SNS publication checkpoints.
-The service is currently stopped on filtering baseline revision 8 after a failed
-activation restored its previous desired count of zero. The release-sequencing
-fix is validated locally; production activation remains pending.
-See [DEPLOYMENT](docs/DEPLOYMENT.md) for recorded results.
-The Yahoo/yfinance earnings-calendar adapter is implemented and tested offline.
-Provider selection remains explicit; the default placeholder reports unavailable
-coverage. The [initial production universe](docs/PRODUCTION_UNIVERSE.md) contains
-50 user-selected symbols. The operator applied the standard CLI seed input;
-read-only verification confirmed all 50 stored records match the reviewed SEC
-ticker/CIK/name mapping. The operator's enabled-index query also returned all 50
-companies. A complete local 30-day Yahoo collection passed with 49 observed
-companies; the operator confirmed NVDA's absence was expected. The first full cloud
-refresh completed for October 10–November 8 with 47 observations across the same
-50-company scope. One Citigroup submission exceeded the configured 64-MiB artifact
-limit and was recorded as terminal failed work; ingestion continues.
+The migration from the POC and the subsequent earnings-focused filtering work
+are complete. Only `finbot_ingestion` is installed. Infrastructure and application
+delivery are in place. The [initial production universe](docs/PRODUCTION_UNIVERSE.md)
+contains 50 reviewed companies; approximately 500 remains the capacity target.
+
+See [architecture and contracts](docs/ARCHITECTURE.md),
+[accepted decisions](docs/DECISIONS.md), and the
+[deployment and recovery runbook](docs/DEPLOYMENT.md). The runbook preserves a
+short dated verification record; [BACKLOG](docs/BACKLOG.md) tracks remaining
+operational observations and deferred work.
 
 ## Install and validate
 
@@ -56,12 +45,12 @@ Ingestion does not depend on PyArrow.
 # Separate process; checks only the local heartbeat:
 .venv/bin/python -m finbot_ingestion.main --health-check
 # Separately launched Fargate task only; finite AWS check with isolated test writes:
-.venv/bin/python -m finbot_ingestion.main --deployment-check --check-id readiness-20261009-1
+.venv/bin/python -m finbot_ingestion.main --deployment-check --check-id readiness-new-1
 # One-shot live Yahoo collection check; no AWS calls, SEC calls or runtime startup:
 .venv/bin/python -m finbot_ingestion.calendar.check \
   --companies-file infra/seed/companies.prod.json \
   --days 30 \
-  --output /private/tmp/finbot-calendar-check-20261009.json
+  --output /private/tmp/finbot-calendar-check-new.json
 ```
 
 The calendar check reads the reviewed seed file as company input; it never applies
@@ -106,9 +95,9 @@ its former legacy configuration is not sufficient for this runtime.
 Build again after application, dependency or image-configuration changes:
 
 ```bash
-docker build -t finbot-ingestion:phase8 .
-docker run --rm --network none finbot-ingestion:phase8 --help
-docker run --rm --network none finbot-ingestion:phase8 --health-check
+docker build -t finbot-ingestion:local .
+docker run --rm --network none finbot-ingestion:local --help
+docker run --rm --network none finbot-ingestion:local --health-check
 ```
 
 The final command returns one because that new container has no runtime heartbeat.
@@ -127,7 +116,7 @@ docker run --rm --name finbot-ingestion \
   --env-file .env.ingestion --stop-timeout 120 \
   --read-only --tmpfs /tmp:rw,nosuid,size=32m \
   --cap-drop ALL --security-opt no-new-privileges \
-  finbot-ingestion:phase8
+  finbot-ingestion:local
 ```
 
 The example file is in Docker `--env-file` format. Passing it is explicit; the
@@ -161,7 +150,7 @@ allowance for its 150-second SEC quiet period; local startup defaults to no dela
 After rebuilding the image, run:
 
 ```bash
-FINBOT_CONTAINER_TESTS=1 FINBOT_CONTAINER_IMAGE=finbot-ingestion:phase8 \
+FINBOT_CONTAINER_TESTS=1 FINBOT_CONTAINER_IMAGE=finbot-ingestion:local \
   .venv/bin/python -m pytest -q tests/integration/test_phase7.py -m container
 ```
 
@@ -259,7 +248,8 @@ Four existing tables and fixed indexes are required; all keys are strings:
 | Filings | `accession_number` / none | `PendingFilingEnumeration`: `pending_work_kind` / `pending_work_sort` |
 | Artifacts | `artifact_id` / none | `PendingArtifactWork`: `pending_work_kind` / `pending_work_sort`; `ArtifactsByAccession`: `accession_number` / `filename` |
 
-GSIs use KEYS_ONLY projection. See [LLD sections 6–8](docs/LLD.md) for exact schema,
+GSIs use KEYS_ONLY projection. See
+[DynamoDB contracts](docs/ARCHITECTURE.md#dynamodb-schema-and-access-patterns) for exact schema,
 revision guards, scoped pagination, sync/satisfaction records and compatibility.
 The Calendar table must permit reserved `__calendar_sync__` and
 `__event_satisfaction__` partitions. Inactive cancellation tombstones prevent stale
@@ -336,8 +326,8 @@ a 07:30–19:00 market-local fallback. Unsatisfied events get two hours of grace
 All SEC polls/indexes/downloads/retries/redirects share a five-request/second ceiling.
 One HTTP attempt is in flight at a time through reused synchronous transport and a
 bounded executor. Slow responses and competing work reduce throughput. Target poll
-cadence and downstream latency are not unconditional guarantees. See the synthetic
-[Phase 6 capacity replay](docs/PHASE_6_REPLAY.md).
+cadence and downstream latency are not unconditional guarantees. See the
+[capacity limits and replay command](docs/ARCHITECTURE.md#observability-deployment-and-capacity-limits).
 The offline replay synchronizes virtual-time advances with worker wait boundaries
 and includes a deliberately slower mocked SDK case so runner speed does not
 determine whether polling and recovery complete in the simulated window.
@@ -353,7 +343,7 @@ Required-loop failure, unexpected return or stalled busy work exits nonzero.
 Sanitized JSON logs go to stderr; bounded CloudWatch EMF records go to stdout with
 Service/Environment dimensions. Local health separates liveness from calendar
 age/scope/provider configuration. CloudWatch collection, DLQ-depth monitoring and
-alarms are defined by Phase 8 CDK and require manual infrastructure deployment.
+alarms are defined by CDK and require manual infrastructure deployment.
 CDK can provision an alarm SNS topic and email subscription using `alarm_email`
 in ignored `infra/cdk/config.local.json`, or route to an existing `alarm_action_arn`.
 Email subscriptions require recipient confirmation; `monitoring_enabled` controls
@@ -392,7 +382,7 @@ SEC retries include network/timeouts, 403/429/5xx and package-index 404, with bo
 jitter and Retry-After. Redirects stay on official HTTPS SEC hosts and consume budget.
 
 The repository encryption policy is
-[ADR 010](docs/adr/010-use-service-managed-encryption-without-kms-integration.md):
+[ADR 010](docs/DECISIONS.md#adr-010):
 bootstrap/raw-artifact buckets use SSE-S3, DynamoDB uses AWS-owned encryption,
 and failed-work SQS uses SSE-SQS. SNS message bodies are intentionally unencrypted
 at rest. HTTPS and scoped publication remain required. No project KMS keys,
@@ -402,32 +392,23 @@ Deployment must supply encrypted/HTTPS storage and least-privilege permissions:
 conditional S3 PutObject, GetObject and scoped ListBucket for absence detection,
 DynamoDB table/index access, SNS Publish and operational SQS SendMessage. Ingestion
 must not delete or unconditionally replace raw objects. Resources/policies/retention
-are defined in Phase 8 CDK; no runtime adapter provisions them.
+are defined in CDK; no runtime adapter provisions them.
 
 ## Design documents and legacy recovery
 
-[HLD](docs/HLD.md), [LLD](docs/LLD.md), [ADRs](docs/adr/) and
-[MIGRATION_PLAN](docs/MIGRATION_PLAN.md) remain the sources of truth.
-[BACKLOG](docs/BACKLOG.md) tracks unscheduled future changes and revisit triggers.
-[ADR 011](docs/adr/011-separate-live-ingestion-from-historical-backfill.md) accepts
-separate live ingestion and deliberate historical backfill;
-[ADR 012](docs/adr/012-acquire-earnings-releases-and-financial-reports-selectively.md)
-accepts earnings-focused document selection. [Phase 9](docs/PHASE_9_PLAN.md)
-implements filing/document filters, a fixed live cutoff and filtering of recovered
-pending work. These source changes have not been deployed; production still uses
-the earlier broad acquisition until rollout. Separate backfill tooling is deferred.
-Older images cannot validate skipped records; first rollout must pause automatic
-delivery and stage with the service stopped. See the Phase 9 rollout notes in
-[DEPLOYMENT](docs/DEPLOYMENT.md#phase-9-filtering-rollout).
-[ADR 008](docs/adr/008-use-conservative-ecs-automatic-recovery.md) records the
-implemented Phase 8 recovery policy and its earnings-latency tradeoff.
-[DEPLOYMENT](docs/DEPLOYMENT.md) documents CDK, GitHub configuration, readiness,
-stop/wait/start releases and recovery; [PHASE_8_PLAN](docs/PHASE_8_PLAN.md) records
-delivery and validation.
-[DEPLOYMENT_WALKTHROUGH](docs/DEPLOYMENT_WALKTHROUGH.md) explains the first AWS
-deployment step by step, including each stack, GitHub's role and activation controls.
-[PHASE_7_PLAN](docs/PHASE_7_PLAN.md) records the cutover and validation. Prior phase
-plans/results are historical records; use this README for current commands.
+- [ARCHITECTURE](docs/ARCHITECTURE.md): current scope and durable contracts.
+- [DECISIONS](docs/DECISIONS.md): numbered decisions, rationale and revisit triggers.
+- [DEPLOYMENT](docs/DEPLOYMENT.md): operator procedures and dated verification.
+- [BACKLOG](docs/BACKLOG.md): unresolved investigations and deferred scope.
+- [PRODUCTION_UNIVERSE](docs/PRODUCTION_UNIVERSE.md): reviewed initial company input.
+
+Live ingestion is distinct from deferred historical backfill
+([ADR 011](docs/DECISIONS.md#adr-011)); earnings selection follows
+[ADR 012](docs/DECISIONS.md#adr-012). Rollback must use an image compatible with
+selection checkpoints. See [filtering compatibility](docs/DEPLOYMENT.md#filtering-compatibility).
+Migration/phase plans and detailed delivery history are retired from the maintained
+docs tree and recoverable in Git. Current documentation describes the completed
+service; routine test/release evidence belongs in CI and release artifacts.
 
 All removed legacy source, extraction/parsing tests, fixtures, docs, scripts and
 sample tickers are recoverable at commit
@@ -441,11 +422,10 @@ git worktree add --detach ../finbot-filings-legacy 59cacd78a1da01d00b913c2e67185
 No permanent legacy subtree or compatibility CLI remains. Downstream relocation
 requires separate work. Global EDGAR feeds, Company Facts, multiple calendar
 providers, distributed rate limiting, multiple ingestion tasks, RAG and extraction
-remain outside v0. Next milestones: ongoing provider access,
-full 30-day live validation, separately
-authorized cloud application checks, alarm routing and production activation.
+remain outside the current service. Backfill and operator terminal redrive remain
+deferred in BACKLOG.
 
-## Phase 8 infrastructure and delivery
+## Infrastructure and delivery
 
 Install the independent pinned CDK toolchain and synthesize fixture templates
 without AWS access:
@@ -477,12 +457,11 @@ GitHub production-environment settings and non-secret deployment variables are s
 For Yahoo, set `calendar_provider` to `yahoo` in the CDK JSON configuration.
 It emits the explicit provider, 30-day/daily defaults,
 one outer attempt and a writable `/tmp` cache path; desired count stays zero.
-See [YAHOO_CALENDAR_PLAN](docs/YAHOO_CALENDAR_PLAN.md) and
-[ADR 009](docs/adr/009-use-yahoo-calendar-observations-with-replacement-only-reconciliation.md)
-for delivery, reconciliation and remaining live-validation limits.
+See [Yahoo contracts](docs/ARCHITECTURE.md#yahoo-calendar-synchronization) and
+[ADR 009](docs/DECISIONS.md#adr-009) for reconciliation and coverage limits.
 
 Automatic ECS recovery uses min/max 0/100, a 120-second stop timeout and a
 150-second quiet period before SEC traffic. This is conservative protection,
 not formal cross-process exclusion. The quiet period alone adds 2.5 minutes to
 recovery and can substantially delay active-window earnings discovery; follow
-[ARCH-001](docs/BACKLOG.md#arch-001--reduce-recovery-delay-during-active-earnings-windows).
+[ARCH-001](docs/BACKLOG.md#arch-001--recovery-delay).

@@ -13,7 +13,7 @@ including future Finbot packages. Application state/runtime stacks live in
 
 ## Encryption decision and compatibility
 
-[ADR 010](../../docs/adr/010-use-service-managed-encryption-without-kms-integration.md)
+[ADR 010](../../docs/DECISIONS.md#adr-010)
 selects SSE-S3 for bootstrap assets. Compared with the pinned upstream template:
 
 - The bucket explicitly uses `AES256` encryption. Private access, versioning,
@@ -38,18 +38,9 @@ execution policy below is retained for deployment and is not an application key 
 
 ## Review and deploy
 
-Deployment record (2026-10-09): the operator ran AWS `validate-template`
-successfully, then reported successful bootstrap of `aws://559007813222/us-east-1`
-with the command below using the saved template, `default` profile, termination
-protection and administrative execution policy. Operator-supplied read-only output
-confirmed `CREATE_COMPLETE`, termination protection enabled, bootstrap version `32`,
-bucket `cdk-hnb659fds-assets-559007813222-us-east-1` (and its regional S3 domain),
-and repository `cdk-hnb659fds-container-assets-559007813222-us-east-1`.
-The operator subsequently deployed both application stacks after image publication
-and template review. Operator-supplied read-only ECS output confirmed zero desired,
-running and pending tasks; production activation remains pending. See
-[DEPLOYMENT.md](../../docs/DEPLOYMENT.md) for outputs, image assessment and remaining
-verification/delivery/activation steps.
+Bootstrap and application deployment are complete for the initial production
+environment. See [DEPLOYMENT.md](../../docs/DEPLOYMENT.md#last-recorded-verification)
+for the dated verification summary and current operator procedures.
 
 Run commands from the repository root. Install the locked CLI with
 `npm ci --ignore-scripts --no-audit --no-fund` if necessary. Review the saved template,

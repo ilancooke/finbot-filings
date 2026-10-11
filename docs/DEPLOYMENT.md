@@ -1,1372 +1,426 @@
-# Phase 8 deployment and recovery runbook
+# Deployment and recovery runbook
 
-## Current status — 2026-10-10
+Use [README](../README.md) for local commands/settings,
+[ARCHITECTURE](ARCHITECTURE.md) for durable contracts and
+[DECISIONS](DECISIONS.md) for policy rationale. Commands that deploy, publish, seed,
+launch, change alarms or delete diagnostic fixtures affect real systems; execute
+only for the reviewed target and authorized operation. Offline validation does
+not itself activate a service. Historical plans and deployment chronology remain
+recoverable in Git.
 
-Activation run `38059361548` succeeded. ECS service `finbot-prod` runs one healthy
-Linux ARM64 task on application revision `5`, using the exact cloud-tested digest
-`sha256:1fa4e71ad8b06d295e2ea9a8db561ca8084646a82e49066995f032ef7f7221fd`.
-CloudFormation baseline remains revision `3`. The full Yahoo calendar refresh
-completed at `14:32:05.877115Z` for the 50-company scope and October 10–November 8,
-with 47 stored events. Runtime metrics confirm live/fresh/matching scope; SEC
-acquisition, actual S3 storage and durable SNS publication checkpoints are verified.
+## Deployment ownership
 
-One Citigroup 10-K submission text exceeded the configured 64-MiB artifact limit
-and is terminal failed work. Initial historical catch-up also crossed the discovery
-latency threshold. Deployment/startup are verified, but artifact completeness is
-not an all-clear; see the activation evidence below and [BACKLOG.md](BACKLOG.md).
-[DEPLOYMENT_WALKTHROUGH.md](DEPLOYMENT_WALKTHROUGH.md) explains the full first-deployment
-process for learning. The following deployment history preserves earlier stopped
-states and pending checks as observations at those times.
+CDK manually provisions shared bootstrap, retained state and runtime. GitHub
+builds/tests/delivers application images through scoped OIDC. The service is a
+background worker with outbound SEC/Yahoo access and no inbound API.
 
-## Deployment history
-
-The CDK application and delivery workflows are implemented and tested offline.
-On 2026-10-09 the operator reported successful creation of the shared `CDKToolkit`
-bootstrap stack in account `559007813222`, region `us-east-1`, using the saved
-SSE-S3 template, administrative profile and termination protection. The preceding
-AWS `validate-template` command also succeeded. The operator subsequently supplied
-read-only `describe-stacks` output confirming `CREATE_COMPLETE`, termination
-protection enabled, bootstrap version `32`, and the expected bucket/repository
-outputs. The operator subsequently supplied successful deployment output for
-`finbot-prod-state`, after reviewing its additions-only template diff. The
-operator subsequently reviewed and successfully deployed `finbot-prod-runtime`.
-All three stacks are deployed. Operator-supplied read-only ECS output confirmed
-service `ACTIVE`, desired/running/pending counts all zero, no API failures and
-baseline task-definition revision `1`. Read-only task-definition output also
-confirmed `ACTIVE`, Linux ARM64 and the exact published ECR image digest. Basic
-infrastructure/deployed-image verification is complete; live task/application
-AWS/SEC validation and activation remain pending. GitHub delivery has been enabled
-and its first staged release succeeded, with ECS revision 2 and no running tasks.
-The GitHub production environment, branch rule and target variables have been
-configured and verified as recorded below.
-Commands in the infrastructure/release sections below make real AWS changes; run
-only against an explicitly authorized account/environment. Routine tests need no
-AWS credentials and must not contact SEC or provider services.
-
-State-stack outputs recorded from the operator's 2026-10-09 deployment:
-
-| Output | Value |
+| Owner | Responsibility |
 | --- | --- |
-| ArtifactBucket | `finbot-prod-state-artifacts82dd59a1-8gt63rcgmaua` |
-| CompaniesTable / CalendarTable | `finbot-prod-companies` / `finbot-prod-calendar` |
-| FilingsTable / ArtifactsTable | `finbot-prod-filings` / `finbot-prod-artifacts` |
-| ArtifactTopicArn | `arn:aws:sns:us-east-1:559007813222:finbot-prod-artifact-ready` |
-| FailedWorkQueueUrl | `https://sqs.us-east-1.amazonaws.com/559007813222/finbot-prod-failed-work` |
-| ImageRepositoryUri | `559007813222.dkr.ecr.us-east-1.amazonaws.com/finbot-prod-ingestion` |
+| `CDKToolkit` | Shared deployment asset bucket/repository, five roles and bootstrap version |
+| State stack | Raw S3, four tables/indexes, ArtifactReady SNS, failed-work SQS, application ECR |
+| Runtime stack | Network, cluster/service, baseline task definition, roles, logs and alarms |
+| GitHub release | Digest-pinned application revisions matching baseline configuration except image |
+| Operator | Reviewed configuration, company inputs, readiness, approval and infrastructure maintenance |
 
-Image preparation (2026-10-09): the operator built
-`finbot-ingestion:initial-20261009-1` using `--platform linux/arm64 --provenance=false`.
-The exact image passed all eight container tests (nine non-container cases
-deselected) in 23.77 seconds, using network-disabled fixtures. The operator also
-confirmed that the separate image-declared `/tmp` volume permission check passed.
-Local image checks are complete. The operator authenticated Docker to ECR and
-successfully pushed tag `initial-20261009-1` to the application repository above.
-The push reported digest
-`sha256:2066b10a21c57eb9a263ca6154eba08d7c3fd98fd4214915289c36998300b1f2`,
-matching the local build's manifest digest. Operator-supplied ECR output confirmed
-the same digest and scan status `COMPLETE`, with one `HIGH` finding:
-`CVE-2026-85091` in Debian's zlib package. The registry-confirmed digest is now
-in the ignored local runtime configuration for stopped-runtime preparation.
-The scan is not clean and the finding remains open; see the assessment below.
-The bootstrap's asset repository is separate.
-The operator reviewed the additions-only runtime diff, confirmed CDK's IAM
-approval prompt and successfully deployed `finbot-prod-runtime`. The template
-specifies desired count zero; the operator subsequently confirmed zero desired,
-running and pending tasks using read-only `ecs describe-services`, with no API
-failures, service status `ACTIVE` and task definition `finbot-prod-ingestion:1`.
-Activation has not been approved or performed.
+Task role accesses application data; execution role pulls images/writes logs;
+release role publishes images/updates this service. Release cannot deploy CDK,
+mutate IAM/data or launch standalone tasks. Bootstrap assets are separate from
+application artifact storage/ECR. Baseline and application revisions have different
+owners; do not change the baseline variable to each GitHub-created revision.
 
-Runtime outputs recorded from the operator's 2026-10-09 deployment:
+## Configuration and offline validation
 
-| Output | Value |
-| --- | --- |
-| ClusterName / ServiceName | `finbot-prod` / `finbot-prod` |
-| TaskFamily | `finbot-prod-ingestion` |
-| BaselineTaskDefinitionArn | `arn:aws:ecs:us-east-1:559007813222:task-definition/finbot-prod-ingestion:1` |
-| ReleaseRoleArn | `arn:aws:iam::559007813222:role/finbot-prod-runtime-ReleaseRoleCAEFCF19-bb4IY5zrnh4M` |
-| TaskRoleArn | `arn:aws:iam::559007813222:role/finbot-prod-runtime-TaskRole30FC0FBB-qlMezUWRPAdq` |
-| ExecutionRoleArn | `arn:aws:iam::559007813222:role/finbot-prod-runtime-ExecutionRole605A040B-l4FWcg3aHqHV` |
-| LogGroupName | `/finbot/finbot-prod` |
-
-### Initial image vulnerability assessment (2026-10-09)
-
-An offline check of the exact local image found Debian 13 (trixie), installed
-`zlib1g:arm64` version `1:1.3.dfsg+really1.3.1-1+b1`, and Python reporting zlib
-build/runtime version `1.3.1`. ECR reports the corresponding zlib source package
-version `1.3.dfsg+really1.3.1-1` and HIGH severity. Debian's
-[tracker](https://security-tracker.debian.org/tracker/CVE-2026-85091) still lists
-trixie affected and no fixed Debian package. Upstream's
-[fix](https://github.com/madler/zlib/commit/df84af25dc1942490e1d1c899a07619152a46148)
-is available, but the scope of older versions remains under discussion in
-[issue 1310](https://github.com/madler/zlib/issues/1310) and
-[issue 1292](https://github.com/madler/zlib/issues/1292). Do not infer that 1.3.1
-is unaffected merely from the CVE description's narrower version range.
-
-The repository source contains no direct `gzwrite`, `gzprintf` or `gzvprintf`
-calls. The SEC client requests gzip/deflate HTTP responses; that observation is
-not proof that every native dependency cannot reach a vulnerable code path.
-The finding is not suppressed or accepted as a false positive. No custom zlib
-build, base-distribution switch or unverified package upgrade was introduced.
-
-Recommendation: continue preparing the runtime with desired count zero, retaining
-the finding for explicit review before activation. No containers run in that
-stopped ECS service. Before activation, recheck the Debian fix status and ECR scan;
-if a fix is available, rebuild, retest and publish a new immutable image tag/digest.
-If proceeding with an unresolved finding, record the operator's explicit decision
-and follow-up conditions. This assessment does not itself approve activation.
-
-Recheck after the alarm test: read-only ECR inspection of the currently deployed
-staged digest still returns the completed scan with one HIGH finding,
-`CVE-2026-85091`, for zlib source version `1.3.dfsg+really1.3.1-1`. This reads the
-existing scan (completed `2026-10-10T00:49:03Z`), not a newly initiated scan.
-The Debian tracker was rechecked and still lists trixie vulnerable with no fixed
-Debian package. The operator subsequently stated they are not concerned about
-this known zlib finding and wish to proceed toward activation. This records
-operator acceptance for the research deployment; remediation is not a prerequisite
-for proceeding. The finding remains open and is not suppressed or declared a
-false positive. Recheck vendor fixes and the actual image scan on subsequent image
-updates. This decision does not establish runtime/provider readiness or start
-ingestion.
-
-## Tooling and offline validation
-
-From the repository root, use Python 3.12+ and Node 24:
+Application setup is in [README](../README.md#install-and-validate). Install the
+independent pinned CDK toolchain with Python 3.12+ and Node 24:
 
 ```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
 python3.12 -m venv infra/cdk/.venv
 infra/cdk/.venv/bin/python -m pip install -r infra/cdk/requirements-dev.txt
 npm ci --ignore-scripts --no-audit --no-fund
-.venv/bin/python -m compileall -q src tests scripts
-.venv/bin/python -m pytest -q
 infra/cdk/.venv/bin/python -m pytest -q infra/cdk/tests
 npm run synth -- --no-lookups
-.venv/bin/python -m build
 ```
 
-The default synthesis uses `infra/cdk/config.example.json`, a fixture with dummy
-account/contact/repository/image values. It never discovers an account or uses
-AWS lookups. Do not deploy those example inputs. On restricted macOS filesystems,
-set `JSII_RUNTIME_PACKAGE_CACHE=/private/tmp/finbot-jsii` for CDK commands/tests.
-The CLI is pinned in package-lock.json; infrastructure dependencies stay in their
-own virtual environment and are excluded from the wheel/image.
+Default synthesis uses dummy `infra/cdk/config.example.json`; never deploy it.
+Copy to ignored `infra/cdk/config.local.json`, replace fixtures and export
+`FINBOT_INFRA_CONFIG` as its absolute path. These are JSON inputs, not `cdk -c`
+context. On restricted macOS use `JSII_RUNTIME_PACKAGE_CACHE=/private/tmp/finbot-jsii`.
+Strict synthesis is credential-free with no AWS lookups. Run the pinned local
+schema/policy checks in [infra/validation](../infra/validation/README.md).
 
-Validate the supported Linux ARM64 image:
-
-```bash
-docker build --platform linux/arm64 --provenance=false -t finbot-ingestion:phase8 .
-FINBOT_CONTAINER_TESTS=1 FINBOT_CONTAINER_IMAGE=finbot-ingestion:phase8 \
-  .venv/bin/python -m pytest -q tests/integration/test_phase7.py -m container
-.venv/bin/python scripts/check_heartbeat_volume.py finbot-ingestion:phase8
-.venv/bin/python scripts/install_actionlint.py /private/tmp/finbot-tools
-/private/tmp/finbot-tools/actionlint -shellcheck= -pyflakes=
-```
-
-Image builds and tool installation fetch dependencies. Fixture containers have
-network disabled and dummy credentials. The volume probe starts only a short
-Python filesystem check, not ingestion. The pinned actionlint archive is checksum
-verified against its [official release](https://github.com/rhysd/actionlint/releases/tag/v1.7.12).
-CI executes the same offline checks on `ubuntu-24.04-arm`; confirm that this runner
-is available for your repository before enabling delivery.
-
-## Infrastructure configuration
-
-Copy the example to ignored `infra/cdk/config.local.json`, replace every fixture
-value and export `FINBOT_INFRA_CONFIG` as its absolute path. Fields:
-
-Local deployment preparation (2026-10-09): an ignored configuration was created
-for account `559007813222`, `us-east-1`, prefix `finbot`, environment `prod`, Yahoo
-calendar and the repository's GitHub `production` environment subject. The SEC
-identity was reused from local `.env` and is not recorded here. The image digest
-was initially a placeholder for state-stack preparation and was subsequently
-replaced with the registry-confirmed digest above. Runtime preparation still
-requires OIDC/AZ checks and the remaining runbook steps; the open image finding
-must be reviewed before activation. Each machine must
-prepare its own local configuration; the file is not committed.
-Credential-free strict synthesis of this local configuration passed; both
-application templates passed encryption-policy checks, with zero lint errors
-and the previously reviewed CDK-generated redundant-dependency warning. The
-operator reviewed `cdk diff finbot-prod-state --method template`, then successfully
-deployed only the state stack with `--exclusively`. `FINBOT_INFRA_CONFIG` selects
-the local file. Do not deploy the runtime template with the placeholder image digest.
-
-Runtime prerequisite check (2026-10-09): the operator's read-only
-`iam list-open-id-connect-providers` returned `[]`. No existing GitHub provider
-needs to be imported; leave `github_oidc_provider_arn` unset so the runtime CDK
-stack creates it. The release role's trust is restricted to audience
-`sts.amazonaws.com` and subject
-`repo:ilancooke/finbot-filings:environment:production`. Operator-supplied EC2 output
-confirmed `us-east-1a` and `us-east-1b` are both `available`. This was the initial
-trust subject; the GitHub verification below requires a correction. The provider itself grants no
-permissions; the scoped release role defines permitted AWS actions.
-
-With the registry-confirmed image digest, credential-free strict synthesis and
-encryption-policy validation passed again for both application templates. Lint
-reported zero errors and the one previously reviewed CDK-generated redundant
-dependency warning. Direct template checks confirmed ARM64, the exact image digest
-and service desired count zero. The operator reviewed only the runtime stack using
-`cdk diff finbot-prod-runtime --exclusively --method template`, then successfully
-deployed it with `--exclusively`. Read-only ECS zero-task verification passed.
-Read-only `ecs describe-task-definition` confirmed the baseline is `ACTIVE`, uses
-Linux ARM64 and references the exact published image digest. Next prepare GitHub
-delivery configuration. The open image finding still requires activation review.
-
-GitHub prerequisite verification (2026-10-09): authenticated read-only GitHub CLI
-inspection confirmed `ilancooke/finbot-filings` is public, the default branch is
-`main`, and the operator has administrator access. No deployment environments or
-Finbot repository variables exist yet, so delivery remains disabled. The OIDC
-settings report `use_default=true`, `use_immutable_subject=true`, and subject prefix
-`repo:ilancooke@8453151/finbot-filings@1341430877`. The ignored local CDK configuration
-now uses the exact production subject
-`repo:ilancooke@8453151/finbot-filings@1341430877:environment:production`.
-The operator reviewed the single release-role trust change and successfully
-deployed the runtime stack correction with `--exclusively`. The baseline task
-definition remains revision 1; the output resource names and role ARNs are unchanged.
-The operator created the production environment with `ilancooke` as required
-reviewer (self-review allowed for the sole operator), then created the `main`
-branch rule. Read-only inspection confirmed that is the only deployment rule.
-Environment ID is `23924540932`; branch-policy ID is `62547638`. GitHub reports
-administrator bypass remains available under its default setting. Reviewed
-production variables are saved in `infra/github/production-variables.env`.
-The operator applied all seven variables with `gh variable set --env-file`, then
-supplied `gh variable list` output matching the reviewed AWS resource outputs and
-`FINBOT_ACTIVATION_APPROVED=false`. Read-only repository-variable inspection
-confirmed `FINBOT_DELIVERY_ENABLED` remains unset. The operator published commit
-`deba29f` with these changes. [CI run 38007413522](https://github.com/ilancooke/finbot-filings/actions/runs/38007413522)
-failed in three offline capacity-replay cases (552 application tests passed,
-eight container tests skipped); infrastructure, workflow lint and image checks
-were not reached. Application delivery was skipped. The replay driver now waits
-for actual worker wait boundaries instead of treating one millisecond of wall time
-as completion. The test-only correction includes a slower-SDK regression case.
-Local validation passed: 556 application tests, eight opt-in container cases
-skipped, 19 infrastructure tests, compilation and whitespace checks. The operator
-published the correction as `8d67228` and [CI run 38009224575](https://github.com/ilancooke/finbot-filings/actions/runs/38009224575)
-succeeded, including application/infrastructure checks, workflow lint and ARM64
-image/lifecycle validation. Its application-delivery run was skipped because
-delivery remains disabled. Read-only GitHub inspection reconfirmed all seven
-production variables and `FINBOT_ACTIVATION_APPROVED=false`. The repository-scope
-enablement input is saved in `infra/github/repository-variables.env`. The operator
-applied it and read-only GitHub inspection confirmed `FINBOT_DELIVERY_ENABLED=true`
-at repository scope while production `FINBOT_ACTIVATION_APPROVED=false` remains.
-The operator manually dispatched [staged release run 38010178736](https://github.com/ilancooke/finbot-filings/actions/runs/38010178736)
-from `main` with `activate=false`. Read-only inspection confirmed the run targets
-the tested commit `8d67228e260b969e3a737a87ed36b36e63568452` and initially waited
-for the production environment's required reviewer. The operator approved
-environment ID `23924540932` through the standard pending-deployments API,
-creating GitHub deployment `6973914445`. The workflow completed successfully at
-`2026-10-10T00:50:31Z` (2026-10-09 in the operator's timezone), including offline
-application/container checks, OIDC credentials, image publication and staging.
-Its retained release manifest reports `outcome=staged`, `checkpoint=verified`,
-previous revision 1, new revision 2, previous count 0 and no observed tasks:
-
-- Image tag: `8d67228e260b969e3a737a87ed36b36e63568452-38010178736-1`.
-- Image digest: `sha256:1693bde7e53ff91af39668c7b115610572b43eedada23268c32c0e8cc12b2fb8`.
-- Task definition: `arn:aws:ecs:us-east-1:559007813222:task-definition/finbot-prod-ingestion:2`.
-
-Read-only AWS MCP inspection confirmed the service uses revision 2, its rollout
-is `COMPLETED`, and desired/running/pending counts are all zero. The active task
-definition specifies Linux ARM64 and exactly the manifest's ECR digest. The CDK
-baseline remains revision 1; application delivery stages revisions separately.
-The operator inspected this digest with `aws ecr describe-image-scan-findings`:
-scan status is `COMPLETE` with one `HIGH` finding. The operator then supplied the
-finding details, confirming `CVE-2026-85091` in zlib source package
-`1.3.dfsg+really1.3.1-1`, CVSS 4 score `8.3`, matching the initial image's finding.
-It remains open for this release as well. Continue stopped-service preparation;
-recheck remediation or record an explicit operator decision before activation.
-Company identity/seed preparation, live application validation and activation
-were still pending at that checkpoint; staging does not demonstrate live
-application readiness. The operator subsequently supplied a strongly consistent
-Companies-table scan with `Count=0` and `ScannedCount=0`. The selected 50 symbols
-now have an exact, unique SEC mapping and a reviewed-format transaction input in
-`infra/seed/companies.prod.json`; see PRODUCTION_UNIVERSE.md for provenance and
-the complete review table. The operator applied the initial seed transaction
-successfully; its response reported `150.0` write capacity units. Read-only AWS
-MCP verification scanned the base table with strong consistency and returned 50
-records with no continuation key. All stored attributes match the input exactly,
-with zero missing, extra or mismatched records. The operator then queried the
-`EnabledCompanies` index and confirmed `Count=50`, `ScannedCount=50`. Company
-seeding and index verification are complete; live calendar/application checks,
-alarm routing and activation remain pending.
-Offline seed validation passed 557 application tests (eight opt-in container
-cases skipped), including the new seed safety/identity contract check. AWS SDK
-request-shape validation and whitespace checks passed; no AWS client or write
-was used during validation.
-
-| Field | Meaning |
+| Input | Meaning/default |
 | --- | --- |
-| account / region | Explicit 12-digit target account and AWS region |
-| environment / prefix | Lowercase resource names; metrics Environment uses environment |
-| sec_user_agent | Identifying application/contact address, no credentials |
-| github_subject | Exact main-branch or protected-environment subject; copy the repository's actual prefix, including `OWNER@OWNER-ID/REPO@REPO-ID` when immutable subjects are enabled |
-| image_digest | Real validated ARM64 ECR image digest, `sha256:...` |
-| github_oidc_provider_arn | Optional existing account GitHub OIDC provider; import it instead of duplicating it |
-| alarm_action_arn | Optional existing same-region/account SNS notification topic |
-| alarm_email | Optional email subscription on a CDK-managed alarm SNS topic; mutually exclusive with alarm_action_arn; keep personal addresses in ignored config.local.json |
-| monitoring_enabled | Default false; controls notification actions, not alarm evaluation |
-| sec_error_threshold / publish_error_threshold | Error alarm counts per minute; defaults 10 / 3 |
-| discovery_latency_ms / failed_work_age_seconds | Latency/queue-age thresholds; defaults 60000 / 300 |
-| cpu / memory_mib | Default 512/1024; validated v0 Fargate combinations |
-| calendar_provider | Explicit `placeholder` (default, unavailable) or `yahoo` |
-| calendar_lookahead_days | Inclusive full scope; default 30, range 3–360 with repository lookback margin |
-| calendar_full_refresh_seconds / calendar_near_term_refresh_seconds | Completion-based full cadence 86400; optional near-term cadence 0 (disabled) |
-| yahoo_cache_dir | Private directory below writable `/tmp`, default `/tmp/finbot-yahoo` |
+| `account`, `region`, `prefix`, `environment` | Explicit target/names; environment identifies metrics |
+| `sec_user_agent` | Identifying contact in ignored local configuration |
+| `github_subject` | Exact protected production-environment OIDC subject |
+| `github_oidc_provider_arn` | Optional existing provider to import |
+| `image_digest` | Validated Linux ARM64 ECR `sha256:...` digest |
+| `cpu`, `memory_mib` | Initially 512/1024; supported Fargate combinations |
+| `calendar_provider` | `yahoo` or default unavailable `placeholder` |
+| `calendar_lookahead_days` | 30 inclusive dates; validated 3–360 |
+| `calendar_full_refresh_seconds`, `calendar_near_term_refresh_seconds` | 86400 / 0 after completion |
+| `yahoo_cache_dir` | Private writable `/tmp/finbot-yahoo` |
+| `live_ingestion_start_at` | Fixed inclusive `2026-10-10T00:00:00Z` |
+| `alarm_email`, `alarm_action_arn` | Mutually exclusive managed email/existing topic |
+| `monitoring_enabled` | Notification actions; default false, independent of ingestion |
+| `sec_error_threshold`, `publish_error_threshold` | Initially 10 / 3 per minute |
+| `discovery_latency_ms`, `failed_work_age_seconds` | Initially 60000 / 300 |
 
-These fields are JSON configuration inputs, not `cdk -c` context overrides.
-The task sets `CALENDAR_PROVIDER_ATTEMPTS=1` for Yahoo and 3 for placeholder.
-Changing provider configuration does not activate the stopped service.
-
-Verify your repository's actual OIDC subject before setup, including any immutable
-subject customization. For an environment subject, restrict the production GitHub
-environment to main and configure its protection rules. Branch subjects do not
-encode environment approval; the workflow still uses the production environment.
-No static AWS keys belong in variables, source or task definitions.
-
-Read the actual subject prefix with this read-only command:
+Read the actual GitHub OIDC subject before configuring trust:
 
 ```bash
-gh api repos/OWNER/REPO/actions/oidc/customization/sub
+gh api repos/ilancooke/finbot-filings/actions/oidc/customization/sub
 ```
 
-For default subjects, append `:environment:production` to the returned
-`sub_claim_prefix` when using the workflow's production environment. Do not infer a
-name-only prefix from `use_default=true`; immutable IDs can also be enabled.
-The configuration accepts either format and emits an exact IAM `StringEquals`
-condition. See [GitHub's OIDC reference](https://docs.github.com/en/actions/reference/security/oidc).
+Append `:environment:production` to the returned prefix, including permanent IDs
+when immutable subjects are enabled. `use_default=true` does not imply name-only
+subjects. Recorded production subject:
+`repo:ilancooke@8453151/finbot-filings@1341430877:environment:production`.
+Trust also requires `aud=sts.amazonaws.com`. Protect production with required
+reviewer/main-only branch policy. No static AWS keys belong in variables/images.
 
-The default VPC uses two public subnets in region suffixes `a` and `b`, a task public
-IP and HTTPS-only egress. Verify those AZs are supported in the target account.
-There are no inbound rules, load balancer or ports. This avoids NAT for v0; private
-subnets/egress require a reviewed infrastructure change, not an automatic fallback.
-S3 uses SSE-S3/versioning; DynamoDB has on-demand capacity, AWS-owned encryption,
-PITR and deletion protection. SNS message bodies are intentionally unencrypted
-at rest, with HTTPS publication enforced. SQS uses SSE-SQS and a 14-day retention
-period. [ADR 010](adr/010-use-service-managed-encryption-without-kms-integration.md)
-records the accepted policy: no project KMS keys, aliases or application KMS
-permissions. AWS services can still use KMS internally for AWS-owned encryption.
+Supported VPC: two public subnets (region suffixes a/b), public task IP, HTTPS-only
+egress, no ingress/NAT/load balancer. Verify target AZ availability; private egress
+needs reviewed changes. Retain data/images, stack termination protection, S3
+conditional writes/versioning, DynamoDB on-demand/PITR/deletion protection, 14-day
+SSE-SQS failed-work retention and 30-day logs. ECR tags are immutable; preserve
+rollback images. Encryption follows [ADR 010](DECISIONS.md#adr-010). RETAIN does
+not make construct renaming/resource replacement safe.
 
-Bucket policies reject writes lacking exact If-None-Match `*`. Ingestion cannot
-remove objects/versions. No multipart/copy bypass or raw-data expiration is
-configured. Data tables, bucket, topic, queue and ECR are retained across
-stack deletion/replacement; both stacks have termination protection. Do not rename
-construct IDs or assume RETAIN makes resource replacement safe. Always review diff.
-CloudWatch logs retain 30 days. ECR tags are immutable, scanning is requested on
-push, and no lifecycle expiration can remove a release needed for rollback.
+## Provision a new environment
 
-## Authorized first deployment
-
-Infrastructure deployment is manual. Application workflows never run CDK deploy.
-Keep repository-level `FINBOT_DELIVERY_ENABLED` unset/false initially.
-Run the pinned local schema and encryption-policy checks described in
-[infra/validation/README.md](../infra/validation/README.md) before deploying the
-bootstrap, and again on the application templates synthesized from your actual
-environment configuration. Review lint warnings; fixture validation does not
-establish that a real account deployment will succeed.
-
-1. Authenticate using the approved local AWS credential mechanism. Verify target
-   account/region and authorize CDK bootstrap separately if needed.
-2. Review the checked-in customized template and parameter policy in
-   [infra/bootstrap/README.md](../infra/bootstrap/README.md). Bootstrap only after
-   authorization, using the saved template and your administrative profile:
+1. Confirm operator AWS identity/account/region. Keep delivery/activation flags
+   false until configuration and readiness are reviewed.
+2. Review [bootstrap](../infra/bootstrap/README.md) and the customized template.
+   Bootstrap is a separate shared account/region operation:
 
    ```bash
    npm run cdk -- bootstrap aws://ACCOUNT/REGION \
      --template infra/bootstrap/bootstrap-template.yaml \
-     --profile default \
-     --termination-protection \
+     --profile default --termination-protection \
      --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
    ```
 
-   This account/region stack is shared CDK deployment infrastructure, separate
-   from Finbot's state/runtime stacks. The saved template derives from the pinned
-   CLI and applies ADR 010's SSE-S3 policy with variant `Finbot: SSE-S3 v1`.
-   Always pass `--template`; the upstream default does not express this policy.
-3. Set the explicit local configuration; run strict synth and review
-   `npm run cdk -- diff PREFIX-ENV-state --method template --profile default --no-lookups`.
-4. Deploy the state stack with `npm run cdk -- deploy PREFIX-ENV-state`.
-5. Obtain the ImageRepositoryUri output. Build/test an ARM64 image, authenticate
-   Docker to that ECR registry, push an immutable tag and record its resolved digest.
-   Use approved SDK/CLI tooling; do not start an ingestion task as an image probe.
-6. Put that digest in the infrastructure configuration. Review the runtime diff and
-   manually deploy `PREFIX-ENV-runtime`. The service always starts at desired count
-   zero. Record outputs for cluster, service, baseline task definition and roles.
-7. Configure the GitHub environment/variables below. Enable image delivery only
-   after verifying its exact target values and federation trust.
+   Always pass the saved template: version 32, qualifier `hnb659fds`, variant
+   `Finbot: SSE-S3 v1`. CLI upgrades need upstream comparison.
+3. Configure/synthesize/review state, then deploy it:
 
-The runtime stack references retained state exports deliberately using strong
-cross-stack references. Removing exports requires a separate migration; no
-hotswap/express deployment bypass is supported. Stack output values are resource
-references, not authorization to activate production.
+   ```bash
+   npm run cdk -- diff PREFIX-ENV-state --method template --profile default --no-lookups
+   npm run cdk -- deploy PREFIX-ENV-state --exclusively --profile default
+   ```
 
-The task runs non-root with a read-only filesystem. The image declares writable
-`VOLUME /tmp`; the ECS ephemeral bind mount uses the same path and preserves image
-permissions, as described by [AWS bind-mount guidance](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/bind-mounts.html).
-Verify ownership/heartbeat on an authorized cloud check before activation. There
-is no local shared-data mount and no test shim in the production image.
+4. Build/test the Linux ARM64 image using [container checks](../README.md#offline-container-validation).
+   Publish an immutable tag to application ECR with `--provenance=false` for the
+   single-platform manifest; record registry digest and scan findings.
+5. Save the digest in local config, review/deploy runtime using the same pattern.
+   Runtime CDK leaves desired zero. Record outputs and actual stopped task state.
+6. Configure GitHub via [infra/github](../infra/github/README.md), company inputs,
+   diagnostics/notifications and readiness before activation.
 
-## GitHub delivery configuration
+State exports are strong cross-stack references; removal requires deliberate
+migration. No hotswap/express bypass. UID/GID 10001, read-only root and declared
+`/tmp` volume must retain writable permissions in ECS. No shared-data mount or
+production test shim is used.
 
-The reviewed JSON inputs and standard GitHub CLI commands for creating the
-production environment, requiring `ilancooke` approval and allowing only `main`
-are saved in [infra/github](../infra/github/README.md). The operator has applied
-the environment and branch rules, and applied and verified the seven non-secret
-production variables. The same folder preserves these inputs and their standard
-bulk CLI command for future updates. Code publication and CI verification have
-succeeded. Delivery is enabled and the first staged release succeeded as recorded
-above; the repository-scope enablement input is also saved in that folder.
+## Company universe
 
-Repository variable `FINBOT_DELIVERY_ENABLED=true` enables the release job and is
-now applied. In the
-production GitHub environment, configure these variables from reviewed stack outputs:
+[PRODUCTION_UNIVERSE](PRODUCTION_UNIVERSE.md) records the reviewed initial scope.
+Its create-only seed is already applied. Do not rerun it as a readiness check;
+later company changes require separately reviewed inputs.
 
-- `AWS_REGION`, `FINBOT_RELEASE_ROLE_ARN`;
-- `FINBOT_CLUSTER`, `FINBOT_SERVICE`, `FINBOT_REPOSITORY_URI`;
-- `FINBOT_BASELINE_TASK_DEFINITION` (CDK's approved baseline ARN);
-- `FINBOT_ACTIVATION_APPROVED=false` until all readiness gates below are satisfied.
-
-CI runs on PRs and main pushes with contents-read permission and no AWS credentials.
-Delivery responds only to successful same-repository main push CI runs or manual
-main dispatch. Releases serialize without cancelling an in-progress handoff.
-Actions use resolved official commit SHAs. Only the release job receives OIDC
-permissions; it cannot provision infrastructure, start standalone tasks, delete
-raw data or alter IAM. The image tag contains commit/run/attempt identity and the
-service revision uses a resolved digest. Released images must remain available.
-
-A stopped service receives a staged revision and stays stopped. An active service
-requires the activation-approved flag for subsequent releases as well. Initial
-activation additionally requires manual dispatch with `activate=true`; a normal
-main push does not activate a stopped service. Optional `image_digest` selects an
-existing validated ARM64 release for rollback, with the same stop/wait/start path.
-No version-tag overwrite or mutable `latest` deployment is used.
-
-`release.py` checks that the current task configuration matches the CDK baseline
-apart from image and AWS response-only fields. A mismatch fails before stopping
-anything. It registers the replacement first, scales to zero, paginates RUNNING
-and desired-STOPPED tasks, observes known task statuses on two consecutive checks and waits
-for every observed task to reach STOPPED. It installs the replacement at desired
-count zero and waits for that exact revision's single COMPLETED deployment with
-no non-STOPPED tasks. Only then does a separate desired-count-only update start
-one task. Restoration follows the same sequence. ECS APIs are eventual;
-these checks do not provide a distributed exclusion guarantee for every failure.
-It verifies the actual task revision, digest, container health and deployment
-completion rather than accepting a generic services-stable result.
-
-The release manifest records target, prior/new revisions, digest, source commit
-and checkpoint/outcome; it excludes task settings, document bytes and credentials.
-Failed releases stay failed even after successful restoration. SDK attempts/timeouts,
-subprocess timeouts and a 1200-second deployment deadline bound waits; restoration
-has its own deadline. Workflow timeout is 55 minutes. Forced runner termination can
-interrupt restoration, so the manifest/manual recovery remain necessary.
-
-## Production readiness and activation
-
-The Yahoo adapter is implemented offline; production inputs and live verification
-remain pending. Do not set the approval flag or start production until the
-readiness checks below are complete.
-
-Before preparing company seed inputs, inspect whether the target Companies table
-already contains records. This read-only request scans at most one item; `Count=1`
-means records exist, not that the whole table contains exactly one record:
+For authorized initial setup, first inspect whether the target table is empty:
 
 ```bash
-aws dynamodb scan \
-  --table-name finbot-prod-companies \
-  --select COUNT \
-  --consistent-read \
-  --limit 1 \
-  --no-paginate \
-  --profile default \
-  --region us-east-1 \
-  --output json \
-  --no-cli-pager
+aws dynamodb scan --table-name finbot-prod-companies --select COUNT \
+  --consistent-read --limit 1 --no-paginate \
+  --profile default --region us-east-1 --output json --no-cli-pager
 ```
 
-After reviewing the mapping in [PRODUCTION_UNIVERSE.md](PRODUCTION_UNIVERSE.md),
-the operator can authorize initial seeding by running the following command from
-the package root. It makes a real data change: 50 enabled company records in the
-target table, with no service activation. The checked-in JSON contains the entire
-request, including the account/region-specific table ARN, schema version, enabled
-index markers and a create-only condition for every CIK:
+Count one means records exist, not that the whole table has one row. After reviewing
+identities, the saved transaction creates all 50 or none:
 
 ```bash
-aws dynamodb transact-write-items \
-  --cli-input-json file://infra/seed/companies.prod.json \
-  --profile default \
-  --region us-east-1 \
-  --output json \
-  --no-cli-pager
+aws dynamodb transact-write-items --cli-input-json file://infra/seed/companies.prod.json \
+  --profile default --region us-east-1 --output json --no-cli-pager
 ```
 
-This single transaction either creates all 50 items or writes none. If any CIK
-already exists, the transaction fails rather than replacing it. Preserve the
-conditions when investigating errors; do not delete existing records to retry.
-The fixed client request token permits identical retries for ten minutes; after
-that window an already successful seed fails its create-only conditions. Keep
-this initial input unchanged once applied; subsequent universe edits require
-separately reviewed inputs. The returned capacity details are not a row count;
-verify the actual stored identities and enabled index separately after success.
-See the [AWS transaction API](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TransactWriteItems.html)
-and [CLI input documentation](https://docs.aws.amazon.com/cli/latest/reference/dynamodb/transact-write-items.html).
-
-After comparing the base-table records with the reviewed input, verify the index
-used by the runtime to enumerate enabled companies:
+Preserve create-only conditions; do not delete rows to retry. The fixed request
+token permits identical retries for ten minutes; an already applied seed later
+fails its create conditions. Capacity returned is not a row count. Verify actual
+base-table attributes, then the runtime's eventual enabled index:
 
 ```bash
-aws dynamodb query \
-  --table-name finbot-prod-companies \
-  --index-name EnabledCompanies \
+aws dynamodb query --table-name finbot-prod-companies --index-name EnabledCompanies \
   --key-condition-expression 'enabled_marker = :enabled' \
-  --expression-attribute-values '{":enabled":{"S":"ENABLED"}}' \
-  --select COUNT \
-  --profile default \
-  --region us-east-1 \
-  --output json \
-  --no-cli-pager
+  --expression-attribute-values '{":enabled":{"S":"ENABLED"}}' --select COUNT \
+  --profile default --region us-east-1 --output json --no-cli-pager
 ```
 
-For this initial 50-record seed, expect `Count=50` and `ScannedCount=50`.
-Global secondary indexes have eventual consistency; omit `--consistent-read`.
-If checked immediately after writing, allow the index to catch up and repeat
-this read-only query. A persistent mismatch requires inspection rather than
-rerunning the seed. This index check does not start ingestion or establish
-calendar/provider readiness. See the [Query CLI reference](https://docs.aws.amazon.com/cli/latest/reference/dynamodb/query.html).
+Initial scope is 50. Do not request strong GSI consistency; allow propagation and
+investigate persistent mismatches rather than reseeding. Runtime configuration is
+DynamoDB, not the historical seed/document.
 
-### One-shot live calendar check
+## GitHub application delivery and activation
 
-Company seeding and enabled-index verification are complete. Use the maintained
-provider-only command to collect the full production calendar range while ECS
-remains stopped:
+[infra/github](../infra/github/README.md) owns setup files and exact CLI commands.
+`FINBOT_DELIVERY_ENABLED` is repository-scoped; target/activation variables are
+production-environment-scoped. `FINBOT_ACTIVATION_APPROVED` permits active delivery;
+manual `activate=true` additionally requests startup of a stopped service. Each
+production release requires environment approval. Setting flags does not dispatch,
+stop or cancel work.
+
+CI runs offline application/CDK/workflow/rebuilt ARM64 checks without AWS credentials.
+Delivery follows successful same-repository main-push CI or manual main dispatch,
+serializes without cancelling handoffs and obtains OIDC only in the release job.
+Stopped environments stay stopped on ordinary delivery. **`activate=false` does
+not stop an already active service.** Explicitly stop before incompatible staging.
+
+To activate or roll back to an already validated compatible digest:
 
 ```bash
-.venv/bin/python -m finbot_ingestion.calendar.check \
-  --companies-file infra/seed/companies.prod.json \
-  --days 30 \
-  --output /private/tmp/finbot-calendar-check-20261009.json
+gh workflow run deploy.yml --repo ilancooke/finbot-filings --ref main \
+  -f activate=true -f image_digest=sha256:REVIEWED_DIGEST
 ```
 
-Preparation validation passed 567 application tests (eight opt-in container
-cases skipped), compilation, entry-point help and whitespace checks. The new
-offline cases cover all 30 fixture dates, scope rejection, visible missing
-observations, AWS-client exclusion, sanitized failures, preservation of existing
-reports and cancellation cleanup. No live Yahoo check was run during preparation.
-
-The operator subsequently ran the command successfully on 2026-10-09 local time
-(observed at `2026-10-10T01:22:55+00:00`). Collection completed for all 30 dates,
-2026-10-09 through 2026-11-07, with 50 requested companies, 49 events and 49 matched
-companies in 180.061 seconds. NVDA had no observation; the operator confirmed
-that absence is expected for this window. Default collection bounds were used
-and `aws_writes=false`. The report remains outside git at the path above. This
-completes the operator-machine live collection and absence review; cloud runtime
-validation and ongoing access readiness remain separate.
-
-Running this command authorizes that bounded live Yahoo check. It reads the
-already reviewed seed as company input, makes no AWS or SEC calls, never starts
-the ingestion application and writes no calendar/checkpoint records. It uses
-the same production Yahoo adapter, schema/total/pagination consistency checks,
-30 inclusive America/New_York dates, request pacing and bounded retries. Default
-bounds are 600 seconds, 300 HTTP attempts and 30,000 raw rows; `YAHOO_*` overrides
-are reflected in the report. A dedicated worker owns a fresh private temporary
-cache and closes the session/cache before returning. The check does not reuse
-or persist authentication material in its report. `--help` is offline.
-
-The report path must not already exist. Success returns exit zero and
-`status=collection_complete`; errors return exit one, `collection_complete=false`
-and only the exception type. The terminal summary excludes event details; the
-local JSON includes normalized ticker/CIK/date/timing observations and the list
-of companies with no observations. It excludes raw provider payloads, cookies,
-authenticated URLs and exception messages. Preserve the report outside git and
-use a new filename for subsequent checks.
-
-Review the requested dates/company count, consistency result, matches and
-unmatched symbols. A complete collection does not prove per-company coverage,
-source accuracy, omitted-event cancellation or durable calendar synchronization.
-No observation in a 30-day window can be legitimate; do not invent an event or
-silently switch the selected ticker to obtain a match. Investigate unexpected
-gaps before approving production readiness. A check from the operator's machine
-does not verify Fargate networking or the deployed task's permissions.
-
-Ongoing Yahoo access remains a separate operator decision. The existing adapter
-uses keyless yfinance access; this command adds no credential/subscription setup.
-The [upstream project](https://github.com/ranaroussi/yfinance) describes personal
-research/educational use and directs users to Yahoo's terms for data-use rights.
-A successful fetch is evidence of that check, not an access guarantee for future
-daily refreshes or a license decision.
-
-### Remaining activation checks
-
-1. The initial complete 30-day scoped Yahoo collection and absence review passed
-   as recorded above. Resolve the ongoing access arrangement. Set `calendar_provider` to `yahoo` in
-   reviewed CDK context/JSON configuration. The runtime uses keyless pinned yfinance,
-   private `/tmp/finbot-yahoo` caches, 30-day daily refresh and replacement-only
-   reconciliation. The default placeholder cannot establish readiness. Offline
-   fixture tests and the earlier partial live probe remain historical evidence.
-2. Company setup is complete: the selected
-   [50-symbol production universe](PRODUCTION_UNIVERSE.md) was mapped, seeded and
-   verified against the base table and enabled index as recorded above. Do not
-   rerun the initial create-only seed transaction as a readiness check.
-3. Rebuild/test the final adapter image and approve its digest. Reconcile the CDK
-   baseline/environment as needed before releasing it.
-4. Perform explicitly authorized cloud checks: conditional PUT denies overwrite,
-   object absence detection and checkpoint permissions work, heartbeat volume is
-   writable, task-role credentials work and EMF reaches CloudWatch. Use test
-   resources/fixtures where appropriate; live SEC checks remain manual/authorized.
-5. Confirm resource retention, image retention, notification topic policy/delivery,
-   memory headroom and actual subnet/AZ/egress behavior. Two artifact workflows can
-   temporarily retain multiple 64-MiB byte buffers; 1 GiB is initial sizing, not a
-   measured production guarantee.
-6. Notification actions were enabled through the reviewed runtime deployment;
-   SNS email receipt and the liveness alarm's CloudWatch-originated SNS action
-   were verified as recorded below. Set FINBOT_ACTIVATION_APPROVED true only after readiness approval.
-   Then manually dispatch activation. Verify a healthy task, configured/fresh full
-   calendar coverage and resumed polling; task HEALTHY alone is not readiness.
-
-## Finite Fargate deployment check
-
-Prepared after the operator accepted the known zlib finding and asked to proceed.
-This check has not run in AWS. Current revision `3` predates the diagnostic: first
-commit/push it, pass CI, restore repository delivery and dispatch/approve a new
-**staged** release with `activate=false`. Keep production
-`FINBOT_ACTIVATION_APPROVED=false`. Use that manifest's exact new task-definition
-ARN below, not revision `3` or an unpinned family. No CDK deployment or IAM expansion
-is needed. The ingestion service remains desired zero.
-
-The saved [RunTask input](../infra/checks/run-task.prod.json) launches one standalone
-task in the deployed service's subnets/security group, with a public IP and Fargate
-platform `1.4.0`. It inherits the reviewed image, 512 CPU units, 1 GiB memory,
-task/execution roles, read-only root, UID 10001 and writable `/tmp`. Container
-command `--deployment-check --check-id readiness-20261009-1` dispatches the check
-before constructing ingestion. ECS command overrides replace the image command,
-not its Python entry point. See [RunTask overrides](https://docs.aws.amazon.com/sdk-for-ruby/v3/api/Aws/ECS/Types/RunTaskRequest.html).
-
-The check requires Fargate `container-role` credentials. A 180-second process
-alarm bounds the run; SDK calls use three-second connect/five-second read timeouts
-and at most two attempts. Enabled-company queries allow ten pages and strongly
-recheck the expected 50 base rows. No scan, company mutation, live SEC/Yahoo
-request, artifact-ready publication or failed-work message occurs.
-
-Exact AWS test writes for this check ID:
-
-| Resource | Fixture |
-| --- | --- |
-| Raw S3 bucket | `deployment-checks/readiness-20261009-1/probe.txt`, fewer than 100 bytes, SSE-S3, create with `IfNoneMatch="*"` |
-| Calendar | `expected_date=__deployment_check__`, `cik=__deployment_check__:readiness-20261009-1` |
-| Filings | `accession_number=__deployment_check__:readiness-20261009-1` |
-| Artifacts | `artifact_id=__deployment_check__:readiness-20261009-1` |
-| Existing log group | Sanitized report and `Finbot/DeploymentChecks` EMF, metric `DeploymentCheckSucceeded`, Service/Environment dimensions |
-
-Each DynamoDB row is conditionally created, updated under an ownership/state
-condition and read consistently. Rows have no application schema or sparse-index
-attributes. Reserved keys lie outside calendar date ranges and artifact paths,
-so ingestion/recovery cannot discover them. Existing fixtures cause failure rather
-than overwrite. S3 HEAD absence must return 404, duplicate conditional PUT must
-fail 412, unconditional PUT must fail 403, and HEAD/GET must preserve the original
-version and bytes. Only the check's own test key is targeted, even if policy
-enforcement unexpectedly fails. See [S3 conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html).
-
-The check exercises `HealthFile` atomics in a separate private `/tmp` directory,
-never the normal heartbeat path. Cache writes/reads/private permissions are checked
-there and local files are removed. Major calendar dependencies are loaded, then
-256 MiB of buffers are touched: two copies per default artifact workflow. Linux
-peak RSS is recorded and must leave at least 256 MiB of the initial 1 GiB
-allocation. This is synthetic headroom, not measured worst-case ingestion/provider
-memory. No `RuntimeHealthy` metric is emitted; the stopped service's liveness
-alarm remains truthful. The run fits within the existing 300-second health startup
-allowance.
-
-After reviewing the staged revision, replace `STAGED_TASK_DEFINITION_ARN` below
-with that exact ARN and run:
-
-```bash
-aws ecs run-task \
-  --cli-input-json file://infra/checks/run-task.prod.json \
-  --task-definition STAGED_TASK_DEFINITION_ARN \
-  --profile default --region us-east-1 \
-  --query '{Failures:failures,Tasks:tasks[].{Arn:taskArn,Status:lastStatus,TaskDefinition:taskDefinitionArn}}' \
-  --output json --no-cli-pager
-```
-
-Require no failures and exactly one returned task. Record its ARN, wait with
-`aws ecs wait tasks-stopped`, then `describe-tasks` to verify container `ingestion`
-exited zero with the expected image digest. Read `ingestion/ingestion/<task-id>`
-in `/finbot/finbot-prod` using `aws logs get-log-events`. Require `status=passed`
-with all checks present, then verify CloudWatch `Finbot/DeploymentChecks` /
-`DeploymentCheckSucceeded` value one for Service=`finbot-ingestion`,
-Environment=`prod`. Log receipt alone does not prove EMF extraction. Confirm the
-service remains at zero and the standalone task is STOPPED before activation.
-
-AWS fixtures remain because the task role intentionally cannot delete raw objects.
-Preserve the report/version ID before cleanup. After a complete successful check,
-the operator may remove only the owned rows using the reviewed
-[transaction input](../infra/checks/delete-checkpoints.prod.json):
-
-```bash
-aws dynamodb transact-write-items \
-  --cli-input-json file://infra/checks/delete-checkpoints.prod.json \
-  --profile default --region us-east-1 --no-cli-pager
-aws s3api delete-object \
-  --bucket finbot-prod-state-artifacts82dd59a1-8gt63rcgmaua \
-  --key deployment-checks/readiness-20261009-1/probe.txt \
-  --version-id REPORTED_TEST_VERSION_ID \
-  --profile default --region us-east-1 --no-cli-pager
-```
-
-Do not delete application objects or use an unversioned S3 delete. Partial failures
-require inspecting reported keys before cleanup; the complete transaction fails
-if any row is missing or has different ownership. A lost write acknowledgment may
-still leave a fixture at its reported key. For a new test change the check ID,
-matching cleanup keys and both client tokens. RunTask's token prevents duplicate
-submissions within its idempotency window; existing fixtures still require a fresh
-check ID after that window.
-
-This validates the sampled task's AWS access, filesystem, logs/EMF and synthetic
-memory behavior. It does not test both AZ placements, live SEC/Yahoo egress or
-actual ingestion peak memory. Verify those during the first controlled activation
-and stop/investigate if full calendar freshness or polling fails.
-
-Local preparation validation: application tests passed (`585 passed`, eight
-opt-in container cases skipped); infrastructure/workflow tests passed (`26
-passed`). Compilation and whitespace checks passed. Eighteen new offline
-diagnostic tests cover SDK request contracts, fixture/cleanup isolation, pagination,
-credential refusal, timeout handling and sanitized reports. The container
-installation test now exercises this mode through the image entry point; the
-rebuilt ARM64 image must pass it in CI before staging. No live AWS writes occurred
-during this preparation.
-
-CI subsequently passed for commit `d2098df65caba8f8bcf84808970260b4ab8deec2`,
-[run 38025079649](https://github.com/ilancooke/finbot-filings/actions/runs/38025079649),
-completed `2026-10-10T04:46:31Z`. Application/infrastructure, workflow validation
-and the rebuilt ARM64 image/offline lifecycle step all succeeded, including the
-new diagnostic entry-point check. Read-only inspection afterward confirmed
-repository delivery still disabled, production activation approval false and
-baseline revision `3`. ECS remained at zero desired/running/pending with no listed
-running tasks. The next operator action is to restore delivery using the saved
-repository variables, then dispatch `activate=false` to stage this validated
-commit. The finite cloud check remains unperformed.
-The operator subsequently reapplied `infra/github/repository-variables.env` with
-`gh variable set` and reported `FINBOT_DELIVERY_ENABLED` updated to the saved
-value `true`. Production activation approval remains false; next manually dispatch
-`deploy.yml` on `main` with `activate=false` and review/approve its staged release.
-The operator dispatched that staged release:
-[run 38025568665](https://github.com/ilancooke/finbot-filings/actions/runs/38025568665).
-Read-only GitHub inspection confirmed `workflow_dispatch`, the CI-tested commit
-`d2098df65caba8f8bcf84808970260b4ab8deec2`, and a waiting release job with no
-steps executed. Its pending production environment is `23924540932`, with the
-operator eligible to approve. Staged delivery and the finite cloud check are
-still pending; dispatch is not evidence of image publication or runtime execution.
-The operator approved the pending production deployment for run `38025568665`
-with an explicit `activate=false` comment. GitHub returned deployment ID
-`6976296179`, targeting the same validated commit. Subsequent read-only inspection
-showed the release running its application validation step; delivery completion
-and the new revision/digest remain to be verified.
-Staged run `38025568665` subsequently succeeded, completed
-`2026-10-10T04:57:43Z`. Its downloaded manifest reports `outcome=staged`,
-`checkpoint=verified`, previous count zero and no observed tasks. The new
-task definition is
-`arn:aws:ecs:us-east-1:559007813222:task-definition/finbot-prod-ingestion:4`,
-using image digest
-`sha256:1fa4e71ad8b06d295e2ea9a8db561ca8084646a82e49066995f032ef7f7221fd`
-and tag `d2098df65caba8f8bcf84808970260b4ab8deec2-38025568665-1`.
-Read-only AWS inspection confirmed the same digest on Linux ARM64, identical
-task configuration to baseline revision `3` except image, matching saved RunTask
-subnets/security group/public-IP settings, and service rollout `COMPLETED` with
-zero desired/running/pending tasks. Baseline GitHub variable remains `:3` because
-that is the CloudFormation-managed baseline, not the application release revision.
-The new image scan is `COMPLETE` with only the previously accepted HIGH
-`CVE-2026-85091`; no new findings were reported. The next operator command is the
-finite RunTask input with the exact verified revision `:4`. That task has not
-been launched, and production ingestion remains inactive.
-The operator then launched the saved readiness input against revision `4`.
-RunTask returned no failures and task
-`arn:aws:ecs:us-east-1:559007813222:task/finbot-prod/605da5eb37444f879400aee4bb9f367d`
-in `PROVISIONING`. Initial read-only inspection found it `PENDING`, with the
-expected image, `startedBy=finbot-readiness-20261009-1` and only the diagnostic
-command override. The ingestion service remained at zero. Exit status, report,
-fixture results and CloudWatch metric extraction are not yet verified.
-The task subsequently stopped at `2026-10-10T05:02:46.995Z` with
-`stopCode=TaskFailedToStart`, no `startedAt` or container exit code, and
-`CannotPullContainerError`: the pinned registry reference was reported not found
-while resolving it for schema1 conversion. Its log stream was empty. The Python
-check did not start, so none of its test writes or EMF ran. Activation readiness
-is not established.
-
-Read-only investigation confirmed the exact digest/tag still exists, is ACTIVE,
-and has a Docker Schema 2 manifest with gzip layers; BatchGetImage returned that
-manifest without failures. There is no repository policy. The execution role has
-repository-scoped BatchGetImage/GetDownloadUrlForLayer/BatchCheckLayerAvailability
-and wildcard GetAuthorizationToken, with no permissions boundary or attached
-managed policies. CloudTrail shows the failed task's execution-role session
-reached ECR and requested the exact digest with compatible media types; the
-recorded calls had no top-level error. These checks do not explain the registry
-pull failure or prove all registry operations succeeded. Next compare a Docker
-pull of the exact pinned digest before choosing a retry or a source fix. Any retry
-must use a new RunTask client token; the original token can return the stopped
-task rather than launch a new one. The service remains stopped.
-The operator's subsequent local ARM64 Docker pull of the exact pinned digest
-succeeded and reported the same digest. Read-only inspection reconfirmed the first
-task fully STOPPED, no running tasks, and service desired/running/pending all zero.
-Consistent reads found all three diagnostic rows absent, and S3 HEAD returned 404
-for its exact fixture key. This rules out leftover diagnostic fixtures and shows
-the registry image can be pulled locally; it does not identify Fargate's failure
-cause. A controlled retry is prepared without changing the image, platform,
-network or IAM: saved RunTask `clientToken` and `startedBy` are now
-`finbot-readiness-20261009-2`. The diagnostic check ID remains
-`readiness-20261009-1` because Python never started and no fixtures exist. No image
-rebuild, CI rerun or CDK deployment is needed for this request-token-only retry.
-Repeating an executed/partially executed check would instead require a new check
-ID and matching cleanup input. The retry has not been launched.
-See [RunTask idempotency](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ECS_Idempotency.html).
-
-The operator then launched retry task
-`arn:aws:ecs:us-east-1:559007813222:task/finbot-prod/efbd89a0313c42daa996cd03b033ecb6`
-with no RunTask failures. Read-only inspection confirmed revision `4`, the same
-pinned image digest, diagnostic command and attempt-2 startedBy. It started at
-`2026-10-10T05:10:58.060Z`, fully stopped `2026-10-10T05:11:28.049Z`, and exited
-`0` (`EssentialContainerExited`). The unchanged image/config pulled successfully
-on retry; the first pull failure's root cause remains undetermined.
-
-Actual CloudWatch log report `status=passed` records 2.908 seconds of diagnostic
-execution, `container-role` credentials, 50 enabled company records validated,
-three checkpoint roundtrips, writable private `/tmp`/atomic heartbeat and S3
-absence/conditional overwrite rejection/original bytes. Peak Linux RSS was
-`366.0 MiB` while touching 256 MiB of synthetic buffers, below the 768-MiB ceiling;
-this is not measured worst-case production memory. Report/EMF timestamp is
-`2026-10-10T05:11:04.376Z`. GetMetricStatistics independently returned
-`DeploymentCheckSucceeded` Maximum `1` / Count for the `05:11:00Z` minute in
-`Finbot/DeploymentChecks`, with the expected Service/Environment dimensions.
-Application-originated log/EMF delivery is verified.
-
-Consistent reads independently confirmed all three owned test rows in state
-`verified`. S3 HEAD confirmed the 45-byte AES256 test object and exact version
-`A31uuXti4t.pfT0kjgR5b2hKG1W5UUFB`. Service revision `4` still has zero
-desired/running/pending counts and ListTasks returned no running tasks. Next
-apply the saved owned-row cleanup transaction and delete only that S3 fixture
-version with the standard CLI commands above. Cleanup was pending at that point. The finite AWS
-readiness check is complete; normal ingestion, live cloud SEC/Yahoo behavior and
-sustained memory remain untested.
-
-The operator subsequently deleted the exact S3 test version. Read-only verification
-confirmed all three DynamoDB fixture rows absent with consistent reads and S3 HEAD
-returning 404 for the fixture key. Cleanup is complete. The service still selects
-revision `4` with desired/running/pending counts of zero, and no tasks are running.
-
-The saved production variables now prepare `FINBOT_ACTIVATION_APPROVED=true` for
-the operator to apply through `gh variable set --env-file`. This local edit has
-not changed GitHub or started ingestion. Keep the CloudFormation baseline variable
-at revision `3`. Next manually dispatch `activate=true` with the exact tested digest
-`sha256:1fa4e71ad8b06d295e2ea9a8db561ca8084646a82e49066995f032ef7f7221fd`
-and approve the production environment. Selecting the existing digest avoids
-rebuilding the validated image. After startup, verify normal runtime health,
-full calendar freshness/scope and SEC polling from cloud logs/metrics; the finite
-diagnostic did not exercise those live providers.
-
-The operator applied the saved production variables successfully. Read-only GitHub
-verification confirms `FINBOT_ACTIVATION_APPROVED=true`, baseline revision `3`,
-the reviewed deployment targets and repository `FINBOT_DELIVERY_ENABLED=true`.
-ECS still selects revision `4` with zero desired/running/pending tasks and no
-running task ARNs. The next operator command is the manual activation dispatch
-using the exact tested digest above; production environment review remains required.
-
-The operator dispatched [activation run 38059361548](https://github.com/ilancooke/finbot-filings/actions/runs/38059361548)
-on `main` with `activate=true` and the exact tested digest
-`sha256:1fa4e71ad8b06d295e2ea9a8db561ca8084646a82e49066995f032ef7f7221fd`.
-Read-only GitHub inspection confirms commit
-`d2098df65caba8f8bcf84808970260b4ab8deec2`, `workflow_dispatch`, status `waiting`
-and pending production environment `23924540932`, with the operator permitted
-to approve. Approval and ingestion startup have not yet been observed.
-
-The operator approved production deployment `6982142650` for this activation run
-at `2026-10-10T14:22:42Z`. The release job started at `14:24:08Z` and is running
-application validation before obtaining AWS credentials. Approval authorizes
-normal ingestion startup using the selected tested image; workflow completion,
-task health and live provider behavior still await verification.
-
-The activation workflow subsequently completed successfully. Its downloaded
-`release-manifest.json` records `outcome=running`, `checkpoint=verified`, source
-commit `d2098df65caba8f8bcf84808970260b4ab8deec2`, previous revision/count `4`/`0`
-and new revision `5`, with the exact tested image digest above. Read-only ECS
-inspection confirmed desired/running/pending `1`/`1`/`0`, rollout `COMPLETED`, zero
-failed deployment tasks, and healthy task
-`arn:aws:ecs:us-east-1:559007813222:task/finbot-prod/23138c44eee34761a6c8617f01b55b7a`
-in `us-east-1a`. Image pull completed and the task started at `14:26:30.673Z`.
-Normal command has no diagnostic override. The quiet-period log is timestamped
-`14:26:36.502Z`; normal runtime/calendar/SEC work began after that period.
-
-Consistent calendar-state reads and the completion log confirm full Yahoo sync
-`d9e58a34fdae48928e156b8dea62f927`: observed `14:29:07.228349Z`, completed
-`14:32:05.877115Z`, 50 companies, 47 events, zero cancellations, no failure record,
-covering `2026-10-10` through `2026-11-08`. The persisted date-partition rows also
-contain 47 events. Compared with the preceding local report, DAL and HOVR's
-October 9 observations are outside today's window; GLDG is now observed on October
-12 rather than October 9. NVDA remains without an observation. Complete collection
-does not establish dates for companies without observations or guarantee future
-daily refreshes.
-
-CloudWatch independently returned `RuntimeHealthy=1` for the 14:29–14:33 minutes,
-`CalendarScopeMatches=1` and `CalendarStale=0` from the 14:32 minute, and full-sync
-age samples of 31.10 and 91.11 seconds. SEC request counts are nonzero in every
-observed active minute. Initial AWS/ECS service memory-utilization maxima were
-14.31–18.55% in the 14:29–14:32 minutes; this is a short startup sample, not a
-worst-case guarantee. Health and metric readings are independent of workflow success.
-
-For an actual stored/published artifact, consistent reads confirmed Citigroup 10-Q
-artifact `0000831001-26-000045/R1.htm`, S3 URI
-`s3://finbot-prod-state-artifacts82dd59a1-8gt63rcgmaua/0000831001/0000831001-26-000045/R1.htm`,
-size 73,390 bytes and durable `stored_at`/`published_at` facts. S3 HEAD independently
-confirmed 73,390 bytes, AES256 encryption and a version ID. This verifies actual
-cloud acquisition/storage/publication checkpoint flow; no downstream consumer
-receipt was tested.
-
-One real exception is recorded: Citigroup 10-K artifact
-`0000831001-26-000011/0000831001-26-000011.txt` failed `ACQUIRE` with
-`SECDocumentTooLarge` at `14:31:48.814400Z`. Its consistent DynamoDB record has
-`last_error="SEC document exceeds MAX_ARTIFACT_BYTES"`, terminal stage/time and
-`dead_lettered_at=14:31:48.966167Z`, without storage/publication facts. Logs and
-`TerminalFailures=1` agree; SQS reported one visible failed-work message. The v0
-64-MiB cap is explicit in HLD section 8. No cap increase, deletion, redrive or
-failure suppression was performed. The task continued healthy and other artifacts
-continued to store/publish. Review [DATA-001](BACKLOG.md#data-001--review-oversized-sec-submission-acquisition)
-before claiming complete acquisition of this package.
-
-The liveness alarm returned to OK at `14:30:59.637Z`. Calendar scope/stale alarms
-fired while the first sync was incomplete; their recovery awaits alarm evaluation
-of the new matching/fresh metrics. The discovery-latency alarm crossed during
-historical catch-up; the verified Citigroup 10-Q was accepted August 7 and first
-discovered today. This measures acceptance-to-first-discovery age, not download
-duration. See [OPS-001](BACKLOG.md#ops-001--distinguish-historical-catch-up-from-live-discovery-latency).
-Terminal-failure/failed-work conditions are real and remain operational follow-ups.
-
-Final read-only startup check at `2026-10-10T14:36:47Z` confirmed the same task
-still RUNNING/HEALTHY, service `1`/`1`/`0` and completed rollout with no failed
-deployment tasks. Calendar scope and stale alarms returned to OK at
-`14:34:54.914Z` and `14:34:56.017Z`, respectively. Discovery-latency and terminal
-failure alarms remain ALARM; SQS still reports one visible failed-work message.
-The non-HeadObject warning query returned only the three log entries for the one
-known oversized document. Initial activation verification is complete with those
-explicit follow-ups; no additional AWS mutations were made during inspection.
-
-### Terminal-failure alarm investigation after the documentation merge
-
-The operator merged commit `5ec8230a90390a903e1a01b2b63a2775dcfeb780` and reported a
-seven-minute terminal-failure alarm during delivery. Read-only investigation
-correlated alarm history, metric samples, both task log streams, consistent artifact
-records and [delivery run 38061540367](https://github.com/ilancooke/finbot-filings/actions/runs/38061540367).
-The following timestamps are UTC on 2026-10-10.
-
-| Failure time | Company/form | Failed submission-text artifact |
-| --- | --- | --- |
-| 14:31:48 | C / 10-K | `0000831001-26-000011/0000831001-26-000011.txt` |
-| 15:00:26 | AA / 8-K | `0001193125-26-388649/0001193125-26-388649.txt` |
-| 15:13:08 | AA / 10-K | `0000950170-24-018069/0000950170-24-018069.txt` |
-| 15:16:52 | AA / 10-K | `0000950170-25-024242/0000950170-25-024242.txt` |
-
-All four log failures are `SECDocumentTooLarge`, stage `ACQUIRE`, attempt 1 and
-`will_retry=false`. Consistent artifact records independently contain
-`last_error="SEC document exceeds MAX_ARTIFACT_BYTES"`, terminal/dead-letter times
-and no stored/published facts. CloudWatch has one terminal-count sample in each
-corresponding minute, and SQS reported four visible messages. Each is a separate
-failed artifact; the seven-minute alarm duration is not seven minutes of retries.
-
-The completed alarm episodes were `14:32:57.732`–`14:39:57.734` (Citigroup) and
-`15:01:57.734`–`15:08:57.733` (Alcoa 8-K), both approximately seven minutes.
-The alarm entered ALARM again at `15:14:57.734` after the next Alcoa failure.
-Its actual configuration is TerminalFailures / Sum, 60-second periods, 1 of 2
-datapoints at or above 1, missing data `notBreaching`, dimensions
-Service=finbot-ingestion and Environment=prod. The failure counter emits only when
-an artifact first becomes terminal. Sparse periods contain no zero samples.
-CloudWatch can re-evaluate real datapoints from a wider evaluation range before
-using missing-data treatment; this explains why recovery can exceed the nominal
-two-period window. Recovery history explicitly says no datapoints were received
-and missing periods were nonbreaching. Alarm OK means no recent qualifying metric
-data; it does not mean the failed artifacts were repaired or the queue emptied.
-See [AWS missing-data evaluation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html).
-
-The AA 8-K failed in the old revision-5 task at `15:00:26`, before the delivery job
-started at `15:00:42` and before application deployment at `15:02:47`. That task
-stopped normally with exit zero at `15:04:01.863`. Revision-6 task
-`ffc666e65ff64905a1250c522a33834f` started at `15:05:35.185` and is healthy.
-The new manifest records `running`/`verified`, revision 5 to 6 and image digest
-`sha256:dcdf69e234bc15560b6e05a0f8aeb19f0ed1eb247feedc373161d676edeca979`.
-The merge changed documentation and saved operation/settings inputs; application
-Python code was unchanged. Failures on both sides of the handoff establish a
-recurring acquisition-size constraint rather than a task crash caused by the merge.
-
-Source trace: `StorageConfig` defaults to 67,108,864 bytes (64 MiB), and both its
-validation and `ArtifactDownloader` prohibit larger configured limits. The current
-task has no MAX_ARTIFACT_BYTES override and therefore uses this default. The SEC
-client checks Content-Length and also counts streamed bytes; either can raise the
-same size exception. WorkControl classifies it as nonretryable, checkpoints the
-terminal transition and increments TerminalFailures. The worker sends and
-checkpoints failed work in SQS while other artifacts continue. Exact remote byte
-sizes and which size-check branch rejected each response were not measured.
-
-Reproduce the application-log part with a standard read-only command:
-
-```bash
-aws logs filter-log-events \
-  --log-group-name /finbot/finbot-prod \
-  --filter-pattern '{ $.message = "Workflow attempt failed" }' \
-  --profile default \
-  --region us-east-1 \
-  --query 'events[].{Task:logStreamName,Event:message}' \
-  --output json \
-  --no-cli-pager
-```
-
-Next investigate actual source sizes and a bounded-memory larger-document design
-under DATA-001. Raising an environment variable alone cannot bypass the current
-hard limit. No application/configuration change, redrive, queue consumption/deletion
-or alarm suppression was performed during this investigation.
-
-## Automatic recovery and alarms
-
-Set `alarm_email` in ignored `infra/cdk/config.local.json` to provision an SNS
-topic, email subscription and topic policy in the runtime stack. All 11 alarm
-actions route to that topic. The policy allows `cloudwatch.amazonaws.com` to
-publish only from this account's exact alarm ARNs and denies insecure transport.
-The topic is retained and uses no KMS key, consistent with ADR 010. The new
-`AlarmTopicArn` output identifies it. Alternatively, supply `alarm_action_arn`
-for an existing topic whose owner must configure publishing and subscriptions.
-Enabling monitoring without either destination fails configuration validation.
-
-Keep `monitoring_enabled=false` while provisioning and confirming the email
-subscription. SNS sends a confirmation email; the recipient must follow its
-confirmation link before notifications are delivered. This endpoint confirmation
-is required by SNS and cannot be replaced by declaring the subscription in CDK.
-Confirm actual delivery before enabling alarm actions in a subsequent reviewed
-runtime deployment. An intentionally stopped service breaches the liveness alarm;
-alarm evaluation and ingestion activation remain independent.
-
-Before either deployment, follow the manual-infrastructure serialization procedure
-below: suspend delivery, preserve the service's current image digest in CDK inputs,
-review the runtime diff and keep desired count zero. If the baseline task definition
-changes, refresh the GitHub production baseline variable from the stack output.
-Creating the topic and subscription alone does not activate ingestion.
-
-Preparation status: the operator selected the recipient, saved only in ignored
-local config. Read-only inspection reconfirmed the stopped service on revision 2
-and its staged digest; the local CDK digest was updated to preserve that image.
-Strict offline production synthesis passed with one email subscription and 11
-routed alarms, actions disabled and desired count zero. The repository delivery
-flag was subsequently set to false by the operator and verified read-only; recent
-delivery runs are completed. The operator ran the runtime template diff and it
-matches the planned notification changes: one SNS topic, scoped topic policy,
-email subscription, all 11 alarm actions and the `AlarmTopicArn` output. The only
-task-definition replacement changes the original baseline image to the currently
-staged digest; task definitions are immutable and this creates a new revision.
-No action-enable or desired-count change appeared. The operator deployed the
-reviewed runtime update successfully. Read-only verification confirmed
-`UPDATE_COMPLETE`, baseline/service revision `3`, completed rollout and zero
-desired/running/pending tasks, with no listed running tasks. All 11 alarms route
-to the new topic and have `ActionsEnabled=false`; the liveness alarm is in ALARM
-because ingestion is intentionally stopped.
-
-The deployed topic is
-`arn:aws:sns:us-east-1:559007813222:finbot-prod-runtime-AlarmNotificationsA4AFC78C-PywcSrOpIKGt`.
-The recipient confirmed the subscription email; read-only SNS inspection now
-returns a subscription ARN instead of `PendingConfirmation`. The operator issued
-the test publish below and confirmed the email arrived; SNS-to-email delivery is
-verified. Reproduction command:
-
-```bash
-aws sns publish \
-  --topic-arn arn:aws:sns:us-east-1:559007813222:finbot-prod-runtime-AlarmNotificationsA4AFC78C-PywcSrOpIKGt \
-  --subject 'Finbot alarm notification test' \
-  --message 'Finbot SNS delivery test. Ingestion remains stopped and alarm actions are disabled.' \
-  --profile default \
-  --region us-east-1 \
-  --output json \
-  --no-cli-pager
-```
-
-A returned `MessageId` establishes that SNS accepted the publish; confirm receipt
-in the destination inbox to establish SNS-to-email delivery. This operator publish
-does not trigger a CloudWatch alarm or validate CloudWatch's service-principal
-publishing path. It changes no ingestion or alarm action settings. See the
-[SNS CLI publishing guide](https://docs.aws.amazon.com/cli/v1/userguide/cli-services-sns.html).
-
-The checked-in production variables
-file now references baseline revision `3`; applying it to GitHub remains pending.
-Read-only GitHub inspection confirmed the environment still references revision
-`1`; its other six saved variables already match the file. Reapply the reviewed
-production variable file to update the baseline:
-
-```bash
-gh variable set \
-  --repo ilancooke/finbot-filings \
-  --env production \
-  --env-file infra/github/production-variables.env
-```
-
-The operator reapplied the file successfully. Read-only GitHub verification
-confirmed all seven production variables match it, including baseline revision
-`3` and `FINBOT_ACTIVATION_APPROVED=false`. Repository
-`FINBOT_DELIVERY_ENABLED=false` is also confirmed. The operator committed and
-pushed the seed, diagnostic, notification definitions and deployment records as
-`3202a5010abb83fe360097607088aa4ddada0301` (`Add production seed, calendar check,
-and alarm notifications`). [CI run 38018758141](https://github.com/ilancooke/finbot-filings/actions/runs/38018758141)
-passed all application/infrastructure, workflow and ARM64 container/lifecycle
-checks. [Delivery run 38018924084](https://github.com/ilancooke/finbot-filings/actions/runs/38018924084)
-was skipped at the release-job condition, as expected while delivery is paused.
-Local validation passed 567
-application tests (eight opt-in container cases skipped), 26 infrastructure/
-workflow tests, compilation, strict offline production synthesis and whitespace
-checks.
-
-Next is notification-action enablement and CloudWatch-originated delivery testing.
-Ignored local CDK configuration now prepares `monitoring_enabled=true`; strict
-offline synthesis passed. Comparison with the deployed CloudFormation template
-found exactly 11 changes, each alarm's `ActionsEnabled` from false to true, with
-no other resource or template changes. This preparation has not changed AWS:
-ingestion remains stopped on revision 3 and deployed alarm actions remain disabled.
-The operator ran the runtime template diff and confirmed only the 11 alarm
-`ActionsEnabled` changes, matching the prepared template. The operator deployed
-this reviewed update successfully. Read-only verification confirmed
-`UPDATE_COMPLETE`, all 11 alarms with `ActionsEnabled=true`, the same SNS actions
-and unchanged baseline/service revision 3 with zero desired/running/pending tasks.
-The liveness alarm remains breached while ingestion is intentionally stopped;
-that condition is expected during notification testing. Enabling actions does
-not establish application readiness or approve activation. Delivery stays paused.
-
-### CloudWatch-originated email test
-
-Read-only inspection confirmed the metric alarm
-`finbot-prod-runtime-RuntimeMissing45510FB9-vOaXGeomAub4` is currently ALARM,
-uses `TreatMissingData=breaching`, has only the reviewed SNS ALARM action and has
-no OK/INSUFFICIENT_DATA actions or compute/scaling actions. To test a new transition,
-temporarily set its state to OK using the standard CloudWatch testing API:
-
-```bash
-aws cloudwatch set-alarm-state \
-  --alarm-name finbot-prod-runtime-RuntimeMissing45510FB9-vOaXGeomAub4 \
-  --state-value OK \
-  --state-reason 'Operator notification test; ingestion intentionally stopped.' \
-  --profile default \
-  --region us-east-1 \
-  --no-cli-pager
-```
-
-Metric-alarm evaluation restores its actual state. With no runtime heartbeat,
-the expected subsequent OK-to-ALARM transition should invoke CloudWatch's SNS
-publish and deliver email. This changes temporary operational state, not the
-IaC alarm configuration, thresholds, metric data or service desired count.
-The temporary state can disappear quickly; inspect alarm history rather than
-requiring a read to catch it. Verify both SNS action success in CloudWatch alarm
-history and receipt of the corresponding alarm email. The operator ran this test
-and confirmed the email arrived. Read-only history verification recorded:
-
-- `2026-10-10T03:15:20.695Z`: operator reset from ALARM to OK with the test reason.
-- `2026-10-10T03:15:59.644Z`: normal evaluation returned OK to ALARM because three
-  missing heartbeat periods were treated as breaching.
-- `2026-10-10T03:15:59.692Z`: SNS action executed successfully (`actionState=Succeeded`,
-  `error=null`) for the configured notification topic.
-
-The common CloudWatch-to-SNS-to-email path is verified for the liveness alarm;
-this does not test application-generated EMF or every other alarm's threshold.
-Read-only ECS inspection still showed revision 3 with zero desired/running/pending
-tasks. See the [SetAlarmState CLI reference](https://docs.aws.amazon.com/cli/latest/reference/cloudwatch/set-alarm-state.html).
-
-References: [SNS alarm publishing permissions](https://repost.aws/knowledge-center/cloudwatch-receive-sns-for-alarm-trigger)
-and [SNS subscription confirmation](https://docs.aws.amazon.com/sns/latest/dg/sns-access-policy-use-cases.html).
-
-[ADR 008](adr/008-use-conservative-ecs-automatic-recovery.md) is implemented:
-active count 1, min/max 0/100, 120s stop timeout, 150s SEC quiet startup, 300s ECS
-health start period, 30s checks, 5s check timeout and three retries. Local defaults
-retain zero quiet delay and the Docker health check's 120s startup allowance.
-No SEC requests occur during the quiet period. Shutdown refuses new HTTP attempts,
-including retries/redirects, while already dispatched I/O/checkpoints can finish.
-
-ECS automatically replaces crashed/unhealthy tasks. The quiet period is conservative
-protection; it is not formal exclusion. It alone adds 2.5 minutes before polling
-resumes; detection, shutdown and provisioning add more. During expected earnings
-this can materially miss the seconds-scale discovery objective. Measure recovery
-components and revisit [ARCH-001](BACKLOG.md#arch-001--reduce-recovery-delay-during-active-earnings-windows).
-Calendar stale/unconfigured state alarms without failing otherwise live task health.
-
-EMF dimensions are Service=finbot-ingestion and Environment=config.environment.
-Liveness alarms after three missing/unhealthy one-minute periods; calendar stale,
-scope mismatch and provider-unconfigured alarms need no CalendarSyncAgeSeconds
-sample. Queue visible/inflight counts above zero and age above 300s surface failed
-work. SEC errors (10/min), publication failures (3/min), terminal failures and
-DiscoveryLatencyMs above 60,000 have initial alarm thresholds configurable in the infrastructure JSON.
-Non-liveness sparse data is not breaching. Latency is SEC acceptance-to-discovery,
-not measured public availability or publication time. No default RunningTaskCount
-metric, Container Insights charge or metrics sidecar is assumed.
-
-Stopped environments still evaluate alarms; actions are disabled by default.
-Planned handoffs can breach liveness. Operators should understand this outage rather
-than infer data loss. Use `alarm_email` for the CDK-managed topic/subscription or
-`alarm_action_arn` for an existing topic with separately managed publishing
-permissions and subscriptions.
+Inspect commit/digest/input and pending deployment before approval; inspect the
+retained manifest afterward. Selecting an existing digest avoids rebuilding between
+validation and activation. `release.py` validates baseline/roles/platform/target
+and digest before interruption. Controlled handoff/restoration uses:
+
+1. Register replacement; retain predecessor revision/digest/count.
+2. Scale zero; paginate task listings, repeatedly observe tasks and wait for all
+   actual STOPPED states, including outgoing/stopping tasks.
+3. Install selected revision at zero. Require its single COMPLETED deployment and
+   no non-STOPPED tasks.
+4. Separately request count one only when activation is permitted.
+5. Verify actual revision/digest/task health and rollout; a generic stability
+   waiter alone can accept a rolled-back revision.
+
+Separate revision/count updates prevent the startup scheduling race observed in
+filtering activation. APIs are eventual and these checks are not distributed
+exclusion. Planned releases incur outage; ECS startup adds 150 seconds before SEC.
+Release waits have finite SDK/subprocess bounds, a 1200-second deadline and separate
+restoration deadline; workflow timeout is 55 minutes. Forced runner termination
+can interrupt restoration. Successful restoration does not turn a failed release
+into success.
+
+### Filtering compatibility
+
+Keep the fixed cutoff in CDK/task configuration. Pre-filter images cannot validate
+skip checkpoints and are unsuitable active rollback targets. For incompatible
+schema/configuration changes: pause delivery, stop/wait, merge/pass CI, stage while
+stopped, pause again, preserve staged digest in CDK, review/deploy and update the
+baseline variable, then reactivate the reviewed digest. No bulk migration/queue
+purge is needed. Published objects/events and terminal facts remain intact.
 
 ## Manual infrastructure changes and release recovery
 
-Before runtime infrastructure changes, serialize against delivery, disable the
-repository delivery flag, scale to zero using approved AWS tooling, and wait for
-all observed task ARNs to reach STOPPED. Preserve the deployed digest in local CDK
-configuration before diff/deploy; otherwise CDK can revert the application image.
-CDK always returns the service to desired zero. Update the baseline GitHub variable
-from the new stack output, then explicitly reactivate through the release procedure
-if readiness remains approved. This is deliberate application-revision drift from
-the CloudFormation baseline; inspect it, never blindly reconcile against an old image.
+Serialize CDK against delivery. Disable the repository flag and verify no release
+is running; the flag does not cancel one. Scale zero with approved tooling, wait
+for observed tasks to STOPPED, and preserve current digest in local CDK inputs
+before diff/deploy. Runtime CDK leaves desired zero. Update saved GitHub variables
+from the new `BaselineTaskDefinitionArn`, then reapply them. This is CDK's baseline,
+not each application revision. Explicitly reactivate after review; never blindly
+reconcile against an old image.
 
-After a failed/cancelled workflow, inspect the manifest and actual ECS service/tasks:
+| Failed/cancelled release outcome | Action |
+| --- | --- |
+| `failed_restored` | Independently verify prior revision/digest/health; workflow remains failed |
+| `failed_restore_unverified` / missing checkpoint | Pause, scale zero, prove STOPPED, inspect logs/events; restore a retained compatible digest through the same path |
+| `staged` | Zero count is intentional; delivery did not activate |
 
-- `failed_restored`: verify the previous revision/digest/health before treating
-  service as recovered; the failed workflow should remain failed.
-- `failed_restore_unverified` or missing checkpoint: disable delivery, set desired
-  zero and wait for all observed containers to STOPPED. Do not launch while shutdown
-  is unproved. Inspect logs/events and restore a retained known-good image through
-  the same release path once quiescence and approved configuration are established.
-- `staged`: count zero is intentional; an image was delivered without activation.
+Do not reset terminal facts/delete raw objects to repair service state.
 
-The release role has no broad data access. Do not investigate by deleting raw
-objects or resetting terminal checkpoints. Correlate ingestion.work_failed envelopes
-with durable filing/artifact terminal records. The queue may expire after 14 days;
-checkpoints persist. Operator terminal redrive remains deferred.
+## One-shot live calendar check
 
-## IAM verification limits
-
-The IAM analyzer was run locally with telemetry disabled. Reproduce its baseline:
+Use the production provider without AWS/SEC/runtime startup or durable writes:
 
 ```bash
-DISABLE_IAM_POLICY_AUTOPILOT_TELEMETRY=true uvx iam-policy-autopilot@0.3.0 generate-policies \
-  scripts/release.py scripts/deliver.py --service-hints ecs ecr --pretty
+.venv/bin/python -m finbot_ingestion.calendar.check \
+  --companies-file infra/seed/companies.prod.json --days 30 \
+  --output /private/tmp/finbot-calendar-check-NEW-ID.json
 ```
 
-It recognizes literal delivery calls but misses many application calls dispatched
-through shared executors/getattr. Its generic output is not deployable least
-privilege. CDK enforces the approved LLD actions/resource contract, with tests and
-AWS documentation checks. Current AWS service authorization JSON supports family
-scoping for RegisterTaskDefinition despite older policy examples using `*`.
-ListTasks needs `Resource=*` with an exact ecs:cluster condition; DescribeTaskDefinition
-and ECR GetAuthorizationToken also use wildcard resources. PassRole remains limited
-to the two ECS roles, and UpdateService to this service. No ECS registration tags
-are requested, so release does not grant TagResource. Review synthesized policies
-and perform authorized permission checks before claiming live IAM validation.
+Output must be new; optional `--start-date YYYY-MM-DD` fixes dates. This is a bounded
+live Yahoo check; help is offline. It uses a new private temporary cache, inclusive
+New York dates and normal bounds (600 seconds, 300 HTTP attempts, 30000 rows) with
+validated `YAHOO_*` overrides. For changed scope review a new company input.
+Require `status=collection_complete`, correct scope/matches and reviewed absences.
+Exit zero proves consistent observed collection, not all-company coverage,
+authoritative cancellation, durable sync, Fargate access, ongoing rights or future
+reliability. Reports exclude raw payloads/cookies/authenticated URLs/arbitrary
+errors. Preserve evidence outside Git; do not invent events/substitute tickers to
+force matches. Keyless access does not settle ongoing provider-use arrangements.
 
-## Phase 9 filtering rollout
+## Finite Fargate deployment check
 
-The filtering implementation is local source work, not a production deployment.
-The approved live cutoff is `2026-10-10T00:00:00Z`, inclusive. CDK saves it as
-`live_ingestion_start_at` and injects `LIVE_INGESTION_START_AT`; the application
-uses the same default. Preserve this value across releases.
+`--deployment-check --check-id ID` dispatches before ingestion wiring, refusing
+credentials outside the task role. Run a separate finite diagnostic while normal
+ingestion is stopped. It makes bounded AWS test writes but no SEC/Yahoo/company
+writes/SNS/SQS work. Budget is 180 seconds; SDK connect/read timeouts are three/five
+seconds with two attempts. It validates the 50-company initial scope.
 
-Existing pending acquisition/publication is checked lazily during recovery. No
-bulk migration, new table, queue purge or historical backfill command is needed.
-Original stored/published/terminal evidence remains intact. Skips remove pending
-index attributes; pre-Phase-9 images do not understand that checkpoint combination.
-A rollback must use a filtering-compatible image or leave the service stopped.
+Use [RunTask input](../infra/checks/run-task.prod.json) as a reviewed template.
+**Its historical check was executed and cleaned up.** A new execution needs a new
+check ID, RunTask clientToken/startedBy and matching
+[cleanup input](../infra/checks/delete-checkpoints.prod.json). Verify current
+network/region/roles and exact staged task-definition ARN/digest. Release role
+cannot launch this standalone task; no application IAM expansion is expected.
 
-Use the existing delivery procedure, with this first-release ordering:
+| Resource | Owned fixture for ID |
+| --- | --- |
+| Raw S3 | `deployment-checks/ID/probe.txt`, fewer than 100 bytes, SSE-S3 |
+| Calendar | `expected_date=__deployment_check__`, `cik=__deployment_check__:ID` |
+| Filings | `accession_number=__deployment_check__:ID` |
+| Artifacts | `artifact_id=__deployment_check__:ID` |
+| Logs/EMF | Sanitized report; `Finbot/DeploymentChecks` / `DeploymentCheckSucceeded` |
 
-1. **Before merging**, pause automatic delivery at repository scope:
+Rows have no application schema/pending keys and lie outside date/identity queries.
+Ownership-guarded writes/strong reads reject existing fixtures. Check S3 absence
+404, duplicate create 412, unconditional overwrite denial 403 and original
+version/bytes. Validate private writable `/tmp`/atomic heartbeat and checkpoint
+roundtrips. Load calendar dependencies and touch 256 MiB of buffers, requiring
+256 MiB headroom in the initial 1-GiB task. This is synthetic, not production peak
+memory; it emits no RuntimeHealthy metric.
 
-   ```bash
-   gh variable set FINBOT_DELIVERY_ENABLED \
-     --repo ilancooke/finbot-filings --body false
-   ```
+```bash
+aws ecs run-task --cli-input-json file://REVIEWED_RUN_TASK_INPUT.json \
+  --task-definition STAGED_TASK_DEFINITION_ARN \
+  --profile default --region us-east-1 --output json --no-cli-pager
+```
 
-   Verify no release is already running; changing this flag does not cancel one.
-2. Stop ingestion using the existing desired-count-zero procedure and verify
-   previously observed service tasks reach STOPPED. Retain the current task/digest
-   for evidence. Do not start a parallel SEC process.
-3. Merge the tested change and verify CI, including the ARM64 lifecycle tests.
-   With the service confirmed stopped, temporarily enable delivery and manually
-   dispatch/approve `activate=false` using the existing GitHub instructions.
-   Inspect its staged digest/task revision and confirm desired/running/pending
-   counts remain zero. `activate=false` preserves an already active count; it is
-   safe for this staging step only because the service was explicitly stopped.
-   Failure restoration now returns to a stopped service rather than an old active
-   image. Pause delivery again before infrastructure reconciliation.
-4. Set the **verified staged filtering digest** in local CDK config. Review the
-   runtime diff for the new cutoff environment variable and that exact digest;
-   deploy with ingestion stopped. Do not deploy the old baseline digest with this
-   configuration. State resources/identities remain unchanged. Copy the resulting
-   `BaselineTaskDefinitionArn` into `infra/github/production-variables.env`, save
-   the configuration change and reapply the production variables through `gh`.
-5. Re-enable delivery and explicitly activate the same tested filtering digest
-   using the existing dispatch/reviewer process. Verify one healthy task, selection
-   logs, selected S3/database/SNS checkpoints, and skipped pending work. Do not
-   interpret historical failed-work messages disappearing through normal retention
-   as a successful redrive.
+Require one task/no failures. Wait using `aws ecs wait tasks-stopped`, then describe
+expected digest/override and exit zero. Read `ingestion/ingestion/<task-id>` in
+`/finbot/finbot-prod`, require passed report and independently extracted
+`DeploymentCheckSucceeded=1` with expected Service/Environment. Log receipt alone
+is not EMF verification. Confirm stopped service/diagnostic task.
+
+Preserve report/exact S3 version before operator cleanup:
+
+```bash
+aws dynamodb transact-write-items --cli-input-json file://REVIEWED_CLEANUP_INPUT.json \
+  --profile default --region us-east-1 --no-cli-pager
+aws s3api delete-object --bucket REVIEWED_BUCKET \
+  --key deployment-checks/ID/probe.txt --version-id REPORTED_TEST_VERSION_ID \
+  --profile default --region us-east-1 --no-cli-pager
+```
+
+Verify strong row absence/S3 HEAD 404. Partial/lost acknowledgments require inspecting
+owned keys first; complete cleanup transaction fails for missing/different owners.
+Never use unversioned deletion or touch application objects. A failed-to-start task
+can reuse check ID only after proving no fixtures exist, with fresh RunTask token.
+An executed/partial check needs new ID and matching cleanup keys/tokens. This does
+not test both AZs, live provider egress or sustained memory.
+
+## Readiness and post-release verification
+
+Before a new environment/material image change, review correct resources/scope,
+explicit Yahoo/SEC identity, compatible immutable digest/scan findings, task-role
+permissions, writable cache/heartbeat, logs/EMF, memory and retained data/images.
+Use cloud diagnostics where needed and verify cleanup. Confirm alarms, reviewed
+calendar absences and ongoing provider access. Placeholder cannot establish readiness.
+
+After release independently verify one healthy ARM64 task/exact digest/cutoff,
+full calendar company/date scope and age, configured provider, SEC progress,
+selection diagnostics and selected S3/stored/published facts. HEALTHY alone does
+not prove calendar coverage/delivery. Short observations do not establish sustained
+reliability or worst-case memory. Record unresolved findings in [BACKLOG](BACKLOG.md).
+
+## Automatic recovery and alarms
+
+[ADR 008](DECISIONS.md#adr-008): active count one, min/max 0/100, stop timeout 120s,
+SEC quiet period 150s, ECS health allowance 300s, 30s checks/5s timeout/three retries.
+Local Docker uses zero quiet delay/120s allowance. Calendar outages alarm separately
+from live process health. Recovery can miss earnings latency goals; measure ARCH-001.
+
+Set ignored `alarm_email` for a retained managed SNS subscription/topic, or
+`alarm_action_arn` for an existing same-account/region destination. Enabled
+monitoring without destination fails. Managed policy scopes CloudWatch publishing
+to exact account/alarm ARNs and HTTPS. Provision with actions disabled, confirm
+email/receipt, then review/deploy action enablement. Notification setup does not
+start ingestion. Verify SNS receipt with reviewed `aws sns publish`/inbox; MessageId
+alone proves only acceptance. For CloudWatch-originated delivery while stopped,
+inspect actions and temporarily reset the liveness alarm:
+
+```bash
+aws cloudwatch set-alarm-state --alarm-name REVIEWED_LIVENESS_ALARM \
+  --state-value OK --state-reason 'Operator notification test; ingestion intentionally stopped.' \
+  --profile default --region us-east-1 --no-cli-pager
+```
+
+Normal missing-heartbeat evaluation restores ALARM; verify successful SNS action
+history/email. This changes temporary alarm state, not configuration/data/ECS count.
+The managed alarm has only SNS ALARM action, no compute/scaling action.
+
+Eleven alarms use `Finbot/Ingestion`, Service=`finbot-ingestion`, Environment from
+config, plus native failed-work SQS metrics. Liveness treats three missing/unhealthy
+one-minute periods as breaching. Calendar scope/stale/provider checks do not require
+an age sample. Failed-work counts/age, SEC/publication errors, terminal transitions
+and acceptance-to-discovery latency surface issues. Non-liveness sparse missing
+data is nonbreaching. Planned stops can breach liveness; evaluation continues stopped.
+
+TerminalFailures emits on new transitions, not continuous zeros. Sparse evaluation
+may retain ALARM longer than nominal window; OK does not mean failures repaired or
+queue emptied. Historical catch-up can inflate acceptance latency. No default
+RunningTaskCount, Container Insights or metrics sidecar is required.
+
+## Failed-work investigation
+
+Correlate `ingestion.work_failed` envelopes, durable terminal/dead-letter facts and
+contextual logs. Queue retention is 14 days; checkpoints persist. Normal workers
+never redrive. Do not consume/delete evidence or raw bytes as incidental repair.
+
+```bash
+aws logs filter-log-events --log-group-name /finbot/finbot-prod \
+  --filter-pattern '{ $.message = "Workflow attempt failed" }' \
+  --profile default --region us-east-1 \
+  --query 'events[].{Task:logStreamName,Event:message}' --output json --no-cli-pager
+```
 
 Selection logs use `operation=acquisition_selection`,
-`policy_version=earnings-acquisition-v1`, `selection_decision` and a stable `reason`.
-Unresolved evidence is a warning, not a terminal download failure. Examples include
+`policy_version=earnings-acquisition-v1`, `selection_decision` and stable reason.
 `unresolved_items`, `conflicting_items`, `unresolved_exhibit_role` and
-`possible_image_only_content`. Clear selected documents continue while ambiguous
-attachments are omitted. Review warnings before claiming complete earnings coverage.
+`possible_image_only_content` need review; they are not terminal download failures.
+Clear selected documents can proceed with unresolved attachments omitted.
 
-Production validation is pending. [PHASE_9_RESULTS](PHASE_9_RESULTS.md) records
-local/offline checks; it does not represent SEC/AWS production acceptance.
+## Last recorded verification
 
-### Filtering release staging checkpoint
+These are dated observations, **not a fresh live inspection**. Migration/deployment
+and filtering activation are complete. Last checkpoint: **2026-10-11 UTC
+(October 10 locally)**.
 
-The operator paused delivery, scaled the service to zero, and verified both
-observed tasks were STOPPED before merging. CI passed for the merged filtering
-source. The operator re-enabled delivery and dispatched/approved
-[run 38100007167](https://github.com/ilancooke/finbot-filings/actions/runs/38100007167)
-with `activate=false`. It completed successfully at `2026-10-11T00:58:51Z`
-(October 10 in the operator's timezone).
+| Evidence | Recorded result |
+| --- | --- |
+| Filtering activation | [Run 38102021956](https://github.com/ilancooke/finbot-filings/actions/runs/38102021956), completed `2026-10-11T01:36:57Z`; release-script commit `e07bd6fe17c43d2b8538d826bd9d2208d8ae629f` |
+| Application | Filtering source `182f456bf5586389dc925e4b1289ba3d3534df2c`; digest `sha256:b98313062d1b5edff55f3cd3fa19ea43ab62f9bb07dc8e655ba47e0b9d735c3d` |
+| Service | Application revision 10, CDK/GitHub baseline 8, `1/1/0`, COMPLETED/HEALTHY ARM64, fixed cutoff |
+| Recovery | 759 before-cutoff skips/no warnings/errors; observed pending ENUMERATE/ACQUIRE/PUBLISH counts zero; strong sample skips/four original terminal bundles preserved |
+| Runtime | Matching/non-stale/configured calendar, empty startup queues; no newly eligible filing in inspected startup window |
+| Local Yahoo | October 9–November 7: 50 companies/49 observations; NVDA absence reviewed as expected |
+| Initial cloud Yahoo | October 10–November 8: 50 companies/47 events, completed `2026-10-10T14:32:05.877115Z` |
+| Actual acquisition | Citigroup `0000831001-26-000045/R1.htm`: 73,390-byte SSE-S3 object/stored/published facts; downstream receipt untested |
+| Finite diagnostic | Revision 4 passed/exit zero; 50 reads/three checkpoints/immutable test bytes/EMF; peak RSS 366 MiB with 256-MiB buffers; fixtures later verified absent |
+| Notifications | Subscription/email and CloudWatch liveness SNS path verified October 10; not every threshold tested |
 
-The retained release manifest reports `outcome=staged`, `checkpoint=verified`,
-previous desired count zero, and source commit
-`182f456bf5586389dc925e4b1289ba3d3534df2c`. Its image digest is
-`sha256:b98313062d1b5edff55f3cd3fa19ea43ab62f9bb07dc8e655ba47e0b9d735c3d`,
-staged as `finbot-prod-ingestion:7`. Read-only AWS inspection confirmed revision 7
-uses that exact digest on Linux ARM64, the rollout is COMPLETED, and service
-desired/running/pending counts are all zero.
+Initial image pull failed once before Python startup; same digest succeeded on
+retry without image/network/IAM changes, cause undetermined. Filtering activation
+initially failed/restored stopped state due to combined revision/count startup.
+Separate updates succeeded using the same application digest; release scripts run
+outside the application image from workflow checkout. Detailed intermediate
+approvals/tasks/CI counts remain in Git.
 
-Ignored local CDK configuration now uses this verified filtering digest and the
-fixed `2026-10-10T00:00:00Z` cutoff. The staged revision does not yet contain an
-explicit cutoff environment variable; the new application has the same default.
-The operator paused delivery again, reviewed a runtime diff containing only the
-image digest and cutoff environment changes, and deployed it successfully.
-The resulting CDK baseline is `finbot-prod-ingestion:8`. Read-only ECS inspection
-confirmed revision 8 uses the verified filtering digest on Linux ARM64 with the
-explicit `LIVE_INGESTION_START_AT=2026-10-10T00:00:00Z` environment variable. The
-service now references revision 8 with a COMPLETED rollout and all counts zero.
+Four oversized complete-submission TXT artifacts retain original terminal facts;
+selection did not repair/delete them. HIGH `CVE-2026-85091` in initial Debian trixie
+zlib was operator-accepted for research, not suppressed/fixed. Recheck on image
+updates. Open selection/provider/memory observations are in [BACKLOG](BACKLOG.md).
 
-The operator applied the production variables naming baseline revision 8,
-re-enabled delivery, and dispatched/approved activation with the verified digest.
-No AWS or GitHub writes were performed by the agent.
-
-### Filtering activation failure and release fix
-
-[Activation run 38101044424](https://github.com/ilancooke/finbot-filings/actions/runs/38101044424)
-failed at `2026-10-11T01:17:09Z` with `unexpected overlapping tasks` in
-`Release.await_revision()`. Offline validation, OIDC authentication and pulling
-the exact filtering digest succeeded. The release manifest reports
-`outcome=failed_restored`, `checkpoint=restored`, attempted revision 9 and previous
-revision 8/count zero. Read-only inspection confirmed the service restored
-revision 8 with a COMPLETED deployment and desired/running/pending all zero.
-
-Observed service tasks:
-
-- Revision 8 task `ac2a8eb3a6994b979c7f83a41841e1a5` was created at
-  `01:14:42.732Z`, requested to stop at `01:14:51.425Z` and fully STOPPED at
-  `01:15:28.317Z`.
-- Revision 9 task `7cef3e7d9aee4e24ab003df21790b078` was created at
-  `01:15:02.164Z`, requested to stop at `01:15:10.279Z` and fully STOPPED at
-  `01:15:10.927Z`.
-
-Neither task has `startedAt`; neither reached RUNNING. The overlap guard counts
-all non-STOPPED lifecycle states, so a departing startup task and a provisioning
-replacement triggered it before ingestion began. The script changed task revision
-and desired count together. The observed outgoing-revision launch during that
-transition is consistent with a scheduler startup race, not an application crash.
-
-The local release fix separates these operations: install and verify the new
-revision at count zero, then scale up without changing the revision. Restoration
-also settles the previous revision at zero before restarting it. The overlap
-guard remains unchanged. Offline regression tests reproduce the original error
-and cover initially stopped/active services, restoration after a lost start
-acknowledgment, and a revision that never settles. Pause delivery before merging
-the fix, then retry activation with the same verified digest and baseline 8;
-no application image or infrastructure change is needed for this sequencing fix.
-Local validation passed 626 application tests (eight opt-in container tests
-skipped), including 17 release tests. Python compilation and whitespace checks
-passed. This change affects the GitHub release script, outside the application
-image; no container or CDK resource change is required. Production retry remains
-pending. The separate revision/count calls use the existing
-[ECS UpdateService API](https://docs.aws.amazon.com/boto3/latest/reference/services/ecs/client/update_service.html).
+Recorded production references: account `559007813222`, region `us-east-1`,
+`finbot-prod-state`/`finbot-prod-runtime`, cluster/service `finbot-prod`, family
+`finbot-prod-ingestion`, log group `/finbot/finbot-prod`, raw bucket
+`finbot-prod-state-artifacts82dd59a1-8gt63rcgmaua`, tables
+`finbot-prod-{companies,calendar,filings,artifacts}`, artifact SNS
+`arn:aws:sns:us-east-1:559007813222:finbot-prod-artifact-ready`.
+[Saved GitHub variables](../infra/github/production-variables.env) retain reviewed
+targets. Obtain current stack outputs before operations; historical references
+are not authorization.
