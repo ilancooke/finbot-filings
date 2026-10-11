@@ -20,10 +20,12 @@ failure tests before changing recovery guarantees.
 
 ## DATA-001 — Oversized selected documents
 
-Bundle exclusion is delivered. Four historical submission TXT failures retain
-their terminal/dead-letter facts: Citigroup `0000831001-26-000011` and Alcoa
-`0001193125-26-388649`, `0000950170-24-018069`, `0000950170-25-024242`, each with
-its same-accession `.txt` filename. They were neither deleted nor redriven.
+Bundle exclusion is delivered. The initial checkpoint preserved four historical
+submission TXT failures. The October 11 investigation found 14 pre-filter oversized
+submission failures across six companies, with no new filtering-era failures.
+The explicitly authorized ADR 013 acquisition reset later cleared their database
+records and queue messages; this was deletion, not repair/redrive. Dated log history
+remains available.
 
 Investigate bounded streaming/spooling only if a genuinely selected
 primary/release/supplement exceeds the unchanged 64-MiB limit. Measure remote size,
@@ -52,10 +54,12 @@ evaluation and failed-work queue state have different meanings.
 
 ## OPS-002 — Observe live selection and daily calendar operation
 
-At the last recorded filtering startup, recovery exclusion was verified but no
-newly eligible earnings filing appeared. Observe selected primary/release/supplement
-artifacts, exclusions, routing warnings and S3/database/publication checkpoints
-when one does. Verify ongoing daily Yahoo scope/freshness, coverage gaps, provider
+Filtering subsequently stored/published DAL's `0000027904-26-000038/dal-20260930.htm`
+before the explicit acquisition reset. The new-layout restart is healthy and
+polling, but no fresh download was observed in its immediate startup window.
+Observe selected primary/release/supplement artifacts, exclusions, routing warnings
+and new-layout S3/database/publication checkpoints as polling repopulates state.
+Verify ongoing daily Yahoo scope/freshness, coverage gaps, provider
 access arrangements, recovery reliability and sustained memory use. Local/cloud
 collection success is not complete all-company coverage or long-term reliability.
 Close observations on recorded evidence without reopening the completed migration.

@@ -386,6 +386,36 @@ Clear selected documents can proceed with unresolved attachments omitted.
 
 ## Last recorded verification
 
+These are dated observations, **not a fresh live inspection**. The readable-layout
+reset completed **2026-10-11 UTC (October 11 locally)** under ADR 013.
+
+| Evidence | Recorded result |
+| --- | --- |
+| Application validation | [CI 38154317521](https://github.com/ilancooke/finbot-filings/actions/runs/38154317521) passed; local application 648 passed/8 offline-gated skips, CDK 29 passed, ARM64 container 8 passed; template lint had no errors and guard passed |
+| New image | `sha256:b586350bfa6012b050c13066c7deba7a8550ad58da86342f9672b68f52a5ee2a`; ARM64; scan retained the previously accepted zlib finding |
+| Staged infrastructure | CDK baseline 12, compatible image and `2026-10-09T04:00:00Z` cutoff; runtime staged at zero before deletion |
+| Activation | [Run 38155193152](https://github.com/ilancooke/finbot-filings/actions/runs/38155193152) succeeded from `111f1a3635a849e0242ddcca6bd283ff3e78bbf8`; application revision 13, service `1/1/0`, COMPLETED/HEALTHY, exact digest/cutoff verified |
+| Reset inventory | 112,433 S3 object versions/delete markers, 3,120 Filings rows, 113,204 Artifacts rows, zero Calendar satisfaction rows; 14 historical failed-work messages |
+| Empty-state verification | All S3 versions/delete markers, Filings/Artifacts rows, Calendar satisfaction rows and visible/in-flight/delayed failed-work messages verified zero before restart |
+| Preserved configuration | Exact strong-read comparison retained all 50 Companies and 48 non-satisfaction Calendar records |
+| Failed-work alarms | Both Visible and Age alarms returned OK at `16:25:53Z` and `16:25:36Z`, respectively |
+| Runtime | Matching/non-stale/configured calendar, zero startup queues/recovery errors; SEC polling resumed after the normal quiet period |
+| Fresh-download observation | No eligible filing/object in the immediate startup window; first safety polls are staggered over an hour. New key/date/provenance behavior passed offline tests; fresh production storage/publication observation remains OPS-002 |
+
+Reset inventory and verification remain outside Git under
+`/private/tmp/finbot-acquisition-reset-20261011-readable{,.verified}.json`, with
+preserved-configuration evidence alongside. An initial partial S3 deletion stopped
+on per-object errors; resumption used the original reviewed inventory and bounded
+transient-error retries. No database deletion occurred in the failed attempt.
+Historical terminal records and queue messages were deliberately removed under
+the reset scope; they were not repaired/redriven. Older logs and the dated evidence
+below remain historical.
+
+Automatic GitHub delivery was restored after the reset. Pre-reset images remain
+unsuitable active rollback targets for this layout.
+
+### Historical filtering verification
+
 These are dated observations, **not a fresh live inspection**. Migration/deployment
 and filtering activation are complete. Last checkpoint: **2026-10-11 UTC
 (October 10 locally)**.
@@ -410,8 +440,9 @@ Separate updates succeeded using the same application digest; release scripts ru
 outside the application image from workflow checkout. Detailed intermediate
 approvals/tasks/CI counts remain in Git.
 
-Four oversized complete-submission TXT artifacts retain original terminal facts;
-selection did not repair/delete them. HIGH `CVE-2026-85091` in initial Debian trixie
+At that checkpoint, four oversized complete-submission TXT artifacts retained
+original terminal facts; selection did not repair/delete them. The later ADR 013
+reset cleared acquisition state explicitly. HIGH `CVE-2026-85091` in initial Debian trixie
 zlib was operator-accepted for research, not suppressed/fixed. Recheck on image
 updates. Open selection/provider/memory observations are in [BACKLOG](BACKLOG.md).
 
