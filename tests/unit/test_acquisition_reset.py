@@ -136,3 +136,21 @@ def test_partial_reset_can_resume_from_original_inventory(system):
     system.db.rows['finbot-prod-filings'].clear()
     reset.reset(system.s3, system.db, system.sqs, system.ecs, plan, sleep=lambda _: None)
     assert system.sqs.purged
+
+
+def test_cli_inventory_closes_sdk_clients_and_never_writes_cloud(system, monkeypatch, tmp_path):
+    import json
+    closed = []
+    clients = {'s3': system.s3, 'dynamodb': system.db, 'ecs': system.ecs, 'sqs': system.sqs,
+               'sts': SimpleNamespace(get_caller_identity=lambda: {'Account': reset.ACCOUNT})}
+    for name, client in clients.items():
+        client.close = lambda name=name: closed.append(name)
+    session = SimpleNamespace(client=lambda name, **kwargs: clients[name])
+    monkeypatch.setattr(reset.boto3, 'Session', lambda **kwargs: session)
+    path = tmp_path / 'inventory.json'
+    monkeypatch.setattr('sys.argv', ['reset', '--manifest', str(path)])
+    assert reset.main() == 0
+    plan = json.loads(path.read_text())
+    assert plan['task_definition'] == 'new' and len(plan['versions']) == 2
+    assert set(closed) == set(clients)
+    assert not system.s3.deleted and not system.db.deleted and not system.sqs.purged

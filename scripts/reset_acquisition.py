@@ -4,7 +4,7 @@ Never invoked by ingestion. Requires a stopped service and an explicit --execute
 Company configuration and calendar expectations/sync records are preserved.
 """
 import argparse
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 import json
 from pathlib import Path
 import time
@@ -123,7 +123,7 @@ def main():
     config = Config(connect_timeout=5, read_timeout=10, retries={'mode': 'standard', 'total_max_attempts': 3})
     session = boto3.Session(profile_name=args.profile, region_name=REGION)
     with ExitStack() as stack:
-        clients = {name: stack.enter_context(session.client(name, config=config))
+        clients = {name: stack.enter_context(closing(session.client(name, config=config)))
                    for name in ('sts', 'ecs', 's3', 'dynamodb', 'sqs')}
         if clients['sts'].get_caller_identity()['Account'] != ACCOUNT:
             raise RuntimeError('wrong AWS account')
