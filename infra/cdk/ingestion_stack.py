@@ -51,6 +51,7 @@ class IngestionStack(Stack):
                 operating_system_family=ecs.OperatingSystemFamily.LINUX))
         self.task.add_volume(name="heartbeat")
         env = {"AWS_REGION": config.region, "SEC_USER_AGENT": config.sec_user_agent,
+            "LIVE_INGESTION_START_AT": config.live_ingestion_start_at,
             "SEC_MAX_REQUESTS_PER_SECOND": "5", "CALENDAR_PROVIDER": config.calendar_provider,
             "CALENDAR_LOOKAHEAD_DAYS": str(config.calendar_lookahead_days),
             "CALENDAR_FULL_REFRESH_SECONDS": str(config.calendar_full_refresh_seconds),

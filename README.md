@@ -187,16 +187,38 @@ SEC archive URLs use numeric CIK and dash-free accession path components.
 `filed_at` is SEC `acceptanceDateTime`, normalized to UTC, rather than a measured
 public-availability instant. Missing, invalid or naive acceptance timestamps fail;
 filing/report dates never substitute. Parsing returns all supported recent rows
-without a count cutoff. Identical accession duplicates collapse; conflicts and
-invalid relevant rows reject the response. A missing primary name can be resolved
-by later package enumeration. Historical submissions backfill is not implemented.
+without a count cutoff, then admission applies `earnings-acquisition-v1`:
 
-Package discovery reconciles the filing's HTML document table and directory JSON.
-It acquires the primary document and all observed documents/exhibits, including
-PDFs, XML, images and auxiliary files, excluding recognized navigation/index files.
+- `LIVE_INGESTION_START_AT` defaults to **2026-10-10T00:00:00Z**, inclusive, using
+  SEC acceptance time. Keep this fixed across restarts/deployments and newly enabled
+  companies; it is not a rolling lookback or today's date.
+- 8-K/8-K/A require unambiguous Item 2.02 evidence. Known non-earnings filings are
+  skipped. Missing evidence may be resolved from index metadata or structural
+  primary-report headings; unresolved/conflicting evidence stays visible.
+- 10-Q/10-K and their amendments retain their primary financial report.
+
+Identical accession duplicates collapse; conflicts and invalid relevant rows reject
+parsing. A missing primary name can be resolved by package enumeration. Historical
+backfill tooling and traversal beyond the recent response are deferred. Do not
+reset/widen the live cutoff to perform an incidental backfill.
+
+Package discovery reconciles the HTML document table and directory JSON, preserving
+exhibit descriptions. Selected earnings 8-Ks retain the primary plus identified
+releases and financial supplements in HTML/text/PDF form. Descriptions and safe
+primary-report exhibit references determine roles; exhibit number alone does not.
+Decks, standalone images/logos, complete submission TXT bundles, unrelated exhibits
+and auxiliary files are skipped without downloading them. Legitimate selected text
+releases are allowed. Unresolved exhibit roles are logged and skipped while clear
+selected documents proceed. Image-only HTML receives a coverage warning when the
+bounded text inspection detects it; no linked images, OCR or financial extraction.
+Primary routing/text inspection is limited to 4 MiB; larger/unsupported layouts
+stay unresolved. Acquisition still permits selected documents up to 64 MiB.
+
 Missing/inconsistent snapshots are retried rather than checkpointed as complete.
-Enumeration completion describes one observed snapshot; automatic completed-package
-rechecking remains deferred.
+Enumeration completion counts selected children for new packages. Existing completed
+snapshot timestamps/counts remain unchanged. Automatic completed-package rechecking
+remains deferred. Primary bytes fetched for routing use the same immutable storage
+path instead of a second download.
 
 Artifact IDs are `<dashed-accession>/<original-filename>`; filenames preserve case
 and must be safe basenames. S3 keys are `<10-digit-cik>/<artifact-id>`. S3 URI paths
@@ -245,8 +267,12 @@ against newer processing/calendar records.
 Conditional creates and guarded updates preserve first observations/checkpoints.
 Enumeration completes only after every child is confirmed durable through a strong
 base-table read. Transient queue/download states remain in memory. Pending sparse
-indexes drive repeated recovery without scans, age cutoffs or TTL, including work
-from disabled companies. GSIs are eventual; candidates are strongly rechecked.
+indexes drive repeated recovery without scans or TTL, including work from disabled
+companies. The same date/filing/document filters guard pending acquisition and
+publication, including legacy rows. A small selection checkpoint removes excluded
+or unresolved work from pending indexes without inventing success/failure facts.
+Stored bytes, publication history and terminal/dead-letter obligations remain intact.
+GSIs are eventual; candidates are strongly rechecked.
 Continue every page, including empty pages with a token, and repeat full passes.
 One empty pass never proves global completion.
 
@@ -381,6 +407,16 @@ are defined in Phase 8 CDK; no runtime adapter provisions them.
 [HLD](docs/HLD.md), [LLD](docs/LLD.md), [ADRs](docs/adr/) and
 [MIGRATION_PLAN](docs/MIGRATION_PLAN.md) remain the sources of truth.
 [BACKLOG](docs/BACKLOG.md) tracks unscheduled future changes and revisit triggers.
+[ADR 011](docs/adr/011-separate-live-ingestion-from-historical-backfill.md) accepts
+separate live ingestion and deliberate historical backfill;
+[ADR 012](docs/adr/012-acquire-earnings-releases-and-financial-reports-selectively.md)
+accepts earnings-focused document selection. [Phase 9](docs/PHASE_9_PLAN.md)
+implements filing/document filters, a fixed live cutoff and filtering of recovered
+pending work. These source changes have not been deployed; production still uses
+the earlier broad acquisition until rollout. Separate backfill tooling is deferred.
+Older images cannot validate skipped records; first rollout must pause automatic
+delivery and stage with the service stopped. See the Phase 9 rollout notes in
+[DEPLOYMENT](docs/DEPLOYMENT.md#phase-9-filtering-rollout).
 [ADR 008](docs/adr/008-use-conservative-ecs-automatic-recovery.md) records the
 implemented Phase 8 recovery policy and its earnings-latency tradeoff.
 [DEPLOYMENT](docs/DEPLOYMENT.md) documents CDK, GitHub configuration, readiness,

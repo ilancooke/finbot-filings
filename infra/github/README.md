@@ -158,3 +158,12 @@ References: [environment API](https://docs.github.com/en/rest/deployments/enviro
 and [`gh variable set --env-file`](https://cli.github.com/manual/gh_variable_set).
 Manual dispatch uses [`gh workflow run`](https://cli.github.com/manual/gh_workflow_run).
 Review uses the [pending-deployments API](https://docs.github.com/en/rest/actions/workflow-runs#review-pending-deployments-for-a-workflow-run).
+
+## First filtering release
+
+Before merging Phase 9, disable automatic delivery and stop ingestion as described
+in [the filtering rollout](../../docs/DEPLOYMENT.md#phase-9-filtering-rollout).
+Stage with desired count zero, reconcile CDK to the verified filtering image and
+cutoff, then refresh the saved baseline variable before activation. Historical
+images cannot read the new skip checkpoints; do not use an old broad-acquisition
+digest as an active rollback target after filtering has run.

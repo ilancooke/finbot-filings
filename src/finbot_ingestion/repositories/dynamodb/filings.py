@@ -15,6 +15,8 @@ PENDING_INDEX = "PendingFilingEnumeration"
 def work_kind(progress):
     if progress.terminal_at is not None:
         return "DEAD_LETTER" if progress.pending_dead_letter else None
+    if progress.selection_blocked:
+        return None
     return "ENUMERATE" if progress.enumeration_completed_at is None else None
 
 
@@ -62,6 +64,8 @@ class DynamoDBFilingRepository(DynamoDBRepository):
                                     enumerated_artifact_count=artifact_count)
 
         def decide(item):
+            if restore(FilingCheckpoint, item).selection_blocked:
+                raise RepositoryConflict("excluded/unresolved filing cannot be enumerated")
             if "terminal_at" in item:
                 raise RepositoryConflict("terminal enumeration requires explicit operator redrive")
             if item.get("primary_document_name") not in (None, primary_document_name):
@@ -78,7 +82,12 @@ class DynamoDBFilingRepository(DynamoDBRepository):
 
     async def record_failure(self, accession_number: str, error: str, at: datetime) -> None:
         await self._failure(normalize_accession_number(accession_number), error, at,
-                            self._validate, lambda item: "enumeration_completed_at" in item or "terminal_at" in item)
+                            self._validate, lambda item: "enumeration_completed_at" in item or "terminal_at" in item
+                            or restore(FilingCheckpoint, item).selection_blocked)
+
+    async def record_selection(self, accession_number, decision, at, *, policy_version):
+        await self._record_selection(normalize_accession_number(accession_number), decision, at,
+                                     policy_version=policy_version, validate=self._validate)
 
     async def record_stage_failure(self, accession_number, stage, error, at, *, max_failures,
                                    error_type, terminal=False):

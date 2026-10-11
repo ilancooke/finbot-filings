@@ -140,6 +140,28 @@ class DynamoDBRepository:
             return {"dead_lettered_at": at}, ("pending_work_kind", "pending_work_sort")
         await self._update(key, decide, validate)
 
+    async def _record_selection(self, key, decision, at, *, policy_version, validate):
+        """An additive routing checkpoint; never rewrite processing history."""
+        sets = {"selection_policy": policy_version, "selection_decision": decision.outcome,
+                "selection_reason": decision.reason, "selection_checked_at": timestamp(at)}
+
+        def decide(item):
+            if "terminal_at" in item or "published_at" in item:
+                return None
+            if "selection_policy" in item:
+                if all(item.get(name) == value for name, value in sets.items()
+                       if name != "selection_checked_at"):
+                    return None
+                if item["selection_policy"] != policy_version or item["selection_decision"] != "SELECT":
+                    raise RepositoryConflict("selection change requires an explicit reviewed operation")
+                if decision.selected:
+                    return None  # Preserve the first affirmative evidence/reason.
+                # New contradictory evidence or a stricter cutoff can stop work;
+                # only an explicit reviewed operation may re-admit blocked work.
+            removes = () if decision.selected else ("pending_work_kind", "pending_work_sort")
+            return sets, removes
+        await self._update(key, decide, validate)
+
     async def _query(self, *, index=None, partition, value,
                      page_size=None, token=None, hydrate=True):
         page_size = self.execution.config.page_size if page_size is None else page_size

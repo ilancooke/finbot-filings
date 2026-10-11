@@ -8,7 +8,7 @@ import sys
 FIELDS = frozenset(("operation", "cik", "ticker", "accession_number", "artifact_id", "work_id",
     "attempt_number", "http_status", "error_type", "will_retry", "provider", "sync_kind", "event_count",
     "cancelled_count", "company_count", "start_date", "end_date", "change", "expected_date",
-    "time_of_day", "previous_date", "previous_time_of_day", "reason", "policy_version", "task", "failure_id"))
+    "time_of_day", "previous_date", "previous_time_of_day", "reason", "policy_version", "task", "failure_id", "selection_decision"))
 
 
 class JSONFormatter(logging.Formatter):

@@ -173,7 +173,7 @@ class RuntimeApplication:
                     # Preserve all filings for ingestion even if matching/checkpointing fails.
                     for observation in observations:
                         checkpoint = await self.worker.filings.get_checkpoint(observation.filing.accession_number)
-                        if checkpoint is not None and checkpoint.enumeration_completed_at is None:
+                        if checkpoint is not None and checkpoint.enumeration_completed_at is None and not checkpoint.selection_blocked:
                             await self.filings.put(observation.filing.accession_number, observation.filing.accession_number)
                     await self.satisfy(observations)
             except SECRequestStopped:

@@ -17,12 +17,15 @@ class PackageDocument:
     filename: str
     sec_url: str
     document_type: str | None
+    description: str | None = None
 
 
 @dataclass(frozen=True)
 class FilingIndex:
     documents: tuple[PackageDocument, ...]
     primary_document_name: str
+    items: tuple[str, ...] = ()
+    item_status: str = "absent"
 
     def artifacts(self, filing: Filing, *, discovered_at: datetime) -> tuple[Artifact, ...]:
         return tuple(Artifact(
@@ -58,7 +61,8 @@ def _link_name(href, filing):
 def parse_filing_index(filing: Filing, html: bytes, directory_payload) -> FilingIndex:
     """Require consistent HTML document tables and directory snapshot.
 
-    All directory files are acquired except explicitly recognized index infrastructure.
+    Observe all directory files except recognized index infrastructure. Acquisition
+    selection belongs to the caller, not this metadata parser.
     Completeness describes this snapshot, not a guarantee against later SEC additions.
     """
     if not isinstance(directory_payload, Mapping):
@@ -76,6 +80,7 @@ def parse_filing_index(filing: Filing, html: bytes, directory_payload) -> Filing
         names.add(_filename(item.get('name')))
     soup = BeautifulSoup(html, 'html.parser')
     types = {}
+    descriptions = {}
     table_count = 0
     for table in soup.find_all('table'):
         headers = [h.get_text(' ', strip=True).lower() for h in table.find_all('th')]
@@ -93,11 +98,16 @@ def parse_filing_index(filing: Filing, html: bytes, directory_payload) -> Filing
             if not links:
                 raise SECIncompletePackageError("document row has no link")
             document_type = cells[headers.index('type')].get_text(' ', strip=True) or None
+            description = (cells[headers.index('description')].get_text(' ', strip=True) or None
+                           if 'description' in headers else None)
             for link in links:
                 name = _link_name(link['href'], filing)
                 if name in types and types[name] != document_type:
                     raise SECDataError("conflicting document types")
                 types[name] = document_type
+                if name in descriptions and descriptions[name] != description:
+                    raise SECDataError("conflicting document descriptions")
+                descriptions[name] = description
     if not table_count or not types:
         raise SECIncompletePackageError("missing document tables")
     if not set(types) <= names:
@@ -115,6 +125,18 @@ def parse_filing_index(filing: Filing, html: bytes, directory_payload) -> Filing
                 f'{filing.accession_number}-index-headers.html'}
     if excluded & set(types):
         raise SECDataError("document table references index infrastructure")
-    documents = tuple(PackageDocument(name, document_url(filing.company_cik, filing.accession_number, name), types.get(name))
+    documents = tuple(PackageDocument(name, document_url(filing.company_cik, filing.accession_number, name), types.get(name), descriptions.get(name))
                       for name in sorted(names - excluded))
-    return FilingIndex(documents, primary)
+    import re
+    item_sets = []
+    item_status = "absent"
+    for label in soup.find_all(class_='infoHead'):
+        if label.get_text(' ', strip=True).rstrip(':').lower() != 'items':
+            continue
+        value = label.find_next_sibling(class_='info')
+        codes = tuple(sorted(set(re.findall(r'\bItem\s+([1-9]\.[0-9]{2})\b',
+                      value.get_text(' ', strip=True) if value else '', re.I))))
+        item_sets.append(codes)
+    if item_sets:
+        item_status = "known" if item_sets[0] and all(codes == item_sets[0] for codes in item_sets) else "ambiguous"
+    return FilingIndex(documents, primary, item_sets[0] if item_status == "known" else (), item_status)

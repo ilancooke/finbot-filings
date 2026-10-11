@@ -42,11 +42,13 @@ def build_application(stack, environ=None):
     from .sec.rate_limiter import SECRateLimiter
     from .scheduler.market_sessions import ExchangeMarketSessions
     from .scheduler.window_policy import WindowPolicy
+    from .selection.policy import AcquisitionPolicy
 
     runtime = RuntimeConfig.from_env(environ)
     sec_config, db_config = IngestionConfig.from_env(environ), DynamoDBConfig.from_env(environ)
     aws, storage, messaging = AWSIOConfig.from_env(environ), StorageConfig.from_env(environ), MessagingConfig.from_env(environ)
     calendar, workflow = CalendarConfig.from_env(environ), WorkflowConfig.from_env(environ)
+    selection = AcquisitionPolicy.from_env(environ)
     if not 1 <= workflow.max_inflight_artifacts <= 16:
         raise ConfigurationError("runtime artifact worker count must be in [1, 16]")
     if calendar.provider not in {"placeholder", "yahoo"}:
@@ -86,7 +88,7 @@ def build_application(stack, environ=None):
     companies, events = DynamoDBCompanyRepository(db), DynamoDBCalendarRepository(db)
     filings, artifacts = DynamoDBFilingRepository(db), DynamoDBArtifactRepository(db)
     control = WorkControl(workflow)
-    discovery = DiscoveryService(sec, sec_execution, filings, artifacts, control)
+    discovery = DiscoveryService(sec, sec_execution, filings, artifacts, control, selection=selection)
     downloader = ArtifactDownloader(sec, sec_execution, S3ArtifactStore(s3, storage), max_artifact_bytes=storage.max_artifact_bytes)
     worker = IngestionWorker(discovery, downloader, SNSArtifactEventPublisher(sns, messaging),
         SQSDeadLetterPublisher(sqs, messaging), filings, artifacts, control)

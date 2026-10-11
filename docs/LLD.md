@@ -6,6 +6,59 @@ This document translates the HLD into an implementation contract suitable for co
 
 Where this document says **TBD/configurable**, Codex should expose configuration and should not invent a permanent architectural rule.
 
+[ADR 011](adr/011-separate-live-ingestion-from-historical-backfill.md) and
+[ADR 012](adr/012-acquire-earnings-releases-and-financial-reports-selectively.md)
+accept separate backfill and earnings-focused selection. The implementation in
+[PHASE_9_PLAN.md](PHASE_9_PLAN.md) adds filing/document selectors, a fixed configured
+UTC cutoff, and shared eligibility checks for discovery and recovery. Backfill
+tooling is deferred. Production rollout is pending; earlier broad-acquisition
+contracts below are historical and are superseded by the following filter contract.
+
+### Phase 9 filter and checkpoint contract
+
+- `selection/policy.py` holds deterministic selectors and `earnings-acquisition-v1`.
+  `AcquisitionPolicy.from_env()` uses `LIVE_INGESTION_START_AT`, defaulting to
+  `2026-10-10T00:00:00Z`; timezone-aware inputs normalize to UTC. The boundary is
+  inclusive and never derived from startup time. CDK saves the same value as
+  `live_ingestion_start_at` and injects it into the task environment.
+- Production wiring always supplies the policy to `DiscoveryService`. Policy-free
+  component construction is retained only for earlier pipeline replay tests.
+  Submissions parsing stays independent from admission and scheduling satisfaction.
+- Fresh known exclusions create no filing/artifact work. An in-scope 8-K with
+  missing evidence can enter enumeration to resolve index/primary metadata. If it
+  remains unresolved, its routing checkpoint removes enumeration eligibility.
+  Original submissions evidence is not fabricated for the satisfaction heuristic.
+- `PackageDocument.description` retains the original SEC label. `FilingIndex`
+  carries structural index item codes/status. Descriptions and safe exhibit-table
+  references identify releases/supplements; generic EX-99 labels are insufficient.
+  Primary structural parsing is bounded to 4 MiB; unsupported/larger routing
+  layouts remain unresolved. Selected-byte acquisition retains the 64-MiB limit.
+- `ProcessingCheckpoint` adds four paired optional fields:
+  `selection_policy`, `selection_decision` (`SELECT`, `EXCLUDE`, `UNRESOLVED`),
+  `selection_reason`, and `selection_checked_at` (fixed-width UTC). Existing rows
+  without these fields remain readable. Reasons are bounded stable codes.
+- `record_selection()` uses existing revision CAS/existence guards. EXCLUDE and
+  UNRESOLVED remove `pending_work_kind`/`pending_work_sort`; they do not set storage,
+  publication, terminal or dead-letter fields. A SELECT may be blocked by new
+  contradictory evidence; blocked work cannot be automatically re-admitted.
+  Published and terminal records are left untouched, including pending dead letters.
+- New enumeration creates only selected children, then records routing decisions.
+  A crash before child selection is checkpointed is safe: recovery rechecks it.
+  Pending legacy ACQUIRE/PUBLISH work is filtered through its canonical parent and
+  package metadata, including direct worker calls. Previously completed package
+  timestamps/counts stay immutable. No bulk migration or new store is needed.
+- Up to 32 package decision maps are cached in memory; document bodies are never
+  retained in that cache. Primary bytes fetched for routing are reused through
+  the normal S3 conditional-write and stored-checkpoint path. Recovery still works
+  after cache eviction/restart. Primary inspection shares the worker's artifact
+  admission slots, so routing cannot add a retained body when those slots are full.
+  Skips appear separately in recovery summaries and
+  structured logs; they do not increment TerminalFailures.
+- Historical images cannot validate pending-index removal on skipped rows. First
+  rollout stages with desired count zero, so failed delivery restores a stopped
+  service. After activation, roll back only to a filtering-compatible image.
+
+
 ## 2. Repository structure
 
 Recommended layout:

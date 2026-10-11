@@ -14,6 +14,7 @@ class RecoverySummary:
     complete: int = 0
     terminal: int = 0
     deferred: int = 0
+    skipped: int = 0
     errors: int = 0
 
 
@@ -39,6 +40,8 @@ class RecoveryService:
                         summary.complete += 1
                     elif outcome == Outcome.TERMINAL:
                         summary.terminal += 1
+                    elif outcome == Outcome.SKIPPED:
+                        summary.skipped += 1
                     else:
                         summary.deferred += 1
                 except Exception as exc:

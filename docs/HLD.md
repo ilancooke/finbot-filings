@@ -2,6 +2,15 @@
 
 ## 1. Purpose
 
+**Accepted Phase 9 revision (2026-10-10):**
+[ADR 011](adr/011-separate-live-ingestion-from-historical-backfill.md) separates
+live ingestion from deliberate historical backfill;
+[ADR 012](adr/012-acquire-earnings-releases-and-financial-reports-selectively.md)
+defines earnings-focused filing/document selection. The source implementation is
+recorded in [PHASE_9_PLAN.md](PHASE_9_PLAN.md), awaiting production rollout. Earlier
+phase descriptions remain implementation history; deployed production still uses
+broad acquisition until the filtering image is released.
+
 `finbot-sec-ingestion` discovers, downloads, stores, and publishes metadata about SEC filing artifacts for a configured universe of public companies.
 
 The service is intentionally responsible for **acquisition, not interpretation**. It does not extract earnings values, summarize management commentary, compute features, or build a knowledge base. Those are downstream concerns.
@@ -196,7 +205,16 @@ Relevant forms in v0:
 - 10-Q/A;
 - 10-K/A.
 
-Form type is only an initial relevance filter. The ingestion service stores the filing package; downstream consumers decide which documents are useful.
+Under implemented Phase 9 policy, 8-K/8-K/A candidates require unambiguous Item 2.02
+evidence. Missing/ambiguous evidence produces a review outcome rather than assumed
+irrelevance. Periodic reports and their amendments remain selected financial
+statement sources. Live admission uses the fixed UTC cutoff
+`2026-10-10T00:00:00Z`, saved as `LIVE_INGESTION_START_AT` in configuration,
+including for newly enabled companies. Historical backfill requires explicit
+company/time scope and a separate invocation; its tooling is deferred.
+The calendar controls cadence rather than admission dates. Document selection is
+structural routing, not extraction of financial values. The current deployed
+implementation still admits all six forms without a date or earnings-item filter.
 
 ### 6.6 Artifact acquisition
 
@@ -209,10 +227,18 @@ A filing can contain multiple child artifacts, including:
 - presentation/slides;
 - other attached exhibits.
 
-For each relevant filing, v0 downloads:
+Phase 9 acquisition retains the selected primary filing. Selected 8-Ks
+also acquire identified earnings releases and financial supplements in HTML,
+text or PDF form. Exhibit descriptions and references determine roles; a fixed
+99.1 rule is insufficient. Presentation decks, standalone images/logos, complete
+submission TXT bundles, unrelated exhibits and auxiliary files are excluded.
+Ambiguous roles/image-only content remain visible as review diagnostics.
 
-- the primary filing document;
-- all attached exhibits/documents available in the filing package.
+Existing checkpoints and structured logs record selection policy and reasons.
+Only selected children enter acquisition/publication work, including through
+recovery. Completion covers selected documents, not full-package preservation.
+Existing bytes, publication facts and terminal failures remain intact. Earlier v0/deployed
+behavior downloads the primary and all available attached/auxiliary documents.
 
 Documents are not chunked, transformed for RAG, or interpreted by this service.
 

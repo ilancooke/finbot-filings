@@ -27,12 +27,16 @@ class ProcessingCheckpoint:
     terminal_error_type: str | None = None
     terminal_at: datetime | None = None
     dead_lettered_at: datetime | None = None
+    selection_policy: str | None = None
+    selection_decision: str | None = None
+    selection_reason: str | None = None
+    selection_checked_at: datetime | None = None
 
     def __post_init__(self) -> None:
         for name in STAGE_COUNTERS.values():
             if type(getattr(self, name)) is not int or getattr(self, name) < 0:
                 raise ValueError(f"{name} must be a nonnegative integer")
-        for name in ("failure_at", "terminal_at", "dead_lettered_at"):
+        for name in ("failure_at", "terminal_at", "dead_lettered_at", "selection_checked_at"):
             value = getattr(self, name)
             if value is not None:
                 object.__setattr__(self, name, utc_datetime(value, name))
@@ -55,6 +59,17 @@ class ProcessingCheckpoint:
             raise ValueError("terminal facts must describe the final stage failure")
         if self.dead_lettered_at is not None and self.terminal_at is None:
             raise ValueError("dead-letter checkpoint requires terminal facts")
+        selection = (self.selection_policy, self.selection_decision,
+                     self.selection_reason, self.selection_checked_at)
+        if any(value is not None for value in selection):
+            import re
+            if (any(value is None for value in selection)
+                    or self.selection_decision not in {"SELECT", "EXCLUDE", "UNRESOLVED"}
+                    or not isinstance(self.selection_policy, str)
+                    or not re.fullmatch(r"[a-z0-9-]{1,100}", self.selection_policy)
+                    or not isinstance(self.selection_reason, str)
+                    or not re.fullmatch(r"[a-z0-9_]{1,100}", self.selection_reason)):
+                raise ValueError("selection checkpoint requires a policy, decision, reason and timestamp")
 
     def failures(self, stage: str) -> int:
         return getattr(self, STAGE_COUNTERS[stage])
@@ -62,6 +77,10 @@ class ProcessingCheckpoint:
     @property
     def pending_dead_letter(self) -> bool:
         return self.terminal_at is not None and self.dead_lettered_at is None
+
+    @property
+    def selection_blocked(self) -> bool:
+        return self.selection_decision in {"EXCLUDE", "UNRESOLVED"}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

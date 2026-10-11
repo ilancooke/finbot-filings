@@ -4,6 +4,7 @@ import json
 import math
 import re
 from pathlib import Path
+from datetime import datetime, timezone
 
 
 @dataclass(frozen=True)
@@ -30,8 +31,18 @@ class InfraConfig:
     calendar_full_refresh_seconds: float = 86400
     calendar_near_term_refresh_seconds: float = 0
     yahoo_cache_dir: str = "/tmp/finbot-yahoo"
+    live_ingestion_start_at: str = "2026-10-10T00:00:00Z"
 
     def __post_init__(self):
+        try:
+            if not isinstance(self.live_ingestion_start_at, str) or "T" not in self.live_ingestion_start_at:
+                raise ValueError("invalid timestamp")
+            cutoff = datetime.fromisoformat(self.live_ingestion_start_at)
+            if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+                raise ValueError("timezone required")
+            object.__setattr__(self, "live_ingestion_start_at", cutoff.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("live_ingestion_start_at must be a timezone-aware ISO timestamp") from exc
         if self.calendar_provider not in {"placeholder", "yahoo"}:
             raise ValueError("calendar provider must be placeholder or yahoo")
         if type(self.calendar_lookahead_days) is not int or not 3 <= self.calendar_lookahead_days <= 360:

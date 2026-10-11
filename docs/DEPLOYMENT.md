@@ -941,6 +941,79 @@ The non-HeadObject warning query returned only the three log entries for the one
 known oversized document. Initial activation verification is complete with those
 explicit follow-ups; no additional AWS mutations were made during inspection.
 
+### Terminal-failure alarm investigation after the documentation merge
+
+The operator merged commit `5ec8230a90390a903e1a01b2b63a2775dcfeb780` and reported a
+seven-minute terminal-failure alarm during delivery. Read-only investigation
+correlated alarm history, metric samples, both task log streams, consistent artifact
+records and [delivery run 38061540367](https://github.com/ilancooke/finbot-filings/actions/runs/38061540367).
+The following timestamps are UTC on 2026-10-10.
+
+| Failure time | Company/form | Failed submission-text artifact |
+| --- | --- | --- |
+| 14:31:48 | C / 10-K | `0000831001-26-000011/0000831001-26-000011.txt` |
+| 15:00:26 | AA / 8-K | `0001193125-26-388649/0001193125-26-388649.txt` |
+| 15:13:08 | AA / 10-K | `0000950170-24-018069/0000950170-24-018069.txt` |
+| 15:16:52 | AA / 10-K | `0000950170-25-024242/0000950170-25-024242.txt` |
+
+All four log failures are `SECDocumentTooLarge`, stage `ACQUIRE`, attempt 1 and
+`will_retry=false`. Consistent artifact records independently contain
+`last_error="SEC document exceeds MAX_ARTIFACT_BYTES"`, terminal/dead-letter times
+and no stored/published facts. CloudWatch has one terminal-count sample in each
+corresponding minute, and SQS reported four visible messages. Each is a separate
+failed artifact; the seven-minute alarm duration is not seven minutes of retries.
+
+The completed alarm episodes were `14:32:57.732`–`14:39:57.734` (Citigroup) and
+`15:01:57.734`–`15:08:57.733` (Alcoa 8-K), both approximately seven minutes.
+The alarm entered ALARM again at `15:14:57.734` after the next Alcoa failure.
+Its actual configuration is TerminalFailures / Sum, 60-second periods, 1 of 2
+datapoints at or above 1, missing data `notBreaching`, dimensions
+Service=finbot-ingestion and Environment=prod. The failure counter emits only when
+an artifact first becomes terminal. Sparse periods contain no zero samples.
+CloudWatch can re-evaluate real datapoints from a wider evaluation range before
+using missing-data treatment; this explains why recovery can exceed the nominal
+two-period window. Recovery history explicitly says no datapoints were received
+and missing periods were nonbreaching. Alarm OK means no recent qualifying metric
+data; it does not mean the failed artifacts were repaired or the queue emptied.
+See [AWS missing-data evaluation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html).
+
+The AA 8-K failed in the old revision-5 task at `15:00:26`, before the delivery job
+started at `15:00:42` and before application deployment at `15:02:47`. That task
+stopped normally with exit zero at `15:04:01.863`. Revision-6 task
+`ffc666e65ff64905a1250c522a33834f` started at `15:05:35.185` and is healthy.
+The new manifest records `running`/`verified`, revision 5 to 6 and image digest
+`sha256:dcdf69e234bc15560b6e05a0f8aeb19f0ed1eb247feedc373161d676edeca979`.
+The merge changed documentation and saved operation/settings inputs; application
+Python code was unchanged. Failures on both sides of the handoff establish a
+recurring acquisition-size constraint rather than a task crash caused by the merge.
+
+Source trace: `StorageConfig` defaults to 67,108,864 bytes (64 MiB), and both its
+validation and `ArtifactDownloader` prohibit larger configured limits. The current
+task has no MAX_ARTIFACT_BYTES override and therefore uses this default. The SEC
+client checks Content-Length and also counts streamed bytes; either can raise the
+same size exception. WorkControl classifies it as nonretryable, checkpoints the
+terminal transition and increments TerminalFailures. The worker sends and
+checkpoints failed work in SQS while other artifacts continue. Exact remote byte
+sizes and which size-check branch rejected each response were not measured.
+
+Reproduce the application-log part with a standard read-only command:
+
+```bash
+aws logs filter-log-events \
+  --log-group-name /finbot/finbot-prod \
+  --filter-pattern '{ $.message = "Workflow attempt failed" }' \
+  --profile default \
+  --region us-east-1 \
+  --query 'events[].{Task:logStreamName,Event:message}' \
+  --output json \
+  --no-cli-pager
+```
+
+Next investigate actual source sizes and a bounded-memory larger-document design
+under DATA-001. Raising an environment variable alone cannot bypass the current
+hard limit. No application/configuration change, redrive, queue consumption/deletion
+or alarm suppression was performed during this investigation.
+
 ## Automatic recovery and alarms
 
 Set `alarm_email` in ignored `infra/cdk/config.local.json` to provision an SNS
@@ -1167,3 +1240,59 @@ and ECR GetAuthorizationToken also use wildcard resources. PassRole remains limi
 to the two ECS roles, and UpdateService to this service. No ECS registration tags
 are requested, so release does not grant TagResource. Review synthesized policies
 and perform authorized permission checks before claiming live IAM validation.
+
+## Phase 9 filtering rollout
+
+The filtering implementation is local source work, not a production deployment.
+The approved live cutoff is `2026-10-10T00:00:00Z`, inclusive. CDK saves it as
+`live_ingestion_start_at` and injects `LIVE_INGESTION_START_AT`; the application
+uses the same default. Preserve this value across releases.
+
+Existing pending acquisition/publication is checked lazily during recovery. No
+bulk migration, new table, queue purge or historical backfill command is needed.
+Original stored/published/terminal evidence remains intact. Skips remove pending
+index attributes; pre-Phase-9 images do not understand that checkpoint combination.
+A rollback must use a filtering-compatible image or leave the service stopped.
+
+Use the existing delivery procedure, with this first-release ordering:
+
+1. **Before merging**, pause automatic delivery at repository scope:
+
+   ```bash
+   gh variable set FINBOT_DELIVERY_ENABLED \
+     --repo ilancooke/finbot-filings --body false
+   ```
+
+   Verify no release is already running; changing this flag does not cancel one.
+2. Stop ingestion using the existing desired-count-zero procedure and verify
+   previously observed service tasks reach STOPPED. Retain the current task/digest
+   for evidence. Do not start a parallel SEC process.
+3. Merge the tested change and verify CI, including the ARM64 lifecycle tests.
+   With the service confirmed stopped, temporarily enable delivery and manually
+   dispatch/approve `activate=false` using the existing GitHub instructions.
+   Inspect its staged digest/task revision and confirm desired/running/pending
+   counts remain zero. `activate=false` preserves an already active count; it is
+   safe for this staging step only because the service was explicitly stopped.
+   Failure restoration now returns to a stopped service rather than an old active
+   image. Pause delivery again before infrastructure reconciliation.
+4. Set the **verified staged filtering digest** in local CDK config. Review the
+   runtime diff for the new cutoff environment variable and that exact digest;
+   deploy with ingestion stopped. Do not deploy the old baseline digest with this
+   configuration. State resources/identities remain unchanged. Copy the resulting
+   `BaselineTaskDefinitionArn` into `infra/github/production-variables.env`, save
+   the configuration change and reapply the production variables through `gh`.
+5. Re-enable delivery and explicitly activate the same tested filtering digest
+   using the existing dispatch/reviewer process. Verify one healthy task, selection
+   logs, selected S3/database/SNS checkpoints, and skipped pending work. Do not
+   interpret historical failed-work messages disappearing through normal retention
+   as a successful redrive.
+
+Selection logs use `operation=acquisition_selection`,
+`policy_version=earnings-acquisition-v1`, `selection_decision` and a stable `reason`.
+Unresolved evidence is a warning, not a terminal download failure. Examples include
+`unresolved_items`, `conflicting_items`, `unresolved_exhibit_role` and
+`possible_image_only_content`. Clear selected documents continue while ambiguous
+attachments are omitted. Review warnings before claiming complete earnings coverage.
+
+Production validation is pending. [PHASE_9_RESULTS](PHASE_9_RESULTS.md) records
+local/offline checks; it does not represent SEC/AWS production acceptance.

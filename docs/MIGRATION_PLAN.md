@@ -809,6 +809,20 @@ GitHub delivery executed or production inputs selected.
 
 ## 5. Next milestone
 
+The next delivery milestone is [Phase 9](PHASE_9_PLAN.md), implemented in source on
+2026-10-10 for
+[ADR 011](adr/011-separate-live-ingestion-from-historical-backfill.md) and
+[ADR 012](adr/012-acquire-earnings-releases-and-financial-reports-selectively.md):
+filing/document filters and fixtures, a fixed configured live cutoff, and the same
+checks for recovered pending work. Reuse existing checkpoints and the current
+release process; no new control store, migration framework or backfill command is
+part of this phase. Pure selector fixtures and repository/pipeline recovery tests
+cover the implementation. DATA-001/002 await production validation; explicit
+backfill tooling is deferred as DATA-003. The approved cutoff is
+`2026-10-10T00:00:00Z`. Production behavior is unchanged until release; first rollout
+must stage with ingestion stopped because historical images cannot read skip
+checkpoints. See [DEPLOYMENT](DEPLOYMENT.md#phase-9-filtering-rollout).
+
 **NEXT: Review the real oversized-document failed-work case (DATA-001), historical
 discovery-latency alarm behavior (OPS-001), and ongoing daily refresh/recovery
 observations. Deployment and initial activation are complete: one healthy task,

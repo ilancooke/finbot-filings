@@ -27,6 +27,8 @@ def work_kind(artifact: Artifact, progress: ArtifactCheckpoint | None = None) ->
         return "DEAD_LETTER" if progress.pending_dead_letter else None
     if artifact.published_at is not None:
         return None
+    if progress is not None and progress.selection_blocked:
+        return None
     return "ACQUIRE" if artifact.stored_at is None else "PUBLISH"
 
 
@@ -72,6 +74,8 @@ class DynamoDBArtifactRepository(DynamoDBRepository):
         stored_at = timestamp(stored_at)
 
         def decide(item):
+            if restore(ArtifactCheckpoint, item).selection_blocked:
+                raise RepositoryConflict("excluded/unresolved artifact cannot be stored")
             if "terminal_at" in item:
                 raise RepositoryConflict("terminal artifact requires explicit operator redrive")
             current = self._validate(item)
@@ -98,6 +102,8 @@ class DynamoDBArtifactRepository(DynamoDBRepository):
         published_at = timestamp(published_at)
 
         def decide(item):
+            if restore(ArtifactCheckpoint, item).selection_blocked:
+                raise RepositoryConflict("excluded/unresolved artifact cannot be published")
             if "terminal_at" in item:
                 raise RepositoryConflict("terminal artifact requires explicit operator redrive")
             if "stored_at" not in item:
@@ -109,7 +115,12 @@ class DynamoDBArtifactRepository(DynamoDBRepository):
 
     async def record_failure(self, artifact_id: str, error: str, at: datetime) -> None:
         await self._failure(normalize_artifact_id(artifact_id), error, at,
-                            self._validate, lambda item: "published_at" in item or "terminal_at" in item)
+                            self._validate, lambda item: "published_at" in item or "terminal_at" in item
+                            or restore(ArtifactCheckpoint, item).selection_blocked)
+
+    async def record_selection(self, artifact_id, decision, at, *, policy_version):
+        await self._record_selection(normalize_artifact_id(artifact_id), decision, at,
+                                     policy_version=policy_version, validate=self._validate)
 
     async def record_stage_failure(self, artifact_id, stage, error, at, *, max_failures,
                                    error_type, terminal=False):
@@ -118,7 +129,7 @@ class DynamoDBArtifactRepository(DynamoDBRepository):
         await self._stage_failure(normalize_artifact_id(artifact_id), stage, error, at,
                                  max_failures=max_failures, error_type=error_type, terminal=terminal,
                                  validate=self._validate,
-                                 current_stage=lambda item: work_kind(restore(Artifact, item)))
+                                 current_stage=lambda item: work_kind(restore(Artifact, item), restore(ArtifactCheckpoint, item)))
 
     async def mark_dead_lettered(self, artifact_id, at):
         await self._mark_dead_lettered(normalize_artifact_id(artifact_id), at, self._validate)

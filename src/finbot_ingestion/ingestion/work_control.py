@@ -21,6 +21,7 @@ class Outcome(str, Enum):
     COMPLETE = "complete"
     DEFERRED = "deferred"
     TERMINAL = "terminal"
+    SKIPPED = "skipped"
 
 
 def retryable(error):

@@ -109,6 +109,7 @@ def test_stopped_fargate_and_no_ingress(templates):
     assert env["RUNTIME_METRICS_ENVIRONMENT"] == "example"
     assert env["CALENDAR_PROVIDER"] == "placeholder"
     assert env["CALENDAR_LOOKAHEAD_DAYS"] == "30"
+    assert env["LIVE_INGESTION_START_AT"] == "2026-10-10T00:00:00Z"
     assert "@sha256:" in str(c["Image"])
     assert not resources(runtime, "AWS::EC2::SecurityGroupIngress")
     assert all(not r["Properties"].get("SecurityGroupIngress") for r in resources(runtime, "AWS::EC2::SecurityGroup"))
@@ -191,7 +192,8 @@ def test_managed_email_alarm_routing_preserves_runtime(templates, enabled):
     {"publish_error_threshold": 0}, {"github_oidc_provider_arn": "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com"},
     {"alarm_email": ""}, {"alarm_email": "operator"}, {"alarm_email": "person@example.invalid\n"},
     {"alarm_email": "operator@example.invalid", "alarm_action_arn": "arn:aws:sns:us-east-1:123456789012:existing"},
-    {"monitoring_enabled": True}])
+    {"monitoring_enabled": True}, {"live_ingestion_start_at": "2026-10-10"},
+    {"live_ingestion_start_at": "2026-10-10T00:00:00"}, {"live_ingestion_start_at": ""}])
 def test_invalid_config_fails_without_aws(changes):
     config = InfraConfig.read(Path(__file__).parents[1] / "config.example.json")
     with pytest.raises(ValueError):

@@ -15,6 +15,7 @@ class IngestionWorker:
     def __init__(self, discovery, downloader, publisher, dead_letter, filings, artifacts,
                  control, *, locks=None):
         self.discovery, self.downloader = discovery, downloader
+        self.discovery.downloader = downloader
         self.publisher, self.dead_letter = publisher, dead_letter
         self.filings, self.artifacts, self.control = filings, artifacts, control
         # Share the discovery registry so enumeration and terminal send cannot race.
@@ -22,6 +23,7 @@ class IngestionWorker:
         if self.locks is not discovery.locks:
             raise ValueError("worker and discovery must share identity locks")
         self._slots = asyncio.Semaphore(control.config.max_inflight_artifacts)
+        self.discovery.artifact_slots = self._slots
         self.metrics = None
 
     async def discover_company(self, company):
@@ -57,14 +59,32 @@ class IngestionWorker:
                     return Outcome.COMPLETE
                 if progress.terminal_at is not None:
                     return await self._send_dead_letter(self.artifacts, artifact_id, artifact, progress)
+                if progress.selection_blocked:
+                    return Outcome.SKIPPED
                 filing = await self.filings.get(artifact.accession_number)
                 parent = await self.filings.get_checkpoint(artifact.accession_number)
                 if filing is None or parent is None:
                     raise RepositoryNotFound(artifact.accession_number)
-                if parent.terminal_at is not None or parent.enumeration_completed_at is None:
+                if parent.terminal_at is not None:
+                    return Outcome.DEFERRED
+                if parent.selection_blocked:
+                    await self.discovery.authorize_artifact(artifact, filing, parent, progress)
+                    return Outcome.SKIPPED
+                if parent.enumeration_completed_at is None:
+                    # Even partially enumerated legacy children must not linger
+                    # forever when their parent is outside the live cutoff.
+                    if (self.discovery.selection is not None and
+                            filing.filed_at < self.discovery.selection.live_start_at):
+                        await self.discovery.authorize_artifact(artifact, filing, parent, progress)
+                        return Outcome.SKIPPED
                     return Outcome.DEFERRED
                 stage = "ACQUIRE" if artifact.stored_at is None else "PUBLISH"
                 try:
+                    if not await self.discovery.authorize_artifact(artifact, filing, parent, progress):
+                        return Outcome.SKIPPED
+                    # Routing may have stored the primary's already fetched bytes.
+                    artifact = await self.artifacts.get(artifact_id)
+                    stage = "ACQUIRE" if artifact.stored_at is None else "PUBLISH"
                     if stage == "ACQUIRE":
                         stored = await self.downloader.acquire(artifact)
                         await self.control.checkpoint(lambda: self.artifacts.mark_stored(artifact_id,
@@ -102,6 +122,8 @@ class IngestionWorker:
                     durable = await self.artifacts.get_checkpoint(artifact_id)
                     if current is None or durable is None:
                         raise RepositoryNotFound(artifact_id) from exc
+                    if durable.selection_blocked:
+                        return Outcome.SKIPPED
                     if current.published_at is not None or (stage == "ACQUIRE" and current.stored_at is not None):
                         continue
                     if durable.terminal_at is not None:
