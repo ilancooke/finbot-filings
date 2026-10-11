@@ -164,7 +164,9 @@ class DiscoveryService:
         bound = self.downloader.max_artifact_bytes if self.downloader else 64 * 1024 * 1024
         return await self.execution.call(self.sec.download_document,
             url=document_url(filing.company_cik, filing.accession_number, package.primary_document_name),
-            max_bytes=bound)
+            max_bytes=bound, context={"ticker": filing.ticker, "cik": filing.company_cik,
+                "accession_number": filing.accession_number,
+                "artifact_id": filing.accession_number + "/" + package.primary_document_name})
 
     async def _select_package(self, filing, package, progress):
         primary = None

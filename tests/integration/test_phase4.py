@@ -75,7 +75,8 @@ class FakeSEC:
             html = html.replace(b">8-K<", b">8-K/A<")
         return parse_filing_index(filing, html, directory)
 
-    def download_document(self, url, *, max_bytes):
+    def download_document(self, url, *, max_bytes, context=None):
+        assert context["ticker"] and context["cik"] and context["accession_number"]
         self._call("download")
         assert len(RAW) <= max_bytes
         return DownloadedDocument(RAW, "application/octet-stream", url)

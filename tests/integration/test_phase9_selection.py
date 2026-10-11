@@ -49,7 +49,10 @@ def selected_worker(system, monkeypatch, *, items=('2.02', '9.01'), index_items=
         system.sec.calls.append('index')
         return parsed
     downloads = []
-    def download(url, *, max_bytes):
+    def download(url, *, max_bytes, context=None):
+        assert context == {"ticker": filing.ticker, "cik": filing.company_cik,
+            "accession_number": filing.accession_number,
+            "artifact_id": filing.accession_number + "/" + url.rsplit('/', 1)[-1]}
         name = url.rsplit('/', 1)[-1]
         assert name in {'Primary.htm', 'release.htm', 'supplement.pdf'}, 'excluded URL was requested'
         downloads.append(name)
@@ -216,10 +219,10 @@ def test_published_and_terminal_history_are_untouched(system, monkeypatch):
 def test_selected_oversized_release_retains_terminal_failure_path(system, monkeypatch):
     worker, filing, parsed, downloads = selected_worker(system, monkeypatch)
     original = system.sec.download_document
-    def oversized(url, *, max_bytes):
+    def oversized(url, *, max_bytes, context=None):
         if url.endswith('/release.htm'):
             raise SECDocumentTooLarge('SEC document exceeds MAX_ARTIFACT_BYTES')
-        return original(url, max_bytes=max_bytes)
+        return original(url, max_bytes=max_bytes, context=context)
     monkeypatch.setattr(system.sec, 'download_document', oversized)
     async def scenario():
         await worker.discover_company(COMPANY)

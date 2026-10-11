@@ -112,7 +112,7 @@ class SecClient:
                     self.limiter.wait()
                     self._check_admission()
                     if self.metrics is not None:
-                        self.metrics.count("SecRequests")
+                        self.metrics.count_sec_request(operation, context.get("ticker"))
                     options = {"stream": True} if max_bytes is not None else {}
                     response = self._session.get(url, timeout=(self.config.sec_connect_timeout_seconds, self.config.sec_read_timeout_seconds), allow_redirects=False, **options)
                     bounded_content = None
@@ -210,7 +210,8 @@ class SecClient:
             LOGGER.warning('SEC package enumeration failed', extra={'operation': 'package_enumeration', 'error_type': type(exc).__name__, 'error_message': str(exc), **context})
             raise
 
-    def download_document(self, url: str, *, max_bytes: int | None = None) -> DownloadedDocument:
+    def download_document(self, url: str, *, max_bytes: int | None = None,
+                          context=None) -> DownloadedDocument:
         if max_bytes is not None and (type(max_bytes) is not int or max_bytes < 1):
             raise ValueError('max_bytes must be a positive integer')
-        return self._request(url, operation='document', max_bytes=max_bytes)
+        return self._request(url, operation='document', max_bytes=max_bytes, context=context)

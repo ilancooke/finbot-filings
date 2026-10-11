@@ -20,7 +20,9 @@ class ArtifactDownloader:
             return stored
         if downloaded is None:
             downloaded = await self.execution.call(self.sec.download_document, url=artifact.sec_url,
-                                                   max_bytes=self.max_artifact_bytes)
+                max_bytes=self.max_artifact_bytes, context={"ticker": filing.ticker,
+                    "cik": filing.company_cik, "accession_number": filing.accession_number,
+                    "artifact_id": artifact.artifact_id})
         elif downloaded.source_url != artifact.sec_url or downloaded.size_bytes > self.max_artifact_bytes:
             raise ValueError("routing bytes disagree with the artifact URL or size bound")
         if (artifact.filename.lower().endswith((".htm", ".html"))
