@@ -460,7 +460,7 @@ case. Reproduce offline with:
 Keep SDK/provider payloads behind adapters, identities/checkpoints deterministic,
 history immutable and tests offline. Source protocols/domain validators are the
 exact callable interfaces. Contract or architecture changes must update this
-document and relevant decision; commands/settings belong in README/.env.example.
+document and relevant decision; commands/settings belong in README.
 Use failure/restart tests for durable changes. Do not introduce new services,
 multi-task coordination or downstream interpretation without an explicit scope
 change. Tests, CI and release artifacts hold execution evidence; maintained docs

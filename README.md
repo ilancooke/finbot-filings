@@ -84,11 +84,13 @@ company universe. It never provisions or seeds resources. Help needs no service
 configuration. Health checks need only runtime settings and make no AWS/SEC calls;
 exit status is zero for a fresh live heartbeat and one otherwise.
 
-Export settings into the process environment. `.env.example` documents all names
-and defaults; the application does not load `.env` files. `LOG_LEVEL` defaults to
-`INFO`. AWS uses the normal SDK credential chain. Do not place credentials in source,
-images or diagnostic payloads. The existing ignored local `.env` is left untouched;
-its former legacy configuration is not sufficient for this runtime.
+The runtime reads process environment variables. Production receives them through
+the CDK-managed ECS task definition and uses Python defaults for optional settings;
+see the [configuration reference](#configuration-reference). No `.env` files are
+needed for production or offline tests, and the application does not load them.
+`LOG_LEVEL` defaults to `INFO`. AWS uses the normal SDK credential chain, including
+task-role credentials in ECS. Do not place credentials in source, images or
+diagnostic payloads.
 
 ## Container workflow
 
@@ -105,31 +107,6 @@ The image installs a wheel in Python 3.12 slim Linux, runs as UID/GID 10001, and
 starts `python -m finbot_ingestion.main` directly as PID 1. It contains runtime
 dependencies and timezone data; tests, build sources, credentials and shared data
 are excluded. It exposes no inbound port. `/tmp` holds the atomic heartbeat.
-
-For a configured local runtime, prepare a private Docker environment file:
-
-```bash
-cp .env.example .env.ingestion
-# Edit example identity/resource values and supply valid runtime credentials.
-# This starts real AWS/SEC work; run only with the intended existing resources.
-docker run --rm --name finbot-ingestion \
-  --env-file .env.ingestion --stop-timeout 120 \
-  --read-only --tmpfs /tmp:rw,nosuid,size=32m \
-  --cap-drop ALL --security-opt no-new-privileges \
-  finbot-ingestion:local
-```
-
-The example file is in Docker `--env-file` format. Passing it is explicit; the
-application still reads process variables only. For local Docker, credentials must
-be supplied explicitly through your chosen SDK credential mechanism. The CDK task definition uses AWS task-role credentials when deployed. Never bake credentials into the image.
-No `FINBOT_DATA_ROOT` mount is used by this cloud ingestion service.
-
-From another terminal:
-
-```bash
-docker exec finbot-ingestion python -m finbot_ingestion.main --health-check
-docker stop --timeout 120 finbot-ingestion
-```
 
 SIGTERM/SIGINT stops poll producers and all new SEC and Yahoo HTTP admissions,
 including authentication, retries and redirects. In-flight I/O and safe checkpoints can finish within the
@@ -357,7 +334,15 @@ notification actions independently of ingestion. See [DEPLOYMENT.md](docs/DEPLOY
 
 ## Configuration reference
 
-`.env.example` contains every supported setting. Configuration parsing does not
+Production environment values come from the CDK-managed ECS task definition.
+CDK reads deployment inputs from the JSON file selected by `FINBOT_INFRA_CONFIG`,
+typically the ignored `infra/cdk/config.local.json`; see [DEPLOYMENT](docs/DEPLOYMENT.md).
+Optional runtime settings use Python defaults when absent from the process
+environment. Explicit environment values take precedence. The tables below
+document required settings and optional defaults without requiring an environment
+file.
+
+Configuration parsing does not
 create clients, resolve credentials or load files implicitly. Region/table/storage/
 messaging requirements apply to normal runtime execution; isolated domain/parser
 utilities need only their own relevant settings.
@@ -367,14 +352,101 @@ utilities need only their own relevant settings.
 | SEC | Required `SEC_USER_AGENT`; `SEC_MAX_REQUESTS_PER_SECOND=5` (finite, positive, at most 5) |
 | SEC transport | `SEC_CONNECT_TIMEOUT_SECONDS=10`, `SEC_READ_TIMEOUT_SECONDS=30`, `SEC_MAX_ATTEMPTS=3`, `SEC_BACKOFF_BASE_SECONDS=1`, `SEC_BACKOFF_CAP_SECONDS=30`, `SEC_MAX_REDIRECTS=5` |
 | AWS/DynamoDB | Required `AWS_REGION`, four distinct `COMPANIES_TABLE`, `CALENDAR_TABLE`, `FILINGS_TABLE`, `ARTIFACTS_TABLE` names |
-| DynamoDB execution | Connect/read timeouts 5/10 seconds, 3 attempts, page size 100, 4 workers, 4 CAS attempts, maximum date span 366 days; `DYNAMODB_*` names in example |
+| DynamoDB execution | Connect/read timeouts 5/10 seconds, 3 attempts, page size 100, 4 workers, 4 CAS attempts, maximum date span 366 days; `DYNAMODB_*` names below |
 | Storage/messaging | Required `ARTIFACT_BUCKET`, same-region standard `ARTIFACT_READY_TOPIC_ARN`, standard `INGESTION_DEAD_LETTER_QUEUE_URL`; `MAX_ARTIFACT_BYTES=67108864` |
-| Ingestion | AWS connect/read 5/30 seconds, attempts/workers 3/2, stage failures 3, checkpoint/dead-letter attempts 3/3, inflight artifacts 2, recovery page 100, backoff 1/30 seconds; `INGESTION_*` names in example |
+| Ingestion | AWS connect/read 5/30 seconds, attempts/workers 3/2, stage failures 3, checkpoint/dead-letter attempts 3/3, inflight artifacts 2, recovery page 100, backoff 1/30 seconds; `INGESTION_*` names below |
 | Calendar | Provider `placeholder` or `yahoo` (default placeholder), lookahead/near-term 30/3 days, full/near-term refresh 86400/0 seconds, stale after 172800 seconds, maximum companies/events 1000/5000, company page 100, provider attempts 1 for Yahoo or 3 otherwise, checkpoint attempts 3, backoff 1/30 seconds |
-| Yahoo | HTTP timeout 20 seconds, request spacing 1 second, page size 100, maximum pages per slice 20, HTTP attempts 300, raw rows 30000, whole-fetch deadline 600 seconds, request attempts 2, backoff cap 30 seconds, cache `/tmp/finbot-yahoo`; `YAHOO_*` names in example |
+| Yahoo | HTTP timeout 20 seconds, request spacing 1 second, page size 100, maximum pages per slice 20, HTTP attempts 300, raw rows 30000, whole-fetch deadline 600 seconds, request attempts 2, backoff cap 30 seconds, cache `/tmp/finbot-yahoo`; `YAHOO_*` names below |
 | Runtime | XNYS / America/New_York, active/safety 10/3600 seconds, reload/recovery/tick 300/60/1 seconds, refresh retry 60 seconds, poll/enumeration workers 2/1, company/filing/artifact queues 1000/100/200 |
 | Runtime startup/metrics | `RUNTIME_SEC_STARTUP_QUIET_SECONDS=0` locally (150 in ECS), `RUNTIME_METRICS_ENVIRONMENT=local` (deployment environment in ECS) |
 | Runtime health | Metrics/heartbeat 5/30 seconds, stall allowance 1800 seconds, shutdown grace 30 seconds, `RUNTIME_HEALTH_PATH=/tmp/finbot-ingestion-health.json` |
+
+<details>
+<summary>Advanced optional settings and their Python defaults</summary>
+
+These optional settings can be omitted from the process environment. Supply a value
+only when overriding its default. ECS explicitly overrides startup quiet time to
+150 seconds and metrics environment to the deployed environment.
+
+```dotenv
+SEC_MAX_REQUESTS_PER_SECOND=5
+SEC_CONNECT_TIMEOUT_SECONDS=10
+SEC_READ_TIMEOUT_SECONDS=30
+SEC_MAX_ATTEMPTS=3
+SEC_BACKOFF_BASE_SECONDS=1
+SEC_BACKOFF_CAP_SECONDS=30
+SEC_MAX_REDIRECTS=5
+DYNAMODB_CONNECT_TIMEOUT_SECONDS=5
+DYNAMODB_READ_TIMEOUT_SECONDS=10
+DYNAMODB_MAX_ATTEMPTS=3
+DYNAMODB_PAGE_SIZE=100
+DYNAMODB_MAX_WORKERS=4
+DYNAMODB_CAS_ATTEMPTS=4
+DYNAMODB_MAX_CALENDAR_RANGE_DAYS=366
+MAX_ARTIFACT_BYTES=67108864
+INGESTION_AWS_CONNECT_TIMEOUT_SECONDS=5
+INGESTION_AWS_READ_TIMEOUT_SECONDS=30
+INGESTION_AWS_MAX_ATTEMPTS=3
+INGESTION_AWS_MAX_WORKERS=2
+INGESTION_MAX_STAGE_FAILURES=3
+INGESTION_CHECKPOINT_ATTEMPTS=3
+INGESTION_DEAD_LETTER_ATTEMPTS=3
+INGESTION_MAX_INFLIGHT_ARTIFACTS=2
+INGESTION_RECOVERY_PAGE_SIZE=100
+INGESTION_BACKOFF_BASE_SECONDS=1
+INGESTION_BACKOFF_CAP_SECONDS=30
+CALENDAR_LOOKAHEAD_DAYS=30
+CALENDAR_NEAR_TERM_DAYS=3
+CALENDAR_FULL_REFRESH_SECONDS=86400
+CALENDAR_NEAR_TERM_REFRESH_SECONDS=0
+CALENDAR_STALE_AFTER_SECONDS=172800
+CALENDAR_MAX_COMPANIES=1000
+CALENDAR_MAX_SNAPSHOT_EVENTS=5000
+CALENDAR_COMPANY_PAGE_SIZE=100
+CALENDAR_CHECKPOINT_ATTEMPTS=3
+CALENDAR_BACKOFF_BASE_SECONDS=1
+CALENDAR_BACKOFF_CAP_SECONDS=30
+YAHOO_HTTP_TIMEOUT_SECONDS=20
+YAHOO_MIN_REQUEST_INTERVAL_SECONDS=1
+YAHOO_PAGE_SIZE=100
+YAHOO_MAX_PAGES_PER_SLICE=20
+YAHOO_MAX_HTTP_ATTEMPTS=300
+YAHOO_MAX_RAW_ROWS=30000
+YAHOO_MAX_FETCH_SECONDS=600
+YAHOO_REQUEST_ATTEMPTS=2
+YAHOO_BACKOFF_CAP_SECONDS=30
+YAHOO_CACHE_DIR=/tmp/finbot-yahoo
+RUNTIME_MARKET_TIMEZONE=America/New_York
+RUNTIME_MARKET_CALENDAR=XNYS
+RUNTIME_ACTIVE_POLL_SECONDS=10
+RUNTIME_SAFETY_POLL_SECONDS=3600
+RUNTIME_BEFORE_OPEN_SECONDS=7200
+RUNTIME_AFTER_OPEN_SECONDS=7200
+RUNTIME_BEFORE_CLOSE_SECONDS=7200
+RUNTIME_AFTER_CLOSE_SECONDS=10800
+RUNTIME_GRACE_SECONDS=7200
+RUNTIME_NON_SESSION_START_HOUR=7
+RUNTIME_NON_SESSION_START_MINUTE=30
+RUNTIME_NON_SESSION_END_HOUR=19
+RUNTIME_RELOAD_SECONDS=300
+RUNTIME_RECOVERY_SECONDS=60
+RUNTIME_TICK_SECONDS=1
+RUNTIME_REFRESH_RETRY_SECONDS=60
+RUNTIME_POLL_WORKERS=2
+RUNTIME_ENUMERATION_WORKERS=1
+RUNTIME_COMPANY_QUEUE_SIZE=1000
+RUNTIME_FILING_QUEUE_SIZE=100
+RUNTIME_ARTIFACT_QUEUE_SIZE=200
+RUNTIME_METRICS_FLUSH_SECONDS=5
+RUNTIME_HEARTBEAT_SECONDS=30
+RUNTIME_STALL_SECONDS=1800
+RUNTIME_SHUTDOWN_GRACE_SECONDS=30
+RUNTIME_SEC_STARTUP_QUIET_SECONDS=0
+RUNTIME_METRICS_ENVIRONMENT=local
+RUNTIME_HEALTH_PATH=/tmp/finbot-ingestion-health.json
+```
+
+</details>
 
 Durations must be finite and positive except zero disables near-term refresh
 and is allowed for the SEC startup quiet period. Metrics environment must contain
