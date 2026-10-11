@@ -443,7 +443,10 @@ No version-tag overwrite or mutable `latest` deployment is used.
 apart from image and AWS response-only fields. A mismatch fails before stopping
 anything. It registers the replacement first, scales to zero, paginates RUNNING
 and desired-STOPPED tasks, observes known task statuses on two consecutive checks and waits
-for every observed task to reach STOPPED before starting one. ECS APIs are eventual;
+for every observed task to reach STOPPED. It installs the replacement at desired
+count zero and waits for that exact revision's single COMPLETED deployment with
+no non-STOPPED tasks. Only then does a separate desired-count-only update start
+one task. Restoration follows the same sequence. ECS APIs are eventual;
 these checks do not provide a distributed exclusion guarantee for every failure.
 It verifies the actual task revision, digest, container health and deployment
 completion rather than accepting a generic services-stable result.
@@ -1296,3 +1299,74 @@ attachments are omitted. Review warnings before claiming complete earnings cover
 
 Production validation is pending. [PHASE_9_RESULTS](PHASE_9_RESULTS.md) records
 local/offline checks; it does not represent SEC/AWS production acceptance.
+
+### Filtering release staging checkpoint
+
+The operator paused delivery, scaled the service to zero, and verified both
+observed tasks were STOPPED before merging. CI passed for the merged filtering
+source. The operator re-enabled delivery and dispatched/approved
+[run 38100007167](https://github.com/ilancooke/finbot-filings/actions/runs/38100007167)
+with `activate=false`. It completed successfully at `2026-10-11T00:58:51Z`
+(October 10 in the operator's timezone).
+
+The retained release manifest reports `outcome=staged`, `checkpoint=verified`,
+previous desired count zero, and source commit
+`182f456bf5586389dc925e4b1289ba3d3534df2c`. Its image digest is
+`sha256:b98313062d1b5edff55f3cd3fa19ea43ab62f9bb07dc8e655ba47e0b9d735c3d`,
+staged as `finbot-prod-ingestion:7`. Read-only AWS inspection confirmed revision 7
+uses that exact digest on Linux ARM64, the rollout is COMPLETED, and service
+desired/running/pending counts are all zero.
+
+Ignored local CDK configuration now uses this verified filtering digest and the
+fixed `2026-10-10T00:00:00Z` cutoff. The staged revision does not yet contain an
+explicit cutoff environment variable; the new application has the same default.
+The operator paused delivery again, reviewed a runtime diff containing only the
+image digest and cutoff environment changes, and deployed it successfully.
+The resulting CDK baseline is `finbot-prod-ingestion:8`. Read-only ECS inspection
+confirmed revision 8 uses the verified filtering digest on Linux ARM64 with the
+explicit `LIVE_INGESTION_START_AT=2026-10-10T00:00:00Z` environment variable. The
+service now references revision 8 with a COMPLETED rollout and all counts zero.
+
+The operator applied the production variables naming baseline revision 8,
+re-enabled delivery, and dispatched/approved activation with the verified digest.
+No AWS or GitHub writes were performed by the agent.
+
+### Filtering activation failure and release fix
+
+[Activation run 38101044424](https://github.com/ilancooke/finbot-filings/actions/runs/38101044424)
+failed at `2026-10-11T01:17:09Z` with `unexpected overlapping tasks` in
+`Release.await_revision()`. Offline validation, OIDC authentication and pulling
+the exact filtering digest succeeded. The release manifest reports
+`outcome=failed_restored`, `checkpoint=restored`, attempted revision 9 and previous
+revision 8/count zero. Read-only inspection confirmed the service restored
+revision 8 with a COMPLETED deployment and desired/running/pending all zero.
+
+Observed service tasks:
+
+- Revision 8 task `ac2a8eb3a6994b979c7f83a41841e1a5` was created at
+  `01:14:42.732Z`, requested to stop at `01:14:51.425Z` and fully STOPPED at
+  `01:15:28.317Z`.
+- Revision 9 task `7cef3e7d9aee4e24ab003df21790b078` was created at
+  `01:15:02.164Z`, requested to stop at `01:15:10.279Z` and fully STOPPED at
+  `01:15:10.927Z`.
+
+Neither task has `startedAt`; neither reached RUNNING. The overlap guard counts
+all non-STOPPED lifecycle states, so a departing startup task and a provisioning
+replacement triggered it before ingestion began. The script changed task revision
+and desired count together. The observed outgoing-revision launch during that
+transition is consistent with a scheduler startup race, not an application crash.
+
+The local release fix separates these operations: install and verify the new
+revision at count zero, then scale up without changing the revision. Restoration
+also settles the previous revision at zero before restarting it. The overlap
+guard remains unchanged. Offline regression tests reproduce the original error
+and cover initially stopped/active services, restoration after a lost start
+acknowledgment, and a revision that never settles. Pause delivery before merging
+the fix, then retry activation with the same verified digest and baseline 8;
+no application image or infrastructure change is needed for this sequencing fix.
+Local validation passed 626 application tests (eight opt-in container tests
+skipped), including 17 release tests. Python compilation and whitespace checks
+passed. This change affects the GitHub release script, outside the application
+image; no container or CDK resource change is required. Production retry remains
+pending. The separate revision/count calls use the existing
+[ECS UpdateService API](https://docs.aws.amazon.com/boto3/latest/reference/services/ecs/client/update_service.html).

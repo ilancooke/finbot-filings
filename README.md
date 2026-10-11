@@ -10,10 +10,12 @@ The supported runtime/container uses only `finbot_ingestion`; the superseded
 namespace and extraction commands were removed in Phase 7. Phase 8 adds CDK,
 application delivery, health alarms and the agreed conservative recovery policy.
 Infrastructure and workflows are validated offline. The bootstrap, state and
-runtime stacks are deployed. GitHub activation succeeded on 2026-10-10; one healthy
-ARM64 task is running with fresh calendar coverage and verified SEC acquisition,
-S3 storage and SNS publication checkpoints. See [DEPLOYMENT](docs/DEPLOYMENT.md)
-for recorded results and the initial oversized-document failure requiring review.
+runtime stacks are deployed. Initial GitHub activation succeeded on 2026-10-10,
+with verified calendar, SEC acquisition, S3 storage and SNS publication checkpoints.
+The service is currently stopped on filtering baseline revision 8 after a failed
+activation restored its previous desired count of zero. The release-sequencing
+fix is validated locally; production activation remains pending.
+See [DEPLOYMENT](docs/DEPLOYMENT.md) for recorded results.
 The Yahoo/yfinance earnings-calendar adapter is implemented and tested offline.
 Provider selection remains explicit; the default placeholder reports unavailable
 coverage. The [initial production universe](docs/PRODUCTION_UNIVERSE.md) contains
@@ -461,6 +463,8 @@ never deploy the default dummy inputs. CDK owns retained state and a runtime
 service at desired count zero. GitHub CI has no AWS credentials; delivery uses
 scoped OIDC, immutable tags/digests and an explicit STOPPED handoff. Stopped
 environments stay stopped until separate readiness approval and manual activation.
+Delivery settles a new task revision at desired count zero before separately
+scaling to one; restoration follows the same sequence.
 The customized account/region bootstrap template is version-controlled under
 [infra/bootstrap](infra/bootstrap/README.md), with its pinned origin, SSE-S3
 policy, explicit deployment parameters and update procedure. Bootstrap remains a separately

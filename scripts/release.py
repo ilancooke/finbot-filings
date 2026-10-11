@@ -186,6 +186,13 @@ class Release:
                     return
             self.pause()
 
+    def install_stopped_revision(self, arn, digest):
+        # Settle the revision change with no tasks before scaling up. Combining
+        # these updates can make ECS schedule the outgoing deployment as well.
+        self.ecs.update_service(cluster=self.cluster, service=self.service,
+            taskDefinition=arn, desiredCount=0)
+        self.await_revision(arn, digest, 0)
+
     def deploy(self, digest, *, activate=False, activation_approved=False, source_commit=None):
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             raise ReleaseError("require resolved image digest")
@@ -231,10 +238,13 @@ class Release:
                 # A stopped service can still have a container finishing shutdown.
                 interrupted = True
                 self.quiesce()
-            self.record(checkpoint="starting")
-            self.ecs.update_service(cluster=self.cluster, service=self.service,
-                taskDefinition=new, desiredCount=target_count)
-            self.await_revision(new, digest, target_count)
+            self.record(checkpoint="staging")
+            self.install_stopped_revision(new, digest)
+            if target_count:
+                self.record(checkpoint="starting")
+                self.ecs.update_service(cluster=self.cluster, service=self.service,
+                    desiredCount=target_count)
+                self.await_revision(new, digest, target_count)
             self.record(outcome="running" if target_count else "staged", checkpoint="verified")
             return self.manifest
         except BaseException:
@@ -246,9 +256,11 @@ class Release:
                     self.quiesce()
                     old_digest = existing["containerDefinitions"][0]["image"].split("@", 1)[1]
                     self.record(checkpoint="restoring")
-                    self.ecs.update_service(cluster=self.cluster, service=self.service,
-                        taskDefinition=previous, desiredCount=old_count)
-                    self.await_revision(previous, old_digest, old_count)
+                    self.install_stopped_revision(previous, old_digest)
+                    if old_count:
+                        self.ecs.update_service(cluster=self.cluster, service=self.service,
+                            desiredCount=old_count)
+                        self.await_revision(previous, old_digest, old_count)
                     self.record(outcome="failed_restored", checkpoint="restored")
                 except BaseException as recovery_error:
                     # Fail closed; do not launch another task after unproved quiescence.

@@ -510,7 +510,10 @@ remain unchanged.
 
 GitHub CI validates offline application, CDK, workflow and ARM64 container checks.
 Scoped OIDC delivery registers digest revisions, waits for observed predecessor
-STOPPED status and verifies actual revision/digest/health/completion. Failed
+STOPPED status, installs the replacement at desired count zero and waits for that
+revision's completed, stopped deployment. A separate desired-count-only update
+then starts one task. Restoration uses the same stopped-revision handoff. Delivery
+verifies actual revision/digest/health/completion. Failed
 releases remain failed even when restoration succeeds. An explicit gate preserves
 stopped environments. Controlled rollback/maintenance use the same stop/wait/start
 procedure; automatic replacement accepts ADR 008's conservative overlap limit.

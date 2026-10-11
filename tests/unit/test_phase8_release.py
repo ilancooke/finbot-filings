@@ -125,7 +125,7 @@ def test_stop_before_start_and_verified_digest(tmp_path):
     release, ecs = runner(tmp_path)
     result = release.deploy(NEW, activation_approved=True)
     assert result["outcome"] == "running" and result["checkpoint"] == "verified"
-    assert ecs.trace.index(("stopped", "old-task")) < ecs.trace.index(("update", 1, "new"))
+    assert ecs.trace.index(("stopped", "old-task")) < ecs.trace.index(("update", 1, None))
     assert ecs.trace[0] == ("register", "new")
     assert ecs.listed_empty_pages
     assert json.loads((tmp_path / "release.json").read_text())["previous_revision"] == "old"
@@ -143,6 +143,85 @@ def test_initial_activation_requires_explicit_gate(tmp_path):
         release.deploy(NEW, activate=True)
     assert not ecs.trace
     assert release.deploy(NEW, activate=True, activation_approved=True)["outcome"] == "running"
+
+
+class RevisionStartupRace(ECS):
+    """Combined revision/count updates can schedule the outgoing deployment."""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.switch_ticks = 0
+        self.staged_settled = True
+
+    def update_service(self, desiredCount, taskDefinition=None, **kwargs):
+        outgoing = self.revision
+        response = super().update_service(desiredCount, taskDefinition, **kwargs)
+        if taskDefinition and taskDefinition != outgoing:
+            self.switch_ticks = 0
+            self.staged_settled = False
+        if desiredCount and not self.staged_settled:
+            # The outgoing task is still tearing down while the replacement is
+            # provisioning. Neither has started a container or polled SEC yet.
+            old = self.task("outgoing-pending", outgoing)
+            old.update(lastStatus="STOPPING", desiredStatus="STOPPED", startedAt=None)
+            old["containers"][0]["lastStatus"] = "PENDING"
+            self.records[old["taskArn"]] = old
+            self.stopping_ticks = 0
+            new = self.records[self.revision + "-task"]
+            new.update(lastStatus="PROVISIONING", startedAt=None)
+        return response
+
+    def describe_services(self, **kwargs):
+        response = super().describe_services(**kwargs)
+        if not self.staged_settled:
+            self.switch_ticks += 1
+            if self.switch_ticks >= 3:
+                self.staged_settled = True
+                self.trace.append(("revision-settled", self.revision))
+            else:
+                response["services"][0]["deployments"][0]["rolloutState"] = "IN_PROGRESS"
+        return response
+
+
+@pytest.mark.parametrize("count", [0, 1])
+def test_revision_settles_at_zero_before_activation(tmp_path, count):
+    ecs, clock = RevisionStartupRace(count=count), Clock()
+    release = Release(ecs=ecs, ecr=ECR(), cluster="cluster", service="service",
+        repository_uri=REPO, baseline="baseline", manifest_path=tmp_path / "race.json",
+        timeout=12, poll_seconds=1, clock=clock, sleep=clock.sleep)
+    result = release.deploy(NEW, activate=True, activation_approved=True)
+    assert result["outcome"] == "running"
+    assert ecs.trace.index(("revision-settled", "new")) < ecs.trace.index(("update", 1, None))
+    assert "outgoing-pending" not in ecs.records
+
+
+def test_restoration_settles_previous_revision_before_restarting(tmp_path):
+    ecs, clock = RevisionStartupRace(failure="lost_start_ack"), Clock()
+    release = Release(ecs=ecs, ecr=ECR(), cluster="cluster", service="service",
+        repository_uri=REPO, baseline="baseline", manifest_path=tmp_path / "restore.json",
+        timeout=12, poll_seconds=1, clock=clock, sleep=clock.sleep)
+    with pytest.raises(RuntimeError, match="lost acknowledgment"):
+        release.deploy(NEW, activation_approved=True)
+    assert release.manifest["outcome"] == "failed_restored"
+    assert ecs.revision == "old" and ecs.count == 1
+    last_start = max(i for i, action in enumerate(ecs.trace) if action == ("update", 1, None))
+    assert ecs.trace.index(("revision-settled", "old")) < last_start
+    assert "outgoing-pending" not in ecs.records
+
+
+def test_unsettled_staged_revision_never_starts_tasks(tmp_path):
+    release, ecs = runner(tmp_path, count=0)
+    describe = ecs.describe_services
+    def unsettled(**kwargs):
+        response = describe(**kwargs)
+        if ecs.revision == "new":
+            response["services"][0]["deployments"][0]["rolloutState"] = "IN_PROGRESS"
+        return response
+    ecs.describe_services = unsettled
+    with pytest.raises(ReleaseError, match="deadline"):
+        release.deploy(NEW, activate=True, activation_approved=True)
+    assert not any(t[1] == 1 for t in ecs.trace if t[0] == "update")
+    assert ecs.revision == "old" and ecs.count == 0
+    assert release.manifest["outcome"] == "failed_restored"
 
 
 @pytest.mark.parametrize("failure", ["wrong_digest", "circuit", "lost_start_ack", "cancel"])
