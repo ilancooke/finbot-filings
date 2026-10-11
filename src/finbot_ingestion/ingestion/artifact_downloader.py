@@ -14,8 +14,8 @@ class ArtifactDownloader:
         self.sec, self.execution, self.store = sec_client, sec_execution, store
         self.max_artifact_bytes = max_artifact_bytes
 
-    async def acquire(self, artifact, *, downloaded=None):
-        stored = await self.store.inspect(artifact)
+    async def acquire(self, artifact, filing, *, downloaded=None):
+        stored = await self.store.inspect(artifact, filing)
         if stored is not None:
             return stored
         if downloaded is None:
@@ -28,4 +28,4 @@ class ArtifactDownloader:
             LOGGER.warning("Selected HTML has little text and relies on excluded images", extra={
                 "operation": "acquisition_selection", "artifact_id": artifact.artifact_id,
                 "policy_version": POLICY_VERSION, "reason": "possible_image_only_content"})
-        return await self.store.put_if_absent(artifact, downloaded)
+        return await self.store.put_if_absent(artifact, filing, downloaded)

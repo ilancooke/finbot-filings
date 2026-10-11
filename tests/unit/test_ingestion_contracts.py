@@ -38,7 +38,7 @@ def test_canonical_identity_and_endpoint_paths(cik):
         "https://www.sec.gov/Archives/edgar/data/320193/000032019326000001/"
         f"{ACCESSION}-index.html"
     )
-    assert artifact_key(cik, ACCESSION, "ex991.htm") == f"0000320193/{ACCESSION}/ex991.htm"
+    assert artifact_key("aapl", ACCESSION, "ex991.htm", filed_at=NOW, form_type="8-K") == f"AAPL/2026-10-08_8-K_{ACCESSION}/ex991.htm"
 
 
 @pytest.mark.parametrize("cik", [0, -1, True, 1.2, None, "", "１２３", "12345678901", "1.0"])
@@ -61,6 +61,23 @@ def test_identity_preserves_original_filename_and_excludes_ticker(artifact):
     assert replace(artifact, filename="EX991.htm").artifact_id != artifact.artifact_id
     assert replace(artifact, accession_number="0000320193-26-000002").artifact_id != artifact.artifact_id
     assert document_url("320193", ACCESSION, "a#b.htm").endswith("/a%23b.htm")
+
+
+@pytest.mark.parametrize("instant,day", [
+    (datetime(2026, 10, 9, 3, 59, tzinfo=timezone.utc), "2026-10-08"),
+    (datetime(2026, 10, 9, 4, tzinfo=timezone.utc), "2026-10-09"),
+    (datetime(2026, 1, 9, 4, 59, tzinfo=timezone.utc), "2026-01-08"),
+    (datetime(2026, 1, 9, 5, tzinfo=timezone.utc), "2026-01-09"),
+])
+def test_storage_date_uses_new_york_acceptance_day_including_dst(instant, day):
+    assert artifact_key("brk.b", ACCESSION, "Primary.PDF", filed_at=instant,
+                        form_type="10-K/A") == f"BRK.B/{day}_10-K-A_{ACCESSION}/Primary.PDF"
+
+
+@pytest.mark.parametrize("ticker", ["../AAPL", "A/B", "A\\B", "A%2fB", ".", "A\nB"])
+def test_storage_rejects_unsafe_ticker_folders(ticker):
+    with pytest.raises(ValueError, match="ticker"):
+        artifact_key(ticker, ACCESSION, "ex991.htm", filed_at=NOW, form_type="8-K")
 
 
 def test_immutable_filing_and_aware_timestamps(filing):
@@ -95,7 +112,7 @@ def test_ready_event_requires_stored_artifact(filing, artifact):
 
 
 def test_ready_wire_contract_and_amendment_history(filing, artifact):
-    stored = replace(artifact, s3_uri=f"s3://artifacts/0000320193/{ACCESSION}/ex991.htm", stored_at=NOW)
+    stored = replace(artifact, s3_uri=f"s3://artifacts/AAPL/2026-10-08_8-K_{ACCESSION}/ex991.htm", stored_at=NOW)
     event = ArtifactReady.from_artifact(filing, stored)
     assert json.loads(event.to_json()) == {
         "event_type": "artifact.ready", "schema_version": "1.0",

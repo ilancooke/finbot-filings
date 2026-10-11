@@ -42,7 +42,7 @@ flowchart LR
 ## Filing admission and document selection
 
 `selection/policy.py` implements deterministic `earnings-acquisition-v1` routing.
-`LIVE_INGESTION_START_AT` defaults to **2026-10-10T00:00:00Z**, inclusive, using
+`LIVE_INGESTION_START_AT` defaults to **2026-10-09T04:00:00Z**, inclusive, using
 SEC acceptance time. It is a fixed saved configuration value shared by restarts,
 deployments and newly enabled companies. Calendar dates affect polling cadence,
 not acquisition eligibility. Do not reset/widen the cutoff to perform backfill.
@@ -93,11 +93,19 @@ or every earnings disclosure.
 | Company | Ten-digit zero-padded CIK; reviewed ticker/name/enabled configuration |
 | Filing | Dashed SEC accession number; amendments have new identities |
 | Artifact | `<dashed-accession>/<original-filename>` |
-| S3 key | `<10-digit-cik>/<artifact-id>` |
+| S3 key | `<ticker>/<YYYY-MM-DD>_<form>_<accession>/<original-filename>` |
 | `filed_at` | SEC `acceptanceDateTime`, normalized to aware UTC; not measured public availability |
 | `discovered_at` | First canonical discovery observation |
 | `stored_at` | Original S3 HEAD `LastModified`, including repair |
 | `published_at` | First durable publication checkpoint |
+
+Folder dates use SEC acceptance time in America/New_York (including DST), not
+runtime/discovery time. Forms replace `/` with `-` in folder labels; accession
+remains present to distinguish same-day filings. The original canonical artifact
+ticker supplies the top-level folder. The parent filing is passed into storage
+operations and its accession/CIK/form must match the artifact, without duplicating
+acceptance time in artifact rows. Earlier layout images are incompatible active
+rollback targets after the explicit reset; see ADR 013.
 
 Original filename case is preserved. Filenames must be safe basenames without
 separators, traversal names or control characters. SEC URLs use numeric CIK and
@@ -120,7 +128,7 @@ canonical on rediscovery, including after ticker configuration changes.
   "form_type": "8-K",
   "document_type": "EX-99.1",
   "filename": "ex991.htm",
-  "s3_uri": "s3://example-artifacts/0001018724/0001018724-26-012345/ex991.htm",
+  "s3_uri": "s3://example-artifacts/AMZN/2026-10-31_8-K_0001018724-26-012345/ex991.htm",
   "filed_at": "2026-10-31T20:05:02Z",
   "discovered_at": "2026-10-31T20:05:08Z",
   "stored_at": "2026-10-31T20:05:09Z"
@@ -264,8 +272,8 @@ malformed or conflicting provenance fails explicitly; HEAD permission errors do
 not mean absence.
 
 S3 creation uses direct `PutObject(IfNoneMatch="*")`. Versioned ASCII JSON object
-metadata `finbot-provenance` records identity, CIK, original ticker/form/type, SEC
-URL and original discovery time; `finbot-content-type` records original type.
+metadata `finbot-provenance` version 2 records identity, CIK, original
+ticker/form/type, SEC URL, acceptance timestamp and original discovery time; `finbot-content-type` records original type.
 The provenance envelope is bounded to 1800 bytes, total user metadata to 2048
 bytes and S3 keys to 1024 UTF-8 bytes. HEAD LastModified/ContentLength/type establish
 stored facts for both initial writes and repair. A 412 reconciles existing content;

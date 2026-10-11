@@ -28,7 +28,9 @@ ACCESSION = "0000320193-26-000001"
 ARTIFACT = Artifact(accession_number=ACCESSION, company_cik="320193", ticker="AAPL", form_type="8-K",
     filename="Primary.htm", sec_url=f"https://www.sec.gov/Archives/edgar/data/320193/{ACCESSION.replace('-', '')}/Primary.htm",
     discovered_at=NOW)
-KEY = artifact_key(ARTIFACT.company_cik, ACCESSION, ARTIFACT.filename)
+FILING = Filing(accession_number=ACCESSION, company_cik="320193", ticker="AAPL", form_type="8-K",
+    filed_at=NOW, discovered_at=NOW, filing_index_url="https://www.sec.gov/index")
+KEY = artifact_key(ARTIFACT.ticker, ACCESSION, ARTIFACT.filename, filed_at=NOW, form_type="8-K")
 CONFIG = MessagingConfig("us-east-1", "arn:aws:sns:us-east-1:123456789012:artifacts",
                          "https://sqs.us-east-1.amazonaws.com/123456789012/failed")
 
@@ -42,7 +44,7 @@ def sdk(service):
 
 
 def head(**changes):
-    return {"Metadata": {"finbot-provenance": json.dumps(provenance(ARTIFACT), ensure_ascii=True, sort_keys=True),
+    return {"Metadata": {"finbot-provenance": json.dumps(provenance(ARTIFACT, FILING), ensure_ascii=True, sort_keys=True),
                          "finbot-content-type": '"text/html"'},
             "ContentLength": 3, "ContentType": "text/html", "LastModified": NOW, **changes}
 
@@ -54,7 +56,7 @@ def test_s3_conditional_put_head_and_exact_body():
             "Bucket": "finbot-artifacts", "Key": KEY, "IfNoneMatch": "*", "Body": b"\x00\xff\r",
             "ContentType": "text/html", "Metadata": head()["Metadata"]})
         stub.add_response("head_object", head(), {"Bucket": "finbot-artifacts", "Key": KEY})
-        stored = asyncio.run(store.put_if_absent(ARTIFACT, DownloadedDocument(b"\x00\xff\r", "text/html", ARTIFACT.sec_url)))
+        stored = asyncio.run(store.put_if_absent(ARTIFACT, FILING, DownloadedDocument(b"\x00\xff\r", "text/html", ARTIFACT.sec_url)))
         assert stored.stored_at == NOW and stored.size_bytes == 3
 
 
@@ -64,7 +66,7 @@ def test_conditional_conflicts_reconcile_first_object(status, code):
         store = S3ArtifactStore(execution, StorageConfig("finbot-artifacts"))
         stub.add_client_error("put_object", service_error_code=code, http_status_code=status)
         stub.add_response("head_object", head(), {"Bucket": "finbot-artifacts", "Key": KEY})
-        stored = asyncio.run(store.put_if_absent(ARTIFACT, DownloadedDocument(b"replacement", "text/plain", ARTIFACT.sec_url)))
+        stored = asyncio.run(store.put_if_absent(ARTIFACT, FILING, DownloadedDocument(b"replacement", "text/plain", ARTIFACT.sec_url)))
         assert stored.content_type == "text/html" and stored.size_bytes == 3
 
 
@@ -72,31 +74,49 @@ def test_s3_missing_object_only_unambiguous_404():
     with sdk("s3") as (execution, stub):
         store = S3ArtifactStore(execution, StorageConfig("finbot-artifacts"))
         stub.add_client_error("head_object", service_error_code="404", http_status_code=404)
-        assert asyncio.run(store.inspect(ARTIFACT)) is None
+        assert asyncio.run(store.inspect(ARTIFACT, FILING)) is None
         stub.add_client_error("head_object", service_error_code="NoSuchBucket", http_status_code=404)
         with pytest.raises(execution.client.exceptions.NoSuchBucket):
-            asyncio.run(store.inspect(ARTIFACT))
+            asyncio.run(store.inspect(ARTIFACT, FILING))
 
 
 @pytest.mark.parametrize("changes", [
     {"Metadata": {}}, {"ContentLength": 1000}, {"ContentType": "different"},
     {"Metadata": {"finbot-provenance": "broken", "finbot-content-type": "null"}},
-    {"Metadata": {"finbot-provenance": json.dumps({**provenance(ARTIFACT), "ticker": "WRONG"}), "finbot-content-type": "null"}},
-    {"Metadata": {"finbot-provenance": json.dumps({**provenance(ARTIFACT), "version": True}), "finbot-content-type": "null"}},
+    {"Metadata": {"finbot-provenance": json.dumps({**provenance(ARTIFACT, FILING), "ticker": "WRONG"}), "finbot-content-type": "null"}},
+    {"Metadata": {"finbot-provenance": json.dumps({**provenance(ARTIFACT, FILING), "version": True}), "finbot-content-type": "null"}},
 ])
 def test_existing_unverifiable_object_fails_without_replacement(changes):
     with sdk("s3") as (execution, stub):
         store = S3ArtifactStore(execution, StorageConfig("finbot-artifacts", max_artifact_bytes=10))
         stub.add_response("head_object", head(**changes))
         with pytest.raises(StorageConflict):
-            asyncio.run(store.inspect(ARTIFACT))
+            asyncio.run(store.inspect(ARTIFACT, FILING))
 
 
 def test_storage_limit_fails_before_sdk_call():
     with sdk("s3") as (execution, stub):
         store = S3ArtifactStore(execution, StorageConfig("finbot-artifacts", max_artifact_bytes=2))
         with pytest.raises(StorageLimitError):
-            asyncio.run(store.put_if_absent(ARTIFACT, DownloadedDocument(b"abc", None, ARTIFACT.sec_url)))
+            asyncio.run(store.put_if_absent(ARTIFACT, FILING, DownloadedDocument(b"abc", None, ARTIFACT.sec_url)))
+
+
+def test_storage_rejects_wrong_parent_before_sdk_call():
+    from dataclasses import replace
+    with sdk("s3") as (execution, stub):
+        store = S3ArtifactStore(execution, StorageConfig("finbot-artifacts"))
+        with pytest.raises(StorageConflict, match="parent filing"):
+            asyncio.run(store.inspect(ARTIFACT, replace(FILING, company_cik="1")))
+
+
+def test_storage_repair_rejects_changed_acceptance_provenance():
+    from dataclasses import replace
+    from datetime import timedelta
+    with sdk("s3") as (execution, stub):
+        store = S3ArtifactStore(execution, StorageConfig("finbot-artifacts"))
+        stub.add_response("head_object", head())
+        with pytest.raises(StorageConflict):
+            asyncio.run(store.inspect(ARTIFACT, replace(FILING, filed_at=NOW + timedelta(seconds=1))))
 
 
 def event():

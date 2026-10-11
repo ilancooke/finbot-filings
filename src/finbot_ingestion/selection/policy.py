@@ -11,7 +11,7 @@ from finbot_ingestion.config import ConfigurationError
 from finbot_ingestion.domain.validation import utc_datetime
 
 POLICY_VERSION = "earnings-acquisition-v1"
-DEFAULT_LIVE_START = "2026-10-10T00:00:00Z"
+DEFAULT_LIVE_START = "2026-10-09T04:00:00Z"
 MAX_ROUTING_PARSE_BYTES = 4 * 1024 * 1024
 PERIODIC_FORMS = frozenset({"10-Q", "10-Q/A", "10-K", "10-K/A"})
 DOCUMENT_SUFFIXES = frozenset({".htm", ".html", ".txt", ".pdf"})

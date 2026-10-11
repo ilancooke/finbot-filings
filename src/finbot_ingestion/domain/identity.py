@@ -1,7 +1,11 @@
 """Canonical identities; no content hashing or ticker-based identity."""
 
 import re
+from datetime import datetime
 from urllib.parse import unquote
+from zoneinfo import ZoneInfo
+
+from .validation import utc_datetime
 
 SUPPORTED_FORMS = frozenset({"8-K", "10-Q", "10-K", "8-K/A", "10-Q/A", "10-K/A"})
 ACCESSION_PATTERN = re.compile(r"[0-9]{10}-[0-9]{2}-[0-9]{6}")
@@ -53,5 +57,13 @@ def artifact_identity(accession_number: str, filename: str) -> str:
     return f"{normalize_accession_number(accession_number)}/{validate_filename(filename)}"
 
 
-def artifact_key(cik: str | int, accession_number: str, filename: str) -> str:
-    return f"{normalize_cik(cik)}/{artifact_identity(accession_number, filename)}"
+def artifact_key(ticker: str, accession_number: str, filename: str, *,
+                 filed_at: datetime, form_type: str) -> str:
+    """Readable storage location; stable artifact identity remains accession/name."""
+    ticker = normalize_ticker(ticker)
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9.-]*", ticker):
+        raise ValueError("ticker must be a safe S3 folder component")
+    day = utc_datetime(filed_at, "filed_at").astimezone(ZoneInfo("America/New_York")).date()
+    form = normalize_form(form_type).replace("/", "-")
+    accession = normalize_accession_number(accession_number)
+    return f"{ticker}/{day.isoformat()}_{form}_{accession}/{validate_filename(filename)}"

@@ -219,3 +219,32 @@ routing. Examples motivating the rule:
 [KDP release](https://www.sec.gov/Archives/edgar/data/1418135/000141813526000048/kdp-20260806.htm),
 [CNA release/supplement/deck](https://www.sec.gov/Archives/edgar/data/21175/000002117526000043/cna-20260803.htm),
 [EPR image-based deck](https://www.sec.gov/Archives/edgar/data/1045450/000104545026000022/q12026earningscallpresen.htm).
+
+<a id="adr-013"></a>
+## ADR 013 — Readable artifact folders and explicit acquisition reset
+
+**Accepted 2026-10-11.** Supersedes ADR 003's CIK-only S3 location and ADR 011's
+original cutoff value. Stable company/filing/artifact identities remain unchanged.
+S3 locations become `<ticker>/<YYYY-MM-DD>_<form>_<accession>/<original-filename>`;
+the date is SEC acceptance day in America/New_York, form slashes become hyphens,
+and the canonical original artifact ticker is used. Filenames retain case.
+Version 2 object provenance additionally records the parent acceptance timestamp.
+Conditional creation, immutable bytes and metadata-only event schema 1.0 remain.
+
+The user authorized restarting acquisition without downstream dependencies.
+The inclusive fixed cutoff becomes `2026-10-09T04:00:00Z` (October 9 midnight New
+York). This is an explicit reset scope, not automatic historical backfill. Normal
+restarts and newly enabled companies keep the same value.
+
+After validating/staging a compatible image at zero, delete all raw bucket object
+versions/delete markers and all Filings/Artifacts records. Clear Calendar filing
+satisfaction and historical failed-work messages, preserving Companies, calendar
+expectations/tombstones/sync, resources, policies and logs. Reacquire through normal
+recent-submissions discovery and the existing earnings selector. No rename/migration
+or legacy-key fallback is introduced. Pre-reset images are unsuitable active
+rollback targets. Preserve reset inventories and verification outside Git.
+
+Ticker changes affect future discoveries but do not rename existing objects; CIK
+remains identity. Revisit if historical symbol mapping or downstream consumers
+require another presentation. The one-time reset is an explicitly authorized
+exception to normal preservation rules, not a general repair procedure.

@@ -11,8 +11,8 @@ from .artifact_store import StoredArtifact
 from .errors import StorageConflict, StorageLimitError, StorageNotVisibleError
 
 
-def provenance(artifact):
-    return {"version": 1, "artifact_id": artifact.artifact_id, "cik": artifact.company_cik,
+def provenance(artifact, filing):
+    return {"version": 2, "filed_at": utc_text(filing.filed_at), "artifact_id": artifact.artifact_id, "cik": artifact.company_cik,
             "ticker": artifact.ticker, "form_type": artifact.form_type,
             "document_type": artifact.document_type, "sec_url": artifact.sec_url,
             "discovered_at": utc_text(artifact.discovered_at)}
@@ -22,8 +22,12 @@ class S3ArtifactStore:
     def __init__(self, execution, config):
         self.execution, self.config = execution, config
 
-    def _key(self, artifact):
-        key = artifact_key(artifact.company_cik, artifact.accession_number, artifact.filename)
+    def _key(self, artifact, filing):
+        if (artifact.accession_number, artifact.company_cik, artifact.form_type) != (
+                filing.accession_number, filing.company_cik, filing.form_type):
+            raise StorageConflict("artifact disagrees with parent filing")
+        key = artifact_key(artifact.ticker, artifact.accession_number, artifact.filename,
+                           filed_at=filing.filed_at, form_type=artifact.form_type)
         if len(key.encode("utf-8")) > 1024:
             raise StorageLimitError("S3 key exceeds 1024 UTF-8 bytes")
         return key
@@ -39,8 +43,8 @@ class S3ArtifactStore:
                 return None
             raise
 
-    async def inspect(self, artifact):
-        key = self._key(artifact)
+    async def inspect(self, artifact, filing):
+        key = self._key(artifact, filing)
         head = await self._head(key)
         if head is None:
             return None
@@ -50,7 +54,7 @@ class S3ArtifactStore:
             if not isinstance(raw, str) or len(raw.encode("ascii")) > 1800:
                 raise ValueError("invalid provenance header")
             observed = json.loads(raw)
-            if not isinstance(observed, dict) or type(observed.get("version")) is not int or observed != provenance(artifact):
+            if not isinstance(observed, dict) or type(observed.get("version")) is not int or observed != provenance(artifact, filing):
                 raise ValueError("source provenance mismatch")
             content_type = json.loads(metadata["finbot-content-type"])
             if content_type is not None and head.get("ContentType") != content_type:
@@ -62,8 +66,8 @@ class S3ArtifactStore:
         except (KeyError, ValueError, TypeError, UnicodeError) as exc:
             raise StorageConflict("existing S3 object lacks compatible, valid provenance") from exc
 
-    async def put_if_absent(self, artifact, downloaded):
-        key = self._key(artifact)
+    async def put_if_absent(self, artifact, filing, downloaded):
+        key = self._key(artifact, filing)
         if not isinstance(downloaded.content, bytes) or len(downloaded.content) > self.config.max_artifact_bytes:
             raise StorageLimitError("artifact exceeds MAX_ARTIFACT_BYTES or is not bytes")
         # Redirected official SEC source is allowed; persist canonical original URL.
@@ -73,7 +77,7 @@ class S3ArtifactStore:
         if content_type is not None and (not isinstance(content_type, str) or not content_type
                 or any(ord(c) < 32 or ord(c) > 126 for c in content_type)):
             raise StorageLimitError("content type is not a safe HTTP header")
-        metadata = {"finbot-provenance": json.dumps(provenance(artifact), ensure_ascii=True, sort_keys=True),
+        metadata = {"finbot-provenance": json.dumps(provenance(artifact, filing), ensure_ascii=True, sort_keys=True),
                     "finbot-content-type": json.dumps(content_type, ensure_ascii=True)}
         if len(metadata["finbot-provenance"].encode("ascii")) > 1800 or sum(
                 len(k.encode("ascii")) + len(v.encode("ascii")) for k, v in metadata.items()) > 2048:
@@ -89,22 +93,22 @@ class S3ArtifactStore:
                 # A server error can also be an ambiguous success. Inspect before retry.
                 if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0) < 500:
                     raise
-                existing = await self.inspect(artifact)
+                existing = await self.inspect(artifact, filing)
                 if existing is not None:
                     return existing
                 raise
-            existing = await self.inspect(artifact)
+            existing = await self.inspect(artifact, filing)
             if existing is None:
                 if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 409:
                     raise
                 raise StorageNotVisibleError("conflicting object is not inspectable") from exc
             return existing
         except (HTTPClientError, EndpointConnectionError, ConnectionClosedError):
-            existing = await self.inspect(artifact)
+            existing = await self.inspect(artifact, filing)
             if existing is not None:
                 return existing
             raise
-        stored = await self.inspect(artifact)
+        stored = await self.inspect(artifact, filing)
         if stored is None:
             raise StorageNotVisibleError("successful S3 write is not inspectable")
         if stored.size_bytes != len(downloaded.content) or stored.content_type != content_type:

@@ -109,7 +109,7 @@ def test_stopped_fargate_and_no_ingress(templates):
     assert env["RUNTIME_METRICS_ENVIRONMENT"] == "example"
     assert env["CALENDAR_PROVIDER"] == "placeholder"
     assert env["CALENDAR_LOOKAHEAD_DAYS"] == "30"
-    assert env["LIVE_INGESTION_START_AT"] == "2026-10-10T00:00:00Z"
+    assert env["LIVE_INGESTION_START_AT"] == "2026-10-09T04:00:00Z"
     assert "@sha256:" in str(c["Image"])
     assert not resources(runtime, "AWS::EC2::SecurityGroupIngress")
     assert all(not r["Properties"].get("SecurityGroupIngress") for r in resources(runtime, "AWS::EC2::SecurityGroup"))

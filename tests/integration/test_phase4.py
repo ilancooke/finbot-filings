@@ -495,7 +495,7 @@ def test_unicode_filename_and_uri_escaping_preserve_raw_identity(system):
         assert stored.filename == "résumé #?.PDF"
         uri = urlsplit(stored.s3_uri)
         assert not uri.query and not uri.fragment
-        assert unquote(uri.path.lstrip("/")) == artifact_key(child.company_cik, child.accession_number, child.filename)
+        assert unquote(uri.path.lstrip("/")) == artifact_key(child.ticker, child.accession_number, child.filename, filed_at=make_filing().filed_at, form_type=child.form_type)
         assert all(value.isascii() for _, head in system.s3.objects.values() for value in head["Metadata"].values())
     run(scenario())
 
@@ -521,7 +521,7 @@ def test_lost_enumeration_commit_ack_recovers_every_known_child(system, monkeypa
 def test_existing_unverifiable_s3_object_terminalizes_without_replacing_bytes(system):
     async def scenario():
         child = await seed(system)
-        key = artifact_key(child.company_cik, child.accession_number, child.filename)
+        key = artifact_key(child.ticker, child.accession_number, child.filename, filed_at=make_filing().filed_at, form_type=child.form_type)
         system.s3.objects[(BUCKET, key)] = (RAW, {"Metadata": {}, "ContentLength": len(RAW), "LastModified": NOW})
         original = deepcopy(system.s3.objects)
         assert await system.worker().process_artifact(child.artifact_id) == Outcome.TERMINAL
@@ -541,12 +541,12 @@ def test_whole_artifact_workflow_admission_bounds_retained_bytes_through_publica
         w = system.worker(max_inflight_artifacts=1)
         active, maximum = 0, 0
         acquire, publish = w.downloader.acquire, w.publisher.publish_artifact_ready
-        async def observe_acquire(child):
+        async def observe_acquire(child, parent):
             nonlocal active, maximum
             active += 1
             maximum = max(maximum, active)
             await asyncio.sleep(0)
-            return await acquire(child)
+            return await acquire(child, parent)
         async def observe_publish(event):
             nonlocal active
             assert active == 1

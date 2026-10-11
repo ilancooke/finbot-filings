@@ -257,7 +257,7 @@ def test_500_company_capacity_replay(system, tmp_path, monkeypatch, active, inte
         await system.db.filings.create_if_absent(old)
         await PackageCheckpoint(system.db.filings, system.db.artifacts).persist(old, [child],
             primary_document_name="old.htm", completed_at=NOW - timedelta(days=359))
-        stored = await worker.downloader.store.put_if_absent(child, DownloadedDocument(b"old bytes", "text/html", child.sec_url))
+        stored = await worker.downloader.store.put_if_absent(child, old, DownloadedDocument(b"old bytes", "text/html", child.sec_url))
         await system.db.artifacts.mark_stored(child.artifact_id, stored.s3_uri, stored.stored_at, stored.content_type, stored.size_bytes)
         system.db.memory.index_snapshots["PendingArtifactWork"] = []
         config = RuntimeConfig(active_poll_seconds=interval, tick_seconds=.1, reload_seconds=10000,

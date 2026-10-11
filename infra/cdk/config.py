@@ -31,7 +31,7 @@ class InfraConfig:
     calendar_full_refresh_seconds: float = 86400
     calendar_near_term_refresh_seconds: float = 0
     yahoo_cache_dir: str = "/tmp/finbot-yahoo"
-    live_ingestion_start_at: str = "2026-10-10T00:00:00Z"
+    live_ingestion_start_at: str = "2026-10-09T04:00:00Z"
 
     def __post_init__(self):
         try:

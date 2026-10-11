@@ -180,9 +180,9 @@ public-availability instant. Missing, invalid or naive acceptance timestamps fai
 filing/report dates never substitute. Parsing returns all supported recent rows
 without a count cutoff, then admission applies `earnings-acquisition-v1`:
 
-- `LIVE_INGESTION_START_AT` defaults to **2026-10-10T00:00:00Z**, inclusive, using
-  SEC acceptance time. Keep this fixed across restarts/deployments and newly enabled
-  companies; it is not a rolling lookback or today's date.
+- `LIVE_INGESTION_START_AT` defaults to **2026-10-09T04:00:00Z**, inclusive, using
+  SEC acceptance time (October 9 midnight in America/New_York). Keep this fixed
+  across restarts/deployments and newly enabled companies; it is not a rolling lookback or today's date.
 - 8-K/8-K/A require unambiguous Item 2.02 evidence. Known non-earnings filings are
   skipped. Missing evidence may be resolved from index metadata or structural
   primary-report headings; unresolved/conflicting evidence stays visible.
@@ -212,8 +212,14 @@ remains deferred. Primary bytes fetched for routing use the same immutable stora
 path instead of a second download.
 
 Artifact IDs are `<dashed-accession>/<original-filename>`; filenames preserve case
-and must be safe basenames. S3 keys are `<10-digit-cik>/<artifact-id>`. S3 URI paths
-are percent-encoded; consumers decode the URI path to obtain the original key.
+and must be safe basenames. S3 keys are
+`<ticker>/<YYYY-MM-DD>_<form>_<accession>/<original-filename>`. The folder date is
+the SEC acceptance day in America/New_York, not discovery time;
+amendment form labels replace `/` with `-` (for example `10-K-A`). The canonical
+artifact ticker is retained across rediscovery. Ticker folders allow letters,
+digits, dots and hyphens and must start with a letter or digit. CIK/accession
+remain stable identities. S3 URI paths are percent-encoded; consumers decode the
+URI path to obtain the original key.
 No application content hashes or interpretation are used. Amendments create new
 immutable records and objects, preserving historical information sets.
 
@@ -465,3 +471,13 @@ Automatic ECS recovery uses min/max 0/100, a 120-second stop timeout and a
 not formal cross-process exclusion. The quiet period alone adds 2.5 minutes to
 recovery and can substantially delay active-window earnings discovery; follow
 [ARCH-001](docs/BACKLOG.md#arch-001--recovery-delay).
+
+## Readable storage layout and acquisition reset
+
+Current objects use, for example,
+`DAL/2026-10-09_10-Q_0000027904-26-000038/dal-20260930.htm`. Storage provenance
+version 2 includes the canonical SEC acceptance timestamp. Earlier CIK-only
+layouts are not migrated or searched as a fallback. A layout transition needs the
+explicit stopped-service reset in [DEPLOYMENT](docs/DEPLOYMENT.md#explicit-acquisition-reset).
+The operator-only `scripts/reset_acquisition.py` inventories by default; it is
+never part of normal ingestion or container startup. See [ADR 013](docs/DECISIONS.md#adr-013).

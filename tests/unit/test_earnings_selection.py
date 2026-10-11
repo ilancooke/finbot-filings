@@ -12,7 +12,7 @@ from finbot_ingestion.sec.urls import document_url, filing_index_url
 from finbot_ingestion.selection.policy import (AcquisitionPolicy, Decision, document_decision,
     primary_exhibits, primary_items, image_only_html, POLICY_VERSION)
 
-CUT = datetime(2026, 10, 10, tzinfo=timezone.utc)
+CUT = datetime(2026, 10, 9, 4, tzinfo=timezone.utc)
 ACC = "0001418135-26-000048"
 FILING = Filing(accession_number=ACC, company_cik="1418135", ticker="KDP", form_type="8-K",
     filed_at=CUT, discovered_at=CUT, primary_document_name="primary.htm",

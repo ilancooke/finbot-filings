@@ -60,7 +60,7 @@ schema/policy checks in [infra/validation](../infra/validation/README.md).
 | `calendar_lookahead_days` | 30 inclusive dates; validated 3–360 |
 | `calendar_full_refresh_seconds`, `calendar_near_term_refresh_seconds` | 86400 / 0 after completion |
 | `yahoo_cache_dir` | Private writable `/tmp/finbot-yahoo` |
-| `live_ingestion_start_at` | Fixed inclusive `2026-10-10T00:00:00Z` |
+| `live_ingestion_start_at` | Fixed inclusive `2026-10-09T04:00:00Z` |
 | `alarm_email`, `alarm_action_arn` | Mutually exclusive managed email/existing topic |
 | `monitoring_enabled` | Notification actions; default false, independent of ingestion |
 | `sec_error_threshold`, `publish_error_threshold` | Initially 10 / 3 per minute |
@@ -424,3 +424,45 @@ Recorded production references: account `559007813222`, region `us-east-1`,
 [Saved GitHub variables](../infra/github/production-variables.env) retain reviewed
 targets. Obtain current stack outputs before operations; historical references
 are not authorization.
+
+## Explicit acquisition reset
+
+ADR 013 authorizes the October 2026 layout transition. Repeating a destructive
+reset requires a new explicit operator scope. Validate the application/CDK tests,
+ARM64 image, offline container lifecycle and template diff first. Pause GitHub
+delivery, verify no release is running, stop/wait for actual STOPPED tasks, then
+stage the compatible image and cutoff with CDK at desired zero. Update the saved
+GitHub baseline ARN. Do not activate an earlier image against the new layout.
+
+The reset helper is intentionally scoped to the recorded production account,
+region, raw bucket, service and tables. Its default command is read-only:
+
+```bash
+.venv/bin/python scripts/reset_acquisition.py --profile default \
+  --manifest /private/tmp/finbot-acquisition-reset-NEW-ID.json
+```
+
+Review counts and exact keys/versions before the explicit execution:
+
+```bash
+.venv/bin/python scripts/reset_acquisition.py --profile default \
+  --manifest /private/tmp/finbot-acquisition-reset-NEW-ID.json --execute
+```
+
+It requires zero desired/running/pending tasks and all observed tasks STOPPED.
+It deletes version IDs and delete markers, Filings/Artifacts rows, only Calendar's
+`__event_satisfaction__` partition, and purges failed-work SQS. Companies and all
+other calendar records remain. It checks the account/staged task definition,
+refuses unplanned inventory additions, checks per-object errors, retries unprocessed
+DynamoDB writes, waits for queue purge and verifies empty reset targets before exit.
+The adjacent `.verified.json` records successful verification. It never starts
+ingestion or changes infrastructure/IAM. If interrupted, keep stopped, inspect
+remaining inventory and resume from the same manifest (or review a new inventory).
+Do not blindly retry an SQS purge still in progress.
+
+Only after verified empty state, activate the compatible digest via the normal
+release path. Verify the fixed cutoff, readable keys, original bytes/provenance,
+durable selected/stored/published checkpoints, calendar health and queue alarms.
+Deletion is permanent and downloads incur fresh provider/AWS request activity.
+Preserve inventory/results outside Git; log history and older dated deployment
+evidence remain historical, even though their referenced data was reset.

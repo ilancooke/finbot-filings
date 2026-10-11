@@ -12,5 +12,5 @@
   "calendar_full_refresh_seconds": 86400,
   "calendar_near_term_refresh_seconds": 0,
   "yahoo_cache_dir": "/tmp/finbot-yahoo",
-  "live_ingestion_start_at": "2026-10-10T00:00:00Z"
+  "live_ingestion_start_at": "2026-10-09T04:00:00Z"
 }

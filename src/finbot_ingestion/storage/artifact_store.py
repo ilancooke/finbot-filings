@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from finbot_ingestion.domain import Artifact
+from finbot_ingestion.domain import Artifact, Filing
 from finbot_ingestion.domain.validation import utc_datetime, validate_s3_uri
 from finbot_ingestion.sec.client import DownloadedDocument
 
@@ -24,5 +24,5 @@ class StoredArtifact:
 
 
 class ArtifactStore(Protocol):
-    async def inspect(self, artifact: Artifact) -> StoredArtifact | None: ...
-    async def put_if_absent(self, artifact: Artifact, downloaded: DownloadedDocument) -> StoredArtifact: ...
+    async def inspect(self, artifact: Artifact, filing: Filing) -> StoredArtifact | None: ...
+    async def put_if_absent(self, artifact: Artifact, filing: Filing, downloaded: DownloadedDocument) -> StoredArtifact: ...

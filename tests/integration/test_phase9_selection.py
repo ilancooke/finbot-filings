@@ -159,7 +159,7 @@ def test_legacy_pending_attachment_is_removed_from_indexes_without_erasing_facts
         identity = ACCESSION + '/graphic.jpg'
         if stored:
             child = await system.db.artifacts.get(identity)
-            saved = await system.store.put_if_absent(child, DownloadedDocument(b'old graphic', 'image/jpeg', child.sec_url))
+            saved = await system.store.put_if_absent(child, filing, DownloadedDocument(b'old graphic', 'image/jpeg', child.sec_url))
             await system.db.artifacts.mark_stored(identity, saved.s3_uri, saved.stored_at, saved.content_type, saved.size_bytes)
         old = await system.db.artifacts.get(identity)
         assert await worker.process_artifact(identity) == Outcome.SKIPPED

@@ -218,7 +218,7 @@ class DiscoveryService:
             return
         # The primary was already fetched to route exhibits. Preserve these exact
         # bytes through the same inspect/conditional-put path; do not keep a cache.
-        stored = await self.downloader.acquire(child, downloaded=downloaded)
+        stored = await self.downloader.acquire(child, filing, downloaded=downloaded)
         await self.control.checkpoint(lambda: self.artifacts.mark_stored(identity,
             stored.s3_uri, stored.stored_at, stored.content_type, stored.size_bytes),
             operation="mark_stored", identity=identity)
