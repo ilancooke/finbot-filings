@@ -400,7 +400,8 @@ reset completed **2026-10-11 UTC (October 11 locally)** under ADR 013.
 | Preserved configuration | Exact strong-read comparison retained all 50 Companies and 48 non-satisfaction Calendar records |
 | Failed-work alarms | Both Visible and Age alarms returned OK at `16:25:53Z` and `16:25:36Z`, respectively |
 | Runtime | Matching/non-stale/configured calendar, zero startup queues/recovery errors; SEC polling resumed after the normal quiet period |
-| Fresh-download observation | No eligible filing/object in the immediate startup window; first safety polls are staggered over an hour. New key/date/provenance behavior passed offline tests; fresh production storage/publication observation remains OPS-002 |
+| Fresh acquisition | HOVR's October 9 10-Q (`0001213900-26-108211`) and earnings 8-K (`0001213900-26-108213`) rediscovered at `16:30:10Z`; three selected HTML artifacts stored/published, zero retries/pending/terminal facts; parent enumerated child counts 1/2 |
+| Live object verification | Three `HOVR/2026-10-09_{10-Q,8-K}_<accession>/<filename>` objects; HEAD sizes 487,327/32,065/21,073 bytes agree with database, SSE-S3 and version 2 acceptance provenance verified; matching new S3 URIs and publication checkpoints |
 
 Reset inventory and verification remain outside Git under
 `/private/tmp/finbot-acquisition-reset-20261011-readable{,.verified}.json`, with
@@ -410,6 +411,11 @@ transient-error retries. No database deletion occurred in the failed attempt.
 Historical terminal records and queue messages were deliberately removed under
 the reset scope; they were not repaired/redriven. Older logs and the dated evidence
 below remain historical.
+
+Fresh acquisition evidence is `/private/tmp/finbot-layout-live-evidence.json`.
+Storage and acknowledged SNS publication were verified; downstream receipt was
+not tested. First safety polls remain staggered across an hour, so additional
+companies repopulate through the normal schedule.
 
 Automatic GitHub delivery was restored after the reset. Pre-reset images remain
 unsuitable active rollback targets for this layout.

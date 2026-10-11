@@ -55,10 +55,11 @@ evaluation and failed-work queue state have different meanings.
 ## OPS-002 — Observe live selection and daily calendar operation
 
 Filtering subsequently stored/published DAL's `0000027904-26-000038/dal-20260930.htm`
-before the explicit acquisition reset. The new-layout restart is healthy and
-polling, but no fresh download was observed in its immediate startup window.
-Observe selected primary/release/supplement artifacts, exclusions, routing warnings
-and new-layout S3/database/publication checkpoints as polling repopulates state.
+before the explicit acquisition reset. After restart, HOVR's October 9 10-Q and
+earnings 8-K produced three selected/stored/published HTML artifacts under the
+new readable keys; size, acceptance provenance and parent/child checkpoints were
+verified with no retries/pending/terminal facts. Continue observing selected
+release/supplement artifacts, exclusions and routing warnings as polling repopulates state.
 Verify ongoing daily Yahoo scope/freshness, coverage gaps, provider
 access arrangements, recovery reliability and sustained memory use. Local/cloud
 collection success is not complete all-company coverage or long-term reliability.
