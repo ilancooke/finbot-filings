@@ -130,6 +130,37 @@ def test_s3_delete_errors_stop_before_database_or_queue_changes(system):
     assert not system.db.deleted and not system.sqs.purged
 
 
+def test_s3_partial_transient_error_retries_only_failed_version(system):
+    plan = reset.inventory(system.s3, system.db)
+    original_delete = system.s3.delete_objects
+    attempts = []
+    def partial_delete(**kwargs):
+        objects = kwargs['Delete']['Objects']
+        attempts.append(deepcopy(objects))
+        if len(attempts) == 1:
+            original_delete(**{**kwargs, 'Delete': {'Objects': objects[:1]}})
+            return {'Errors': [{'Code': 'InternalError', **objects[1]}]}
+        return original_delete(**kwargs)
+    system.s3.delete_objects = partial_delete
+    sleeps = []
+    reset.reset(system.s3, system.db, system.sqs, system.ecs, plan, sleep=sleeps.append)
+    assert attempts == [plan['versions'], plan['versions'][1:]]
+    assert system.s3.deleted == plan['versions'] and system.sqs.purged
+    assert sleeps == [1, 1, 60]
+
+
+def test_s3_transient_error_retry_budget_is_bounded(system):
+    plan = reset.inventory(system.s3, system.db)
+    attempts = []
+    def unavailable(**kwargs):
+        attempts.append(kwargs)
+        return {'Errors': [{'Code': 'ServiceUnavailable', **v} for v in kwargs['Delete']['Objects']]}
+    system.s3.delete_objects = unavailable
+    with pytest.raises(RuntimeError, match='ServiceUnavailable'):
+        reset.reset(system.s3, system.db, system.sqs, system.ecs, plan, sleep=lambda _: None)
+    assert len(attempts) == 5 and not system.db.deleted and not system.sqs.purged
+
+
 def test_partial_reset_can_resume_from_original_inventory(system):
     plan = reset.inventory(system.s3, system.db)
     system.s3.versions.pop()

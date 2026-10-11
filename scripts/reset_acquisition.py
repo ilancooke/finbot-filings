@@ -84,11 +84,21 @@ def reset(s3, db, sqs, ecs, planned, *, sleep=time.sleep):
             any(not subset(rows, planned['tables'][table]) for table, rows in current['tables'].items())):
         raise RuntimeError('inventory contains unplanned records; preserve evidence and review a new inventory')
     for start in range(0, len(current['versions']), 1000):
-        stopped(ecs)
-        response = s3.delete_objects(Bucket=BUCKET, ExpectedBucketOwner=ACCOUNT,
-            Delete={'Objects': current['versions'][start:start + 1000], 'Quiet': True})
-        if response.get('Errors'):
-            raise RuntimeError('S3 version deletion returned errors; ingestion remains stopped')
+        pending = current['versions'][start:start + 1000]
+        for attempt in range(5):
+            stopped(ecs)
+            response = s3.delete_objects(Bucket=BUCKET, ExpectedBucketOwner=ACCOUNT,
+                Delete={'Objects': pending, 'Quiet': True})
+            errors = response.get('Errors', [])
+            if not errors:
+                break
+            if (attempt == 4 or any(e.get('Code') not in {'InternalError', 'ServiceUnavailable', 'SlowDown'}
+                                    for e in errors)):
+                raise RuntimeError(f'S3 version deletion returned errors; ingestion remains stopped: {errors}')
+            pending = [{'Key': e['Key'], 'VersionId': e['VersionId']} for e in errors]
+            sleep(2 ** attempt)
+        if start % 10000 == 0:
+            print(json.dumps({'s3_versions_processed': min(start + 1000, len(current['versions']))}), flush=True)
     for table, rows in current['tables'].items():
         stopped(ecs)
         for start in range(0, len(rows), 25):
@@ -101,6 +111,8 @@ def reset(s3, db, sqs, ecs, planned, *, sleep=time.sleep):
                 sleep(min(2 ** attempt, 10))
             if pending:
                 raise RuntimeError('DynamoDB deletion retry budget exhausted; ingestion remains stopped')
+            if start % 10000 == 0:
+                print(json.dumps({'table': table, 'records_processed': min(start + 25, len(rows))}), flush=True)
     stopped(ecs)
     sqs.purge_queue(QueueUrl=QUEUE)
     # SQS purge can take 60 seconds, including messages currently in flight.
