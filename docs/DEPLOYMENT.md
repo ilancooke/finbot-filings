@@ -406,7 +406,18 @@ Clear selected documents can proceed with unresolved attachments omitted.
 
 ## Last recorded verification
 
-These are dated observations, **not a fresh live inspection**. The readable-layout
+These are dated observations, **not a fresh live inspection**.
+
+### Cutoff and configuration rollout (2026-10-12 UTC)
+
+ADRs 014–015 were deployed via [run 38199947638](https://github.com/ilancooke/finbot-filings/actions/runs/38199947638).
+CDK/GitHub baseline is revision 16; active revision 17 was verified healthy with
+cutoff `2026-10-06T04:00:00Z`, matching image, non-stale calendar and resumed SEC
+polling. Automatic delivery is enabled. No acquisition reset was performed.
+
+### Readable-layout reset (2026-10-11 UTC)
+
+The readable-layout
 reset completed **2026-10-11 UTC (October 11 locally)** under ADR 013.
 
 | Evidence | Recorded result |

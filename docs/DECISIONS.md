@@ -252,7 +252,7 @@ exception to normal preservation rules, not a general repair procedure.
 <a id="adr-014"></a>
 ## ADR 014 — Move the fixed live cutoff to October 6
 
-**Accepted 2026-10-11; implementation complete, production rollout pending.**
+**Accepted 2026-10-11; production configured 2026-10-12 UTC.**
 Supersedes only ADR 013's cutoff value. The user requested the fixed inclusive
 cutoff `2026-10-06T04:00:00Z` (October 6 midnight in America/New_York).
 Application and CDK defaults and deployment inputs use this value; production
@@ -267,7 +267,7 @@ value; explicit historical backfill remains deferred under ADR 011.
 <a id="adr-015"></a>
 ## ADR 015 — Track production settings separately from private inputs
 
-**Accepted 2026-10-11; production rollout pending.** Supersedes the single ignored
+**Accepted 2026-10-11; implemented and deployed 2026-10-12 UTC.** Supersedes the single ignored
 production configuration file. Track deployment settings, including the fixed
 live cutoff and approved image digest, in `infra/cdk/config.prod.json`.
 The ignored `config.local.json` retains only `account`, `sec_user_agent`, and
