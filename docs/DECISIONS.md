@@ -248,3 +248,40 @@ Ticker changes affect future discoveries but do not rename existing objects; CIK
 remains identity. Revisit if historical symbol mapping or downstream consumers
 require another presentation. The one-time reset is an explicitly authorized
 exception to normal preservation rules, not a general repair procedure.
+
+<a id="adr-014"></a>
+## ADR 014 — Move the fixed live cutoff to October 6
+
+**Accepted 2026-10-11; implementation complete, production rollout pending.**
+Supersedes only ADR 013's cutoff value. The user requested the fixed inclusive
+cutoff `2026-10-06T04:00:00Z` (October 6 midnight in America/New_York).
+Application and CDK defaults and deployment inputs use this value; production
+adoption follows the existing CDK/release procedure.
+
+Normal recent-submissions discovery applies the existing earnings selector to
+newly eligible filings. Existing bytes/checkpoints remain unchanged; previously
+checkpointed exclusions do not automatically reopen. No data reset or historical
+traversal is introduced. Restarts and newly enabled companies retain this fixed
+value; explicit historical backfill remains deferred under ADR 011.
+
+<a id="adr-015"></a>
+## ADR 015 — Track production settings separately from private inputs
+
+**Accepted 2026-10-11; production rollout pending.** Supersedes the single ignored
+production configuration file. Track deployment settings, including the fixed
+live cutoff and approved image digest, in `infra/cdk/config.prod.json`.
+The ignored `config.local.json` retains only `account`, `sec_user_agent`, and
+optional `alarm_email`, preserving the existing SEC and alarm contacts separately.
+
+Select the public and private files explicitly through `FINBOT_INFRA_CONFIG`
+and `FINBOT_INFRA_PRIVATE_CONFIG`. Reject private deployment overrides and
+private fields in the public input when using the split. Keep standalone dummy
+fixture synthesis supported with the matching public/private example pair and
+without real private input or AWS access. Existing local
+files require a one-time split; no fallback silently loads old configuration.
+
+This makes production settings reviewable in Git while respecting the user's
+public-repository privacy preferences. Existing historical account references
+are outside this change. Normal CDK/release handoff and manual infrastructure
+ownership remain unchanged; no AWS resources or durable data are changed by
+editing these files.

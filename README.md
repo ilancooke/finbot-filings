@@ -157,8 +157,8 @@ public-availability instant. Missing, invalid or naive acceptance timestamps fai
 filing/report dates never substitute. Parsing returns all supported recent rows
 without a count cutoff, then admission applies `earnings-acquisition-v1`:
 
-- `LIVE_INGESTION_START_AT` defaults to **2026-10-09T04:00:00Z**, inclusive, using
-  SEC acceptance time (October 9 midnight in America/New_York). Keep this fixed
+- `LIVE_INGESTION_START_AT` defaults to **2026-10-06T04:00:00Z**, inclusive, using
+  SEC acceptance time (October 6 midnight in America/New_York). Keep this fixed
   across restarts/deployments and newly enabled companies; it is not a rolling lookback or today's date.
 - 8-K/8-K/A require unambiguous Item 2.02 evidence. Known non-earnings filings are
   skipped. Missing evidence may be resolved from index metadata or structural
@@ -384,8 +384,13 @@ filter Service = "finbot-ingestion" and Environment = "prod"
 ## Configuration reference
 
 Production environment values come from the CDK-managed ECS task definition.
-CDK reads deployment inputs from the JSON file selected by `FINBOT_INFRA_CONFIG`,
-typically the ignored `infra/cdk/config.local.json`; see [DEPLOYMENT](docs/DEPLOYMENT.md).
+CDK reads tracked production settings from `infra/cdk/config.prod.json`, selected
+by `FINBOT_INFRA_CONFIG`. `FINBOT_INFRA_PRIVATE_CONFIG` selects the ignored
+`infra/cdk/config.local.json`, containing only `account`, `sec_user_agent`, and
+optional `alarm_email`. Private inputs cannot override the cutoff, image digest,
+or other deployment settings. See [DEPLOYMENT](docs/DEPLOYMENT.md) for commands.
+Default offline synthesis uses `config.example.json` with
+`config.private.example.json`, mirroring the production split with dummy values.
 Optional runtime settings use Python defaults when absent from the process
 environment. Explicit environment values take precedence. The tables below
 document required settings and optional defaults without requiring an environment
@@ -581,7 +586,7 @@ commands and reviewed warnings are documented in
 [infra/validation](infra/validation/README.md).
 GitHub production-environment settings and non-secret deployment variables are saved under
 [infra/github](infra/github/README.md), applied with the standard `gh` CLI.
-For Yahoo, set `calendar_provider` to `yahoo` in the CDK JSON configuration.
+For Yahoo, set `calendar_provider` to `yahoo` in the tracked CDK JSON configuration.
 It emits the explicit provider, 30-day/daily defaults,
 one outer attempt and a writable `/tmp` cache path; desired count stays zero.
 See [Yahoo contracts](docs/ARCHITECTURE.md#yahoo-calendar-synchronization) and

@@ -10,9 +10,16 @@ from state_stack import StateStack
 from ingestion_stack import IngestionStack
 
 
+def fixture_config():
+    directory = Path(__file__).parents[1]
+    return replace(InfraConfig.read(directory / "config.example.json",
+        private_path=directory / "config.private.example.json"),
+        monitoring_enabled=False, alarm_email=None, calendar_provider="placeholder")
+
+
 @pytest.fixture(scope="module")
 def templates():
-    config = InfraConfig.read(Path(__file__).parents[1] / "config.example.json")
+    config = fixture_config()
     app = App()
     env = Environment(account=config.account, region=config.region)
     state = StateStack(app, "state", config=config, env=env)
@@ -109,7 +116,7 @@ def test_stopped_fargate_and_no_ingress(templates):
     assert env["RUNTIME_METRICS_ENVIRONMENT"] == "example"
     assert env["CALENDAR_PROVIDER"] == "placeholder"
     assert env["CALENDAR_LOOKAHEAD_DAYS"] == "30"
-    assert env["LIVE_INGESTION_START_AT"] == "2026-10-09T04:00:00Z"
+    assert env["LIVE_INGESTION_START_AT"] == "2026-10-06T04:00:00Z"
     assert "@sha256:" in str(c["Image"])
     assert not resources(runtime, "AWS::EC2::SecurityGroupIngress")
     assert all(not r["Properties"].get("SecurityGroupIngress") for r in resources(runtime, "AWS::EC2::SecurityGroup"))
@@ -119,7 +126,7 @@ def test_stopped_fargate_and_no_ingress(templates):
 
 
 def test_yahoo_selection_is_explicit_and_does_not_activate_or_add_resources():
-    config = replace(InfraConfig.read(Path(__file__).parents[1] / "config.example.json"), calendar_provider="yahoo")
+    config = replace(fixture_config(), calendar_provider="yahoo")
     app = App()
     env = Environment(account=config.account, region=config.region)
     state = StateStack(app, "yahoo-state", config=config, env=env)
@@ -141,7 +148,7 @@ def test_oidc_and_liveness_alarms(templates):
     trusts = [r["Properties"]["AssumeRolePolicyDocument"]["Statement"] for r in resources(runtime, "AWS::IAM::Role")]
     oidc = [s for group in trusts for s in group if s["Action"] == "sts:AssumeRoleWithWebIdentity"][0]
     assert oidc["Condition"]["StringEquals"]["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
-    assert oidc["Condition"]["StringEquals"]["token.actions.githubusercontent.com:sub"] == "repo:EXAMPLE/finbot-filings:ref:refs/heads/main"
+    assert oidc["Condition"]["StringEquals"]["token.actions.githubusercontent.com:sub"] == "repo:EXAMPLE/finbot-filings:environment:production"
     alarms = [a["Properties"] for a in resources(runtime, "AWS::CloudWatch::Alarm")]
     assert len(alarms) == 11 and not any(a["ActionsEnabled"] for a in alarms)
     liveness = next(a for a in alarms if a.get("MetricName") == "RuntimeHealthy")
@@ -152,7 +159,7 @@ def test_oidc_and_liveness_alarms(templates):
 
 @pytest.mark.parametrize("enabled", [False, True])
 def test_managed_email_alarm_routing_preserves_runtime(templates, enabled):
-    config = replace(InfraConfig.read(Path(__file__).parents[1] / "config.example.json"),
+    config = replace(fixture_config(),
         alarm_email="operator@example.invalid", monitoring_enabled=enabled)
     app = App()
     env = Environment(account=config.account, region=config.region)
@@ -195,7 +202,7 @@ def test_managed_email_alarm_routing_preserves_runtime(templates, enabled):
     {"monitoring_enabled": True}, {"live_ingestion_start_at": "2026-10-10"},
     {"live_ingestion_start_at": "2026-10-10T00:00:00"}, {"live_ingestion_start_at": ""}])
 def test_invalid_config_fails_without_aws(changes):
-    config = InfraConfig.read(Path(__file__).parents[1] / "config.example.json")
+    config = fixture_config()
     with pytest.raises(ValueError):
         replace(config, **changes)
 

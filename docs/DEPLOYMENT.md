@@ -41,10 +41,30 @@ infra/cdk/.venv/bin/python -m pytest -q infra/cdk/tests
 npm run synth -- --no-lookups
 ```
 
-Default synthesis uses dummy `infra/cdk/config.example.json`; never deploy it.
-Copy to ignored `infra/cdk/config.local.json`, replace fixtures and export
-`FINBOT_INFRA_CONFIG` as its absolute path. These are JSON inputs, not `cdk -c`
-context. On restricted macOS use `JSII_RUNTIME_PACKAGE_CACHE=/private/tmp/finbot-jsii`.
+Default synthesis uses the dummy pair `infra/cdk/config.example.json` and
+`infra/cdk/config.private.example.json`; never deploy those inputs. They mirror
+the production public/private structure, with fictitious account, contacts,
+GitHub subject, and image digest. The example environment is named `example`.
+Production settings (including the approved image digest and live cutoff) are
+tracked in `infra/cdk/config.prod.json`. Copy `infra/cdk/config.private.example.json`
+to ignored `infra/cdk/config.local.json` and supply the real account and contact
+details. The private file permits only `account`, `sec_user_agent`, and optional
+`alarm_email`; it cannot override tracked deployment settings. Existing local
+files containing all settings must be split before using this configuration.
+
+From the repository root, select both files explicitly:
+
+```bash
+export FINBOT_INFRA_CONFIG="$PWD/infra/cdk/config.prod.json"
+export FINBOT_INFRA_PRIVATE_CONFIG="$PWD/infra/cdk/config.local.json"
+```
+
+Both files are JSON inputs, not `cdk -c` context. Unset both variables for the
+default offline fixture synthesis. Real private input is read only when explicitly
+selected; missing or invalid private input fails. Keep account/contact values out
+of new public configuration. Existing historical account references elsewhere in
+the repository remain unchanged by this configuration split.
+On restricted macOS use `JSII_RUNTIME_PACKAGE_CACHE=/private/tmp/finbot-jsii`.
 Strict synthesis is credential-free with no AWS lookups. Run the pinned local
 schema/policy checks in [infra/validation](../infra/validation/README.md).
 
@@ -60,7 +80,7 @@ schema/policy checks in [infra/validation](../infra/validation/README.md).
 | `calendar_lookahead_days` | 30 inclusive dates; validated 3–360 |
 | `calendar_full_refresh_seconds`, `calendar_near_term_refresh_seconds` | 86400 / 0 after completion |
 | `yahoo_cache_dir` | Private writable `/tmp/finbot-yahoo` |
-| `live_ingestion_start_at` | Fixed inclusive `2026-10-09T04:00:00Z` |
+| `live_ingestion_start_at` | Fixed inclusive `2026-10-06T04:00:00Z` |
 | `alarm_email`, `alarm_action_arn` | Mutually exclusive managed email/existing topic |
 | `monitoring_enabled` | Notification actions; default false, independent of ingestion |
 | `sec_error_threshold`, `publish_error_threshold` | Initially 10 / 3 per minute |
@@ -113,7 +133,7 @@ not make construct renaming/resource replacement safe.
 4. Build/test the Linux ARM64 image using [container checks](../README.md#offline-container-validation).
    Publish an immutable tag to application ECR with `--provenance=false` for the
    single-platform manifest; record registry digest and scan findings.
-5. Save the digest in local config, review/deploy runtime using the same pattern.
+5. Save the digest in tracked production config, review/deploy runtime using the same pattern.
    Runtime CDK leaves desired zero. Record outputs and actual stopped task state.
 6. Configure GitHub via [infra/github](../infra/github/README.md), company inputs,
    diagnostics/notifications and readiness before activation.
@@ -210,7 +230,7 @@ into success.
 Keep the fixed cutoff in CDK/task configuration. Pre-filter images cannot validate
 skip checkpoints and are unsuitable active rollback targets. For incompatible
 schema/configuration changes: pause delivery, stop/wait, merge/pass CI, stage while
-stopped, pause again, preserve staged digest in CDK, review/deploy and update the
+stopped, pause again, preserve staged digest in tracked CDK configuration, review/deploy and update the
 baseline variable, then reactivate the reviewed digest. No bulk migration/queue
 purge is needed. Published objects/events and terminal facts remain intact.
 
@@ -218,7 +238,7 @@ purge is needed. Published objects/events and terminal facts remain intact.
 
 Serialize CDK against delivery. Disable the repository flag and verify no release
 is running; the flag does not cancel one. Scale zero with approved tooling, wait
-for observed tasks to STOPPED, and preserve current digest in local CDK inputs
+for observed tasks to STOPPED, and preserve current digest in tracked CDK inputs
 before diff/deploy. Runtime CDK leaves desired zero. Update saved GitHub variables
 from the new `BaselineTaskDefinitionArn`, then reapply them. This is CDK's baseline,
 not each application revision. Explicitly reactivate after review; never blindly

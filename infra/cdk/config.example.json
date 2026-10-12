@@ -1,16 +1,14 @@
 {
-  "account": "123456789012",
   "region": "us-east-1",
   "environment": "example",
   "prefix": "finbot",
-  "sec_user_agent": "Finbot your-email@example.com",
-  "github_subject": "repo:EXAMPLE/finbot-filings:ref:refs/heads/main",
+  "github_subject": "repo:EXAMPLE/finbot-filings:environment:production",
   "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "monitoring_enabled": false,
-  "calendar_provider": "placeholder",
+  "monitoring_enabled": true,
+  "calendar_provider": "yahoo",
   "calendar_lookahead_days": 30,
   "calendar_full_refresh_seconds": 86400,
   "calendar_near_term_refresh_seconds": 0,
   "yahoo_cache_dir": "/tmp/finbot-yahoo",
-  "live_ingestion_start_at": "2026-10-09T04:00:00Z"
+  "live_ingestion_start_at": "2026-10-06T04:00:00Z"
 }

@@ -42,10 +42,11 @@ flowchart LR
 ## Filing admission and document selection
 
 `selection/policy.py` implements deterministic `earnings-acquisition-v1` routing.
-`LIVE_INGESTION_START_AT` defaults to **2026-10-09T04:00:00Z**, inclusive, using
-SEC acceptance time. It is a fixed saved configuration value shared by restarts,
-deployments and newly enabled companies. Calendar dates affect polling cadence,
-not acquisition eligibility. Do not reset/widen the cutoff to perform backfill.
+`LIVE_INGESTION_START_AT` defaults to **2026-10-06T04:00:00Z**, inclusive, using
+SEC acceptance time (October 6 midnight in America/New_York). It is a fixed saved
+configuration value shared by restarts, deployments and newly enabled companies.
+Calendar dates affect polling cadence, not acquisition eligibility. Do not
+reset/widen the cutoff to perform backfill.
 
 | Filing/document | Current rule |
 | --- | --- |
@@ -441,6 +442,10 @@ provider readiness; no inbound health API is exposed.
 CDK owns retained state and a stopped-by-default ARM64 runtime. GitHub owns tested
 application revisions through scoped OIDC; infrastructure remains manual. Keep
 one active process, immutable digest releases and the explicit STOPPED handoff.
+Production deployment settings are tracked in `infra/cdk/config.prod.json`;
+account and contact inputs are supplied separately through the ignored local
+file. The loader permits only those private fields, preventing hidden overrides
+of the cutoff or image. See ADR 015 and the runbook for file selection.
 Automatic recovery uses min/max 0/100, 120-second stop timeout, 150-second SEC quiet
 period and 300-second ECS health startup allowance. These reduce overlap risk
 without formal cross-process exclusion and can delay earnings discovery materially.

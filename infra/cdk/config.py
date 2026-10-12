@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from datetime import datetime, timezone
 
+PRIVATE_SETTINGS = frozenset({"account", "sec_user_agent", "alarm_email"})
+
 
 @dataclass(frozen=True)
 class InfraConfig:
@@ -31,7 +33,7 @@ class InfraConfig:
     calendar_full_refresh_seconds: float = 86400
     calendar_near_term_refresh_seconds: float = 0
     yahoo_cache_dir: str = "/tmp/finbot-yahoo"
-    live_ingestion_start_at: str = "2026-10-09T04:00:00Z"
+    live_ingestion_start_at: str = "2026-10-06T04:00:00Z"
 
     def __post_init__(self):
         try:
@@ -92,8 +94,25 @@ class InfraConfig:
             raise ValueError("alarm action must be an existing same-account/region SNS topic")
 
     @classmethod
-    def read(cls, path):
-        return cls(**json.loads(Path(path).read_text()))
+    def read(cls, path, *, private_path=None):
+        values = json.loads(Path(path).read_text())
+        if not isinstance(values, dict):
+            raise ValueError("infrastructure configuration must be a JSON object")
+        if private_path is not None:
+            private = json.loads(Path(private_path).read_text())
+            if not isinstance(private, dict):
+                raise ValueError("private configuration must be a JSON object")
+            misplaced = PRIVATE_SETTINGS.intersection(values)
+            if misplaced:
+                raise ValueError("put these settings in the private configuration: " + ", ".join(sorted(misplaced)))
+            unexpected = private.keys() - PRIVATE_SETTINGS
+            if unexpected:
+                raise ValueError("private configuration cannot contain deployment settings: " + ", ".join(sorted(unexpected)))
+            missing = {"account", "sec_user_agent"} - private.keys()
+            if missing:
+                raise ValueError("private configuration is missing: " + ", ".join(sorted(missing)))
+            values.update(private)
+        return cls(**values)
 
     @property
     def name(self):
