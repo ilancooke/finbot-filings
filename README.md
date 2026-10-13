@@ -187,6 +187,9 @@ Primary routing/text inspection is limited to 4 MiB; larger/unsupported layouts
 stay unresolved. Acquisition still permits selected documents up to 64 MiB.
 Completed packages are not automatically re-enumerated when routing changes;
 previously omitted attachments require a separate scoped recovery operation.
+The operator-only `scripts/recover_earnings_attachments.py` previews and queues
+the four reviewed DAL/WFC/JNJ omissions. See the
+[targeted recovery steps](docs/DEPLOYMENT.md#targeted-dalwfcjnj-attachment-recovery).
 
 Missing/inconsistent snapshots are retried rather than checkpointed as complete.
 Enumeration completion counts selected children for new packages. Existing completed

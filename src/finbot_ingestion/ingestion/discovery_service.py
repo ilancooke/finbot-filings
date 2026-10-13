@@ -111,7 +111,7 @@ class DiscoveryService:
                     package = await self.execution.call(self.sec.get_filing_index, filing=filing)
                     decisions, primary_bytes = None, None
                     if self.selection is not None:
-                        admission, decisions, primary_bytes = await self._select_package(filing, package, progress)
+                        admission, decisions, primary_bytes = await self.select_package(filing, package, progress)
                         await self._record(self.filings, accession_number, admission)
                         if not admission.selected:
                             return EnumerationResult(Outcome.SKIPPED)
@@ -168,7 +168,8 @@ class DiscoveryService:
                 "accession_number": filing.accession_number,
                 "artifact_id": filing.accession_number + "/" + package.primary_document_name})
 
-    async def _select_package(self, filing, package, progress):
+    async def select_package(self, filing, package, progress):
+        """Evaluate a package without checkpoint writes (also used by operators)."""
         primary = None
         primary_document = next(d for d in package.documents if d.filename == package.primary_document_name)
         if not document_decision(filing, package, primary_document).selected:
@@ -257,7 +258,7 @@ class DiscoveryService:
                 decisions = self._decisions.get(filing.accession_number)
                 if decisions is None:
                     package = await self.execution.call(self.sec.get_filing_index, filing=filing)
-                    admission, decisions, primary = await self._select_package(filing, package, parent)
+                    admission, decisions, primary = await self.select_package(filing, package, parent)
                     await self._record(self.filings, filing.accession_number, admission)
                     if not admission.selected:
                         await self._record(self.artifacts, artifact.artifact_id, admission)

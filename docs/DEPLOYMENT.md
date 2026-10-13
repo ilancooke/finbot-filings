@@ -504,6 +504,73 @@ Recorded production references: account `559007813222`, region `us-east-1`,
 targets. Obtain current stack outputs before operations; historical references
 are not authorization.
 
+## Targeted DAL/WFC/JNJ attachment recovery
+
+`scripts/recover_earnings_attachments.py` is a local operator command for these
+four v1 omissions, not a general backfill or runtime job:
+
+| Ticker | Completed 8-K accession | Missing attachment | Expected content |
+| --- | --- | --- | --- |
+| DAL | `0000027904-26-000035` | `deltaairlinesannouncessept.htm` (EX-99.1) | Quarterly earnings release |
+| WFC | `0000072971-26-000318` | `wfc3qer10-13x26ex991xrelea.htm` (EX-99.1) | Quarterly earnings release |
+| WFC | `0000072971-26-000318` | `wfc3qer10-13x26ex992xsuppl.htm` (EX-99.2) | Quarterly financial supplement |
+| JNJ | `0000200406-26-000189` | `a2026q3exhibit992.htm` (EX-99.2) | Supplementary sales data, earnings statements and reconciliation |
+
+Run from the repository root using its installed `.venv`. The helper reads the
+account and SEC contact header from ignored `infra/cdk/config.local.json`
+(`--private-config` overrides the path), and uses the selected AWS profile.
+It checks the fixed production account/service/tables, pins the current task
+definition/image in the manifest and respects its configured cutoff/SEC rate.
+The application must already be running a v2-compatible image before this
+operation; the helper does not build or deploy an image. No CDK deployment,
+schema migration or infrastructure change is required for the helper.
+
+1. Pause delivery with `FINBOT_DELIVERY_ENABLED=false`; verify no release is
+   in progress. Capture current service/task identifiers, scale desired count
+   to zero, wait for the captured tasks to stop, and verify zero desired,
+   running and pending tasks. Both helper modes require all observed service
+   tasks to be STOPPED before making SEC requests. Keep delivery paused until
+   recovery and restart verification finish.
+2. Create a new preview file outside Git. This fetches the three package indexes,
+   directory snapshots and required primary routing bytes; it makes no AWS writes
+   and does not download the four attachments:
+
+   ```bash
+   .venv/bin/python scripts/recover_earnings_attachments.py --profile default \
+     --manifest /private/tmp/finbot-earnings-recovery-NEW-ID.json
+   ```
+
+   Review the four `additions`, selection reasons, canonical parents and pinned
+   task/image. The manifest also records all package metadata/decisions and hashes
+   fetched primary routing bytes. Preview refuses preexisting targets, blocked or
+   incompatible parents, and any additional selected-but-missing attachment.
+3. Execute the reviewed preview while still stopped:
+
+   ```bash
+   .venv/bin/python scripts/recover_earnings_attachments.py --profile default \
+     --manifest /private/tmp/finbot-earnings-recovery-NEW-ID.json --execute
+   ```
+
+   Execution re-fetches SEC evidence and strong canonical records, rejects changes
+   before writing, and conditionally creates only the four canonical child records
+   with v2 SELECT checkpoints and pending ACQUIRE eligibility. It verifies those
+   checkpoints, preserved parents and existing selected children before reporting
+   `queued`. The first enumeration timestamp/count remains unchanged; those counts
+   describe the original snapshot, not today's number of children. No S3/SNS/SQS,
+   calendar, satisfaction or company writes occur in the helper. If interrupted,
+   keep ingestion stopped and resume **the same manifest** with `--execute`;
+   compatible partial creates/selection writes are idempotent. Unexpected conflicts
+   stop the operation for review. Do not delete records or regenerate the preview
+   to bypass a conflict.
+4. Restore desired count one on the same service/task definition and wait for
+   stability. Normal pending recovery downloads/stores the four raw attachments,
+   publishes their artifact-ready events, and performs normal calendar satisfaction
+   handling. Verify HEALTHY task/container state, four strong artifact records with
+   `stored_at`, `s3_uri` and `published_at`, corresponding S3 keys, and no new terminal
+   failures. Existing files/events are not replayed. Then restore delivery with
+   `FINBOT_DELIVERY_ENABLED=true`. Keep the preview outside Git for interrupted
+   recovery.
+
 ## Explicit acquisition reset
 
 ADR 013 authorizes the October 2026 layout transition. Repeating a destructive

@@ -114,7 +114,13 @@ processing facts. Blocked/terminal/published records are not reactivated or rewr
 unknown policy changes and downgrades remain guarded. Completed enumeration
 timestamps/counts remain immutable and completed packages are not automatically
 re-enumerated. A separately scoped recovery operation is needed to acquire earlier
-omissions.
+omissions. The operator-only DAL/WFC/JNJ recovery helper reuses package selection,
+revalidates a read-only manifest against strong canonical reads and fresh SEC
+evidence, and conditionally creates only four allowlisted missing children with
+v2 SELECT checkpoints. It does not reopen/update the completed parent snapshots.
+Pending ACQUIRE work resumes through the normal worker, storage and publication
+path after restart; existing artifacts and calendar/satisfaction records are
+untouched by the helper.
 
 ## Identity, time and public event contract
 
