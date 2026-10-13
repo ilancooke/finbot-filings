@@ -41,7 +41,7 @@ flowchart LR
 
 ## Filing admission and document selection
 
-`selection/policy.py` implements deterministic `earnings-acquisition-v1` routing.
+`selection/policy.py` implements deterministic `earnings-acquisition-v2` routing.
 `LIVE_INGESTION_START_AT` defaults to **2026-10-06T04:00:00Z**, inclusive, using
 SEC acceptance time (October 6 midnight in America/New_York). It is a fixed saved
 configuration value shared by restarts, deployments and newly enabled companies.
@@ -70,8 +70,30 @@ name resolves only when one document matches the filing form. Missing, empty or
 inconsistent snapshots fail explicitly and are retried.
 
 Descriptions and safe primary-report exhibit references determine release and
-supplement roles; neither EX-99.1 nor EX-99.x alone proves eligibility. Missing
-submissions items may be resolved from index metadata or structural primary
+supplement roles; neither EX-99.1 nor EX-99.x alone proves eligibility. Attachment
+routing uses SEC index descriptions, one-exhibit table rows and each
+safe same-package hyperlink's own text. Layout rows linking multiple documents
+do not share a row description across attachments. Descriptions normalize
+whitespace and match case-insensitive whole-word phrases, without filename guesses.
+
+| Attachment description | Additional evidence required | Role |
+| --- | --- | --- |
+| Existing earnings/financial/quarterly/annual/operating release/report/announcement language | None | Earnings release |
+| Press release, news release, earnings release | Existing financial-results language, or exact EX-99.x number explicitly referenced within Item 2.02 | Earnings release |
+| Financial/statistical/earnings supplement, financial data supplement; supplemental/supplementary financial/earnings/statistical language | None | Financial supplement |
+| Quarterly supplement | Exact EX-99.x number explicitly referenced within Item 2.02 | Financial supplement |
+| Supplementary/supplemental sales data, financial statements, statement(s) of earnings/income/operations | None | Financial supplement |
+
+These attachment rules run only after filing admission and existing type/format
+checks. Item 2.02 reference evidence ends at the next structural Item heading;
+cross-references in prose do not start another section. The exact exhibit number
+comes from the package document type. Generic PDF labels and exhibit numbers alone
+remain unresolved. Presentation/deck/slide descriptions retain precedence: a
+presentation alone is excluded; a presentation combined with a selected financial
+role remains unresolved and is skipped. Decision reasons remain `earnings_release`
+and `financial_supplement`, including selected financial statements.
+
+Missing submissions items may be resolved from index metadata or structural primary
 headings. Primary routing inspection is bounded to **4 MiB**; unsupported/larger
 layouts remain unresolved. Clearly selected documents can proceed while ambiguous
 attachments are skipped. Bounded text inspection may warn about image-only HTML;
@@ -86,6 +108,13 @@ pending acquisition/publication path, including direct worker calls, use the sam
 policy. Published records and terminal/dead-letter obligations stay intact.
 Completion covers selected documents, not preservation of the entire SEC package
 or every earnings disclosure.
+The reviewed v1-to-v2 transition permits only previously affirmative checkpoints
+to upgrade during re-evaluation, preserving the first affirmative reason and all
+processing facts. Blocked/terminal/published records are not reactivated or rewritten;
+unknown policy changes and downgrades remain guarded. Completed enumeration
+timestamps/counts remain immutable and completed packages are not automatically
+re-enumerated. A separately scoped recovery operation is needed to acquire earlier
+omissions.
 
 ## Identity, time and public event contract
 

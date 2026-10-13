@@ -6,6 +6,7 @@ import json
 from .serialization import decode, encode, integer, MAX_ERROR_CHARS, timestamp
 from ..errors import RepositoryBusy, RepositoryConflict, RepositoryDataError, RepositoryNotFound
 from finbot_ingestion.domain.checkpoints import STAGE_COUNTERS
+from finbot_ingestion.selection.policy import POLICY_UPGRADES
 
 
 class DynamoDBRepository:
@@ -152,10 +153,14 @@ class DynamoDBRepository:
                 if all(item.get(name) == value for name, value in sets.items()
                        if name != "selection_checked_at"):
                     return None
-                if item["selection_policy"] != policy_version or item["selection_decision"] != "SELECT":
+                upgrade = (item["selection_policy"], policy_version) in POLICY_UPGRADES
+                if (item["selection_decision"] != "SELECT"
+                        or (item["selection_policy"] != policy_version and not upgrade)):
                     raise RepositoryConflict("selection change requires an explicit reviewed operation")
                 if decision.selected:
-                    return None  # Preserve the first affirmative evidence/reason.
+                    if not upgrade:
+                        return None
+                    sets["selection_reason"] = item["selection_reason"]  # Preserve first affirmative evidence.
                 # New contradictory evidence or a stricter cutoff can stop work;
                 # only an explicit reviewed operation may re-admit blocked work.
             removes = () if decision.selected else ("pending_work_kind", "pending_work_sort")

@@ -155,7 +155,7 @@ SEC archive URLs use numeric CIK and dash-free accession path components.
 `filed_at` is SEC `acceptanceDateTime`, normalized to UTC, rather than a measured
 public-availability instant. Missing, invalid or naive acceptance timestamps fail;
 filing/report dates never substitute. Parsing returns all supported recent rows
-without a count cutoff, then admission applies `earnings-acquisition-v1`:
+without a count cutoff, then admission applies `earnings-acquisition-v2`:
 
 - `LIVE_INGESTION_START_AT` defaults to **2026-10-06T04:00:00Z**, inclusive, using
   SEC acceptance time (October 6 midnight in America/New_York). Keep this fixed
@@ -174,6 +174,10 @@ Package discovery reconciles the HTML document table and directory JSON, preserv
 exhibit descriptions. Selected earnings 8-Ks retain the primary plus identified
 releases and financial supplements in HTML/text/PDF form. Descriptions and safe
 primary-report exhibit references determine roles; exhibit number alone does not.
+Routing also recognizes descriptive same-package links outside exhibit tables,
+generic news/press releases and quarterly supplements tied to exact Item 2.02
+exhibit references, and explicitly labelled financial statements/supplementary
+sales data. See the [exact attachment rules](docs/ARCHITECTURE.md#filing-admission-and-document-selection).
 Decks, standalone images/logos, complete submission TXT bundles, unrelated exhibits
 and auxiliary files are skipped without downloading them. Legitimate selected text
 releases are allowed. Unresolved exhibit roles are logged and skipped while clear
@@ -181,6 +185,8 @@ selected documents proceed. Image-only HTML receives a coverage warning when the
 bounded text inspection detects it; no linked images, OCR or financial extraction.
 Primary routing/text inspection is limited to 4 MiB; larger/unsupported layouts
 stay unresolved. Acquisition still permits selected documents up to 64 MiB.
+Completed packages are not automatically re-enumerated when routing changes;
+previously omitted attachments require a separate scoped recovery operation.
 
 Missing/inconsistent snapshots are retried rather than checkpointed as complete.
 Enumeration completion counts selected children for new packages. Existing completed

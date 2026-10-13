@@ -234,6 +234,16 @@ stopped, pause again, preserve staged digest in tracked CDK configuration, revie
 baseline variable, then reactivate the reviewed digest. No bulk migration/queue
 purge is needed. Published objects/events and terminal facts remain intact.
 
+The `earnings-acquisition-v2` attachment-routing revision uses normal application
+delivery; it requires no CDK deployment or schema migration. Pending affirmative
+v1 work can upgrade to v2 during re-evaluation. Blocked checkpoints retain their
+guards, and completed enumeration snapshots are not reopened automatically.
+Recovering previously omitted attachments requires a separate reviewed operation
+with explicit filing/attachment scope; do not reset acquisition state or widen
+the cutoff as part of this release. V1 images cannot update v2 pending selection
+checkpoints; use a rollback image supporting v2 checkpoints. See the
+[current rules](ARCHITECTURE.md#filing-admission-and-document-selection).
+
 ## Manual infrastructure changes and release recovery
 
 Serialize CDK against delivery. Disable the repository flag and verify no release
@@ -399,7 +409,8 @@ aws logs filter-log-events --log-group-name /finbot/finbot-prod \
 ```
 
 Selection logs use `operation=acquisition_selection`,
-`policy_version=earnings-acquisition-v1`, `selection_decision` and stable reason.
+`policy_version=earnings-acquisition-v2`, `selection_decision` and stable reason
+(historical logs can show v1).
 `unresolved_items`, `conflicting_items`, `unresolved_exhibit_role` and
 `possible_image_only_content` need review; they are not terminal download failures.
 Clear selected documents can proceed with unresolved attachments omitted.

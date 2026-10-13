@@ -5,7 +5,7 @@ from collections import OrderedDict
 import asyncio
 import logging
 
-from finbot_ingestion.selection.policy import (POLICY_VERSION, Decision,
+from finbot_ingestion.selection.policy import (POLICY_VERSION, POLICY_UPGRADES, Decision,
     document_decision, primary_exhibits, primary_items)
 
 from finbot_ingestion.repositories.errors import RepositoryNotFound
@@ -176,7 +176,8 @@ class DiscoveryService:
             self._log(filing, admission)
             return admission, {}, None
         admission = self.selection.filing(filing, items=package.items, item_status=package.item_status)
-        if progress.selection_policy == POLICY_VERSION and progress.selection_decision == "SELECT":
+        if (progress.selection_decision == "SELECT" and (progress.selection_policy == POLICY_VERSION
+                or (progress.selection_policy, POLICY_VERSION) in POLICY_UPGRADES)):
             admission = Decision("SELECT", progress.selection_reason)
             if (filing.form_type in {"8-K", "8-K/A"} and package.item_status == "known"
                     and "2.02" not in package.items):

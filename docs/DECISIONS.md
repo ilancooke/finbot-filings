@@ -213,6 +213,20 @@ Pre-filter images cannot safely read skip checkpoints and are unsuitable rollbac
 targets. Live selection of a newly eligible filing remained unobserved in the
 last recorded startup inspection; see [OPS-002](BACKLOG.md#ops-002--observe-live-selection-and-daily-calendar-operation).
 
+The current `earnings-acquisition-v2` revision refines attachment routing within
+this same scope. Descriptive same-package links cover nonstandard exhibit-table
+layouts. Generic news/press releases and quarterly supplements require exact
+Item 2.02 exhibit references; explicitly labelled financial statements and
+supplementary sales data also qualify. Evidence remains attachment-specific and
+presentation/conflicting-role exclusions remain in force. Exact matching rules
+are maintained in [ARCHITECTURE](ARCHITECTURE.md#filing-admission-and-document-selection).
+
+Only affirmative v1 checkpoints may upgrade to v2 after re-evaluation; the first
+affirmative reason and processing facts are preserved. Blocked work requires an
+explicit reviewed operation, and completed packages do not automatically acquire
+newly recognized attachments. This is an application release with no schema or
+infrastructure change, not an acquisition reset or historical backfill.
+
 The policy supersedes broad acquisition of supported forms/directory contents.
 Revisit for explicit coverage needs, unsupported layouts or demonstrated ambiguous
 routing. Examples motivating the rule:

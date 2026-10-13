@@ -26,11 +26,13 @@ PRIMARY = b'''<p><b>Item 2.02 Results of Operations and Financial Condition</b><
 <table><tr><td>99.1</td><td><a href="release.htm">Press Release dated October 8</a></td></tr></table>'''
 
 
-def selected_worker(system, monkeypatch, *, items=('2.02', '9.01'), index_items='2.02', generic=False):
+def selected_worker(system, monkeypatch, *, items=('2.02', '9.01'), index_items='2.02', generic=False,
+                    rows=None, primary=PRIMARY):
     worker = system.worker()
     worker.discovery.selection = AcquisitionPolicy(NOW - timedelta(seconds=10))
     filing = make_filing(primary_document_name='Primary.htm')
-    rows = [('Primary.htm', '8-K', 'Primary'), ('release.htm', 'EX-99.1', 'EX-99.1' if generic else 'Earnings release'),
+    if rows is None:
+        rows = [('Primary.htm', '8-K', 'Primary'), ('release.htm', 'EX-99.1', 'EX-99.1' if generic else 'Earnings release'),
             ('supplement.pdf', 'EX-99.2', 'Financial supplement'), ('Slides.PDF', 'EX-99.3', 'Earnings presentation'),
             ('graphic.jpg', 'GRAPHIC', 'Logo'), (ACCESSION + '.txt', '', 'Complete submission text')]
     html = '<div class="infoHead">Items</div><div class="info">'
@@ -56,7 +58,7 @@ def selected_worker(system, monkeypatch, *, items=('2.02', '9.01'), index_items=
         name = url.rsplit('/', 1)[-1]
         assert name in {'Primary.htm', 'release.htm', 'supplement.pdf'}, 'excluded URL was requested'
         downloads.append(name)
-        content = PRIMARY if name == 'Primary.htm' else b'original release or supplement'
+        content = primary if name == 'Primary.htm' else b'original release or supplement'
         assert len(content) <= max_bytes
         return DownloadedDocument(content, 'text/html' if name.endswith('.htm') else 'application/pdf', url)
     monkeypatch.setattr(system.sec, 'get_company_submissions_with_evidence', observations, raising=False)
@@ -91,6 +93,137 @@ def test_generic_exhibit_uses_primary_bytes_once_and_survives_restart(system, mo
         assert primary.stored_at is not None and primary.published_at is not None
         await RecoveryService(worker).run_pass()
         assert len(downloads) == 3
+    run(scenario())
+
+
+@pytest.mark.parametrize('rows,primary,expected', [
+    ([('Primary.htm', '8-K', 'Primary'), ('release.htm', 'EX-99.1', 'EX-99.1')],
+     b'<div>Item 2.02 Results</div><p>Exhibit 99.1.</p><div>Item 9.01 Exhibits</div>'
+     b'<a href="release.htm">Press release announcing quarterly financial results</a>',
+     {'Primary.htm', 'release.htm'}),
+    ([('Primary.htm', '8-K', 'Primary'), ('release.htm', 'EX-99.1', 'News Release dated October 13'),
+      ('supplement.pdf', 'EX-99.2', '3Q26 Quarterly Supplement'), ('Slides.PDF', 'EX-99.3', 'Presentation'),
+      ('other.htm', 'EX-99.4', 'News release'), ('hyperlink.htm', 'EX-99.5', 'Hyperlinked PDF')],
+     b'<div>Item 2.02 Results</div><p>Exhibits 99.1 and 99.2 and 99.5.</p>'
+     b'<div>Item 7.01 Other</div><p>Exhibit 99.4.</p>',
+     {'Primary.htm', 'release.htm', 'supplement.pdf'}),
+    ([('Primary.htm', '8-K', 'Primary'), ('release.htm', 'EX-99.1', 'Earnings release'),
+      ('supplement.pdf', 'EX-99.2', 'EX-99.2')],
+     b'<div>Item 2.02 Results</div><p>Exhibit 99.1.</p><div>Item 9.01 Exhibits</div>'
+     b'<table><tr><td>99.2</td><td><a href="supplement.pdf">Unaudited Comparative Supplementary '
+     b'Sales Data and Condensed Consolidated Statement of Earnings</a></td></tr></table>',
+     {'Primary.htm', 'release.htm', 'supplement.pdf'}),
+], ids=['dal-link', 'wfc-item-context', 'jnj-supplement'])
+def test_v2_evidence_selects_only_results_documents_and_survives_restart(system, monkeypatch, rows, primary, expected):
+    worker, filing, _, downloads = selected_worker(system, monkeypatch, rows=rows, primary=primary)
+    async def scenario():
+        await worker.discover_company(COMPANY)
+        assert set(downloads) == expected
+        assert downloads.count('Primary.htm') == 1
+        assert len(downloads) == len(system.s3.objects) == len(system.messages.events) == len(expected)
+        parent = await system.db.filings.get_checkpoint(ACCESSION)
+        assert parent.selection_policy == POLICY_VERSION and parent.enumerated_artifact_count == len(expected)
+        children = (await system.db.artifacts.list_for_filing(ACCESSION)).items
+        assert {child.filename for child in children} == expected
+        assert all(child.stored_at is not None and child.published_at is not None for child in children)
+        # A fresh worker repeats pending recovery without re-downloading or publishing.
+        restarted = system.worker()
+        restarted.discovery.selection = worker.discovery.selection
+        await RecoveryService(restarted).run_pass()
+        assert len(downloads) == len(system.messages.events) == len(expected)
+    run(scenario())
+
+
+def test_v1_completed_package_is_not_automatically_reenumerated(system, monkeypatch):
+    worker, filing, parsed, downloads = selected_worker(system, monkeypatch, generic=True)
+    async def scenario():
+        await system.db.filings.create_if_absent(filing)
+        await system.db.filings.record_selection(ACCESSION, Decision('SELECT', 'earnings_item_2_02'), NOW,
+            policy_version='earnings-acquisition-v1')
+        primary = next(a for a in parsed.artifacts(filing, discovered_at=NOW) if a.filename == 'Primary.htm')
+        await PackageCheckpoint(system.db.filings, system.db.artifacts).persist(filing, (primary,),
+            primary_document_name='Primary.htm', completed_at=NOW)
+        assert (await worker.enumerate_only(ACCESSION)).outcome == Outcome.COMPLETE
+        assert await system.db.artifacts.get(ACCESSION + '/release.htm') is None
+        parent = await system.db.filings.get_checkpoint(ACCESSION)
+        assert parent.enumerated_artifact_count == 1 and parent.selection_policy == 'earnings-acquisition-v1'
+        assert not system.sec.calls and not downloads and not system.messages.events
+    run(scenario())
+
+
+def test_v1_pending_package_upgrades_and_preserves_admission_evidence(system, monkeypatch):
+    worker, filing, _, downloads = selected_worker(system, monkeypatch, generic=True, index_items=None)
+    # The original affirmative submissions evidence remains valid when the index
+    # and primary don't repeat the heading. V2 changes attachment roles only.
+    monkeypatch.setattr(system.sec, 'download_document', lambda url, **kwargs:
+        DownloadedDocument(b'<table><tr><td>99.1</td><td><a href="release.htm">Earnings release</a>'
+                           b'</td></tr></table>', 'text/html', url))
+    async def scenario():
+        await system.db.filings.create_if_absent(filing)
+        await system.db.filings.record_selection(ACCESSION, Decision('SELECT', 'earnings_item_2_02'), NOW,
+            policy_version='earnings-acquisition-v1')
+        assert await worker.process_filing(ACCESSION) == Outcome.COMPLETE
+        parent = await system.db.filings.get_checkpoint(ACCESSION)
+        assert parent.selection_policy == POLICY_VERSION and parent.selection_reason == 'earnings_item_2_02'
+        assert parent.enumerated_artifact_count == 3
+        assert len(system.s3.objects) == len(system.messages.events) == 3
+        for name in ('Primary.htm', 'release.htm', 'supplement.pdf'):
+            progress = await system.db.artifacts.get_checkpoint(ACCESSION + '/' + name)
+            assert progress.selection_policy == POLICY_VERSION
+        with pytest.raises(RepositoryConflict):
+            await system.db.filings.record_selection(ACCESSION, Decision('SELECT', 'earnings_item_2_02'), NOW,
+                policy_version='earnings-acquisition-v1')
+    run(scenario())
+
+
+@pytest.mark.parametrize('decision', [Decision('EXCLUDE', 'non_earnings_8_k'),
+                                     Decision('UNRESOLVED', 'unresolved_items')])
+def test_v2_does_not_readmit_v1_blocked_work(system, monkeypatch, decision):
+    worker, filing, _, downloads = selected_worker(system, monkeypatch)
+    async def scenario():
+        await system.db.filings.create_if_absent(filing)
+        await system.db.filings.record_selection(ACCESSION, decision, NOW, policy_version='earnings-acquisition-v1')
+        before = await system.db.filings.get_checkpoint(ACCESSION)
+        assert await worker.process_filing(ACCESSION) == Outcome.SKIPPED
+        with pytest.raises(RepositoryConflict):
+            await system.db.filings.record_selection(ACCESSION, Decision('SELECT', 'earnings_item_2_02'), NOW,
+                policy_version=POLICY_VERSION)
+        assert await system.db.filings.get_checkpoint(ACCESSION) == before
+        assert not system.sec.calls and not downloads and not system.messages.events
+    run(scenario())
+
+
+@pytest.mark.parametrize('stored', [False, True])
+def test_v1_pending_child_upgrades_without_replacing_stored_bytes(system, monkeypatch, stored):
+    worker, filing, parsed, downloads = selected_worker(system, monkeypatch, generic=True)
+    async def scenario():
+        await system.db.filings.create_if_absent(filing)
+        await system.db.filings.record_selection(ACCESSION, Decision('SELECT', 'earnings_item_2_02'), NOW,
+            policy_version='earnings-acquisition-v1')
+        children = tuple(a for a in parsed.artifacts(filing, discovered_at=NOW)
+                         if a.filename in {'Primary.htm', 'release.htm', 'supplement.pdf'})
+        await PackageCheckpoint(system.db.filings, system.db.artifacts).persist(filing, children,
+            primary_document_name='Primary.htm', completed_at=NOW)
+        child = next(a for a in children if a.filename == 'release.htm')
+        await system.db.artifacts.record_selection(child.artifact_id, Decision('SELECT', 'earnings_release'), NOW,
+            policy_version='earnings-acquisition-v1')
+        if stored:
+            saved = await system.store.put_if_absent(child, filing,
+                DownloadedDocument(b'original stored release', 'text/html', child.sec_url))
+            await system.db.artifacts.mark_stored(child.artifact_id, saved.s3_uri, saved.stored_at,
+                saved.content_type, saved.size_bytes)
+        before = await system.db.artifacts.get(child.artifact_id)
+        assert await worker.process_artifact(child.artifact_id) == Outcome.COMPLETE
+        after = await system.db.artifacts.get(child.artifact_id)
+        progress = await system.db.artifacts.get_checkpoint(child.artifact_id)
+        assert progress.selection_policy == POLICY_VERSION and progress.selection_reason == 'earnings_release'
+        assert after.published_at is not None and len(system.messages.events) == 1
+        if stored:
+            assert (after.s3_uri, after.stored_at, after.size_bytes) == (before.s3_uri, before.stored_at, before.size_bytes)
+            assert 'release.htm' not in downloads
+        else:
+            assert downloads.count('release.htm') == 1
+        assert (await system.db.filings.get_checkpoint(ACCESSION)).enumerated_artifact_count == 3
     run(scenario())
 
 
