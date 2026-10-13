@@ -1,24 +1,25 @@
 """Filters replayed through real repositories/S3/SNS adapters over offline fakes."""
-import asyncio
-from copy import deepcopy
+
 from dataclasses import replace
 from datetime import timedelta
+import asyncio
 
-from botocore.exceptions import ReadTimeoutError
 import pytest
 
-from test_dynamodb_repositories import db, make_filing, make_artifact, NOW, ACCESSION
-from test_phase4 import system, seed, run
 from finbot_ingestion.domain import Company
 from finbot_ingestion.domain.sec_items import FilingObservation, SECItemMetadata
 from finbot_ingestion.ingestion.recovery_service import RecoveryService
 from finbot_ingestion.ingestion.work_control import Outcome
-from finbot_ingestion.repositories.package_checkpoint import PackageCheckpoint
 from finbot_ingestion.repositories.errors import RepositoryConflict
+from finbot_ingestion.repositories.package_checkpoint import PackageCheckpoint
 from finbot_ingestion.sec.client import DownloadedDocument
-from finbot_ingestion.sec.errors import SECDocumentTooLarge, SECNetworkError
+from finbot_ingestion.sec.errors import SECDocumentTooLarge
 from finbot_ingestion.sec.filing_index import parse_filing_index
 from finbot_ingestion.selection.policy import AcquisitionPolicy, Decision, POLICY_VERSION
+
+from tests.support.dynamodb import make_filing, make_artifact, NOW, ACCESSION
+from tests.support.ingestion import seed, run
+
 
 COMPANY = Company(cik='320193', ticker='AAPL', name='Apple')
 PRIMARY = b'''<p><b>Item 2.02 Results of Operations and Financial Condition</b></p>

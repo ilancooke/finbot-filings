@@ -3,8 +3,8 @@
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-import json
 from pathlib import Path
+import json
 
 import pytest
 import requests
@@ -13,7 +13,8 @@ from finbot_ingestion.domain import Company, Filing
 from finbot_ingestion.observability.metrics import Metrics
 from finbot_ingestion.sec.errors import SECRequestStopped
 from finbot_ingestion.sec.urls import filing_index_url
-from test_ingestion_transport import make, Response, URL
+
+from tests.support.sec_transport import make, Response, URL
 
 
 BASE = (("Environment", "prod"), ("Service", "finbot-ingestion"))

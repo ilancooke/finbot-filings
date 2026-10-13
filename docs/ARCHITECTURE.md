@@ -527,7 +527,7 @@ current source tests synchronize worker wait boundaries and include a slower-SDK
 case. Reproduce offline with:
 
 ```bash
-.venv/bin/python -m pytest -q -s tests/integration/test_phase6_replay.py
+.venv/bin/python -m pytest -q -s tests/integration/test_runtime_capacity.py
 ```
 
 ## Maintaining these contracts

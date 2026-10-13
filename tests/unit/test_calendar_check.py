@@ -1,10 +1,10 @@
 """The operator check stays provider-only and reports collection limits honestly."""
 
-import asyncio
 from dataclasses import replace
 from datetime import date, datetime, timezone
-import json
 from pathlib import Path
+import asyncio
+import json
 
 import pytest
 
@@ -12,7 +12,8 @@ from finbot_ingestion.calendar import check
 from finbot_ingestion.calendar.contracts import CalendarSnapshot
 from finbot_ingestion.calendar.provider import CalendarDataError, IncompleteCalendarSnapshot
 from finbot_ingestion.domain import ExpectedEarningsEvent
-from tests.yahoo_fakes import PageSource, row
+
+from tests.support.yahoo_fakes import PageSource, row
 
 
 ROOT = Path(__file__).resolve().parents[2]

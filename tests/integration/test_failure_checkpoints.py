@@ -1,14 +1,15 @@
 """Durable stage failure semantics over real repository CAS and SDK paging."""
 
-import asyncio
 from copy import deepcopy
 from datetime import timedelta
+import asyncio
 
-import pytest
 from botocore.exceptions import ReadTimeoutError
+import pytest
 
-from test_dynamodb_repositories import db, make_filing, make_artifact, NOW, ACCESSION
 from finbot_ingestion.repositories.errors import RepositoryConflict, RepositoryDataError
+
+from tests.support.dynamodb import make_filing, make_artifact, NOW, ACCESSION
 
 
 def test_stage_failure_idempotency_terminal_and_dead_letter_checkpoint(db):
@@ -123,7 +124,7 @@ def test_stage_budget_does_not_rewind_newer_legacy_failure_diagnostics(db):
 
 @pytest.mark.parametrize("changes", [{"acquisition_failures": "1"}, {"failure_at": None},
     {"terminal_at": "2026-10-08T20:00:00.000000Z"}, {"publication_failures": 1}])
-def test_malformed_phase4_checkpoint_fields_are_rejected(db, changes):
+def test_malformed_failure_checkpoint_fields_are_rejected(db, changes):
     async def scenario():
         await db.artifacts.create_if_absent(make_artifact())
         next(iter(db.memory.tables["artifacts"].values())).update(changes)

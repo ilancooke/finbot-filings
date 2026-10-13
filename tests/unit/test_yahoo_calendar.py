@@ -1,14 +1,13 @@
 """Raw Yahoo completeness, date boundaries and owned HTTP execution are offline."""
 
-import asyncio
 from datetime import date, datetime, timedelta, timezone
-import threading
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
+import asyncio
+import threading
 
 import pytest
 
-from yahoo_fakes import PageSource, raw_page, row
 from finbot_ingestion.calendar.config import CalendarConfig
 from finbot_ingestion.calendar.provider import IncompleteCalendarSnapshot
 from finbot_ingestion.calendar.providers.yahoo import YahooEarningsCalendarProvider
@@ -17,6 +16,9 @@ from finbot_ingestion.calendar.providers.yahoo_config import YahooConfig
 from finbot_ingestion.config import ConfigurationError
 from finbot_ingestion.domain import Company
 from finbot_ingestion.execution import BlockingExecution
+
+from tests.support.yahoo_fakes import PageSource, raw_page, row
+
 
 DAY = date(2026, 10, 13)
 COMPANY = Company("AAPL", "320193", "Synthetic company")

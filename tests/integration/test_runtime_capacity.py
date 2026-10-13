@@ -1,38 +1,38 @@
 """500-company fake-clock runtime replay through the real SEC client/shared limiter.
 
-All SDK calls use the stateful Phase 4 fake; no measured figure is a live SLA.
+All SDK calls use the shared stateful AWS fake; no measured figure is a live SLA.
 """
 
-import asyncio
 from datetime import date, timedelta
+from pathlib import Path
+import asyncio
 import heapq
 import json
-from pathlib import Path
 import threading
 import time
 
 import pytest
 
-from test_dynamodb_repositories import db, NOW, ACCESSION, make_filing, make_artifact
-from test_phase4 import system
 from finbot_ingestion.calendar import CalendarConfig
 from finbot_ingestion.calendar.service import CalendarSyncService
+from finbot_ingestion.config import IngestionConfig
 from finbot_ingestion.domain import Company, ExpectedEarningsEvent
-from finbot_ingestion.repositories.package_checkpoint import PackageCheckpoint
-from finbot_ingestion.sec.client import DownloadedDocument
-from finbot_ingestion.sec.urls import filing_index_url, document_url
+from finbot_ingestion.execution import BlockingExecution
 from finbot_ingestion.ingestion.recovery_service import RecoveryService
+from finbot_ingestion.ingestion.work_queue import WorkQueue
 from finbot_ingestion.observability.metrics import Metrics
 from finbot_ingestion.repositories.dynamodb.satisfaction import DynamoDBSatisfactionRepository
+from finbot_ingestion.repositories.package_checkpoint import PackageCheckpoint
 from finbot_ingestion.runtime.application import RuntimeApplication
 from finbot_ingestion.runtime.config import RuntimeConfig
 from finbot_ingestion.scheduler.market_sessions import ExchangeMarketSessions
 from finbot_ingestion.scheduler.window_policy import WindowPolicy
+from finbot_ingestion.sec.client import DownloadedDocument
 from finbot_ingestion.sec.client import SecClient
 from finbot_ingestion.sec.rate_limiter import SECRateLimiter
-from finbot_ingestion.config import IngestionConfig
-from finbot_ingestion.execution import BlockingExecution
-from finbot_ingestion.ingestion.work_queue import WorkQueue
+from finbot_ingestion.sec.urls import filing_index_url, document_url
+
+from tests.support.dynamodb import NOW, ACCESSION, make_filing, make_artifact
 
 
 class ReplayClock:
@@ -317,5 +317,5 @@ def test_500_company_capacity_replay(system, tmp_path, monkeypatch, active, inte
             await asyncio.sleep(.001)
         await task
         sec.close()
-        print("PHASE6_REPLAY " + json.dumps(report, sort_keys=True))
+        print("RUNTIME_CAPACITY_REPLAY " + json.dumps(report, sort_keys=True))
     asyncio.run(scenario())

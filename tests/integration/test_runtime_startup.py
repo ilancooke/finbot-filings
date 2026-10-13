@@ -1,11 +1,9 @@
 """Startup cancellation and shutdown recovery over existing stateful boundaries."""
-import asyncio
-from dataclasses import replace
-import time
 
-from test_phase4 import system
-from test_dynamodb_repositories import db
-from test_phase6 import setup, until
+from dataclasses import replace
+import asyncio
+
+from tests.support.runtime import setup, until
 
 
 def test_quiet_startup_can_stop_without_sec_calls(system, tmp_path):

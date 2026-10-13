@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import socket
 
-os.environ.setdefault("JSII_RUNTIME_PACKAGE_CACHE", "/private/tmp/finbot-phase8-jsii" if sys.platform == "darwin" else "/tmp/finbot-phase8-jsii")
+os.environ.setdefault("JSII_RUNTIME_PACKAGE_CACHE", "/private/tmp/finbot-jsii" if sys.platform == "darwin" else "/tmp/finbot-jsii")
 os.environ["AWS_EC2_METADATA_DISABLED"] = "true"
 sys.path.insert(0, str(Path(__file__).parents[1]))
 

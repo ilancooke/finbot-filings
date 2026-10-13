@@ -37,6 +37,34 @@ and `curl_cffi==0.16.3`. The calendar libraries need pandas, NumPy, lxml and tim
 helpers. lxml is a yfinance dependency; no document extraction was reintroduced.
 Ingestion does not depend on PyArrow.
 
+## Test organization
+
+Tests are grouped by current responsibility rather than migration phase:
+
+- `tests/unit/`: configuration, domain contracts, SEC parsing/transport, selection,
+  scheduling, execution, observability and operator helpers.
+- `tests/integration/`: repositories and SDK wire contracts, ingestion/recovery,
+  calendar synchronization, runtime behavior, SEC package replay and capacity replay.
+- `tests/support/`: reusable fakes, builders and runtime setup; test modules do not
+  import other test modules. Shared integration fixtures are registered in
+  `tests/integration/conftest.py`.
+- `tests/container/`: mounted subprocess/container harness; never installed in the
+  production image. The eight opt-in cases live in
+  `tests/integration/test_container_lifecycle.py`.
+- `infra/cdk/tests/`: independent infrastructure and workflow checks, run with the
+  CDK virtual environment.
+
+The application network guard and dummy AWS credentials are centralized in
+`tests/conftest.py`. Subprocess/container and infrastructure guards remain independent.
+Yahoo no-backoff fixtures apply only to their synthetic-boundary consumers.
+Tests can run individually, for example:
+
+```bash
+.venv/bin/python -m pytest -q tests/integration/test_ingestion_pipeline.py
+.venv/bin/python -m pytest -q tests/unit/test_earnings_satisfaction_policy.py
+.venv/bin/python -m pytest -q -s tests/integration/test_runtime_capacity.py
+```
+
 ## Supported commands
 
 ```bash
@@ -128,7 +156,7 @@ After rebuilding the image, run:
 
 ```bash
 FINBOT_CONTAINER_TESTS=1 FINBOT_CONTAINER_IMAGE=finbot-ingestion:local \
-  .venv/bin/python -m pytest -q tests/integration/test_phase7.py -m container
+  .venv/bin/python -m pytest -q tests/integration/test_container_lifecycle.py -m container
 ```
 
 Docker must be accessible from the execution environment. Opted-in tests fail if

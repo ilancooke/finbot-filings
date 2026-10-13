@@ -1,64 +1,31 @@
 """Real SDK paginators/exceptions over a deterministic, mocked AWS API boundary."""
 
-import asyncio
-from collections import deque
 from copy import deepcopy
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
-import json
+from datetime import timedelta
 from pathlib import Path
-import threading
-from types import SimpleNamespace
+import asyncio
+import json
 
-import boto3
 from botocore.exceptions import ReadTimeoutError
 import pytest
 
-from finbot_ingestion.domain import Artifact, Company, ExpectedEarningsEvent, Filing
+from finbot_ingestion.domain import Company, ExpectedEarningsEvent
 from finbot_ingestion.repositories.dynamodb import (
-    DynamoDBArtifactRepository, DynamoDBCalendarRepository, DynamoDBCompanyRepository,
-    DynamoDBConfig, DynamoDBExecution, DynamoDBFilingRepository,
+    DynamoDBArtifactRepository,
+    DynamoDBFilingRepository,
 )
-from finbot_ingestion.repositories.dynamodb.serialization import decode, encode
-from finbot_ingestion.repositories.errors import RepositoryBusy, RepositoryConflict, RepositoryDataError, RepositoryNotFound
+from finbot_ingestion.repositories.dynamodb.serialization import encode
+from finbot_ingestion.repositories.errors import (
+    RepositoryBusy,
+    RepositoryConflict,
+    RepositoryDataError,
+    RepositoryNotFound,
+)
 from finbot_ingestion.repositories.package_checkpoint import PackageCheckpoint
 from finbot_ingestion.sec.filing_index import parse_filing_index
-from finbot_ingestion.sec.urls import document_url, filing_index_url
 
-NOW = datetime(2026, 10, 8, 20, tzinfo=timezone.utc)
-ACCESSION = "0000320193-26-000001"
-CONFIG = DynamoDBConfig("us-east-1", "companies", "calendar", "filings", "artifacts")
-
-
-def make_filing(**changes):
-    return replace(Filing(accession_number=ACCESSION, company_cik="320193", ticker="AAPL",
-                          form_type="8-K", filed_at=NOW - timedelta(seconds=10), discovered_at=NOW,
-                          filing_index_url=filing_index_url("320193", ACCESSION)), **changes)
-
-
-def make_artifact(filename="Primary.htm", **changes):
-    return replace(Artifact(accession_number=ACCESSION, company_cik="320193", ticker="AAPL",
-                            form_type="8-K", filename=filename, discovered_at=NOW,
-                            sec_url=document_url("320193", ACCESSION, filename)), **changes)
-
-
-from aws_fakes import MemoryAWS
-
-
-@pytest.fixture
-def db(monkeypatch):
-    client = boto3.client("dynamodb", region_name="us-east-1", aws_access_key_id="testing",
-                          aws_secret_access_key="testing")
-    memory = MemoryAWS(client)
-    monkeypatch.setattr(client, "_make_api_call", memory.api)
-    with DynamoDBExecution(client, CONFIG) as execution:
-        yield SimpleNamespace(memory=memory, client=client, execution=execution,
-            filings=DynamoDBFilingRepository(execution), artifacts=DynamoDBArtifactRepository(execution),
-            companies=DynamoDBCompanyRepository(execution), calendar=DynamoDBCalendarRepository(execution))
-
-
-def run(coro):
-    return asyncio.run(coro)
+from tests.support.dynamodb import NOW, ACCESSION, make_filing, make_artifact, run
 
 
 def test_create_duplicate_and_conflict_preserve_provenance(db):

@@ -6,7 +6,9 @@ from datetime import datetime, timedelta, timezone
 import threading
 
 from botocore.exceptions import ClientError, ReadTimeoutError
+
 from finbot_ingestion.repositories.dynamodb.serialization import decode, encode
+
 
 NOW = datetime(2026, 10, 8, 20, tzinfo=timezone.utc)
 
@@ -169,5 +171,3 @@ class MemoryMessages:
             self.lost.popleft()
             raise ReadTimeoutError(endpoint_url="https://mock.invalid")
         return {"MessageId": f"message-{len(self.events)}"}
-
-

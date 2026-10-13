@@ -1,17 +1,21 @@
 """Real botocore models/Stubber validate the calendar-table wire contract."""
 
-import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
+import asyncio
 
 import pytest
 
-from test_dynamodb_sdk import sdk
-from finbot_ingestion.calendar.contracts import CalendarSyncRun, CalendarSyncState, CalendarSyncSuccess
+from finbot_ingestion.calendar.contracts import (
+    CalendarSyncRun,
+    CalendarSyncState,
+    CalendarSyncSuccess,
+)
 from finbot_ingestion.domain import ExpectedEarningsEvent
 from finbot_ingestion.repositories.dynamodb import DynamoDBCalendarRepository
 from finbot_ingestion.repositories.dynamodb.calendar_state import SYNC_PARTITION, state_record
 from finbot_ingestion.repositories.dynamodb.serialization import encode, record, timestamp
+
 
 NOW = datetime(2026, 10, 8, tzinfo=timezone.utc)
 

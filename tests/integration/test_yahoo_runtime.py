@@ -1,19 +1,17 @@
 """Daily cadence, market-date coverage and date-specific satisfaction through restart."""
 
-import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import asyncio
 
 import pytest
 
-from test_phase4 import system
-from test_dynamodb_repositories import db
-from test_phase6 import setup, TestClock
-from test_yahoo_sync import service, COMPANY, DAY, NOW, no_backoff
-from yahoo_fakes import PageSource, row
-from finbot_ingestion.calendar.reconciliation import ReplacementOnlyPolicy
-from finbot_ingestion.domain.satisfaction import EventIdentity
 from finbot_ingestion.domain import Company
+from finbot_ingestion.domain.satisfaction import EventIdentity
+
+from tests.support.runtime import setup, TestClock
+from tests.support.yahoo_fakes import PageSource, row
+from tests.support.yahoo_sync import service, COMPANY, DAY, NOW
 
 
 class EndReplay(Exception):

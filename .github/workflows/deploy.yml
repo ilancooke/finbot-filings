@@ -61,7 +61,7 @@ jobs:
         run: |
           docker build --platform linux/arm64 --provenance=false -t finbot-ingestion:release .
           test "$(docker image inspect finbot-ingestion:release --format '{{.Architecture}}')" = arm64
-          FINBOT_CONTAINER_TESTS=1 FINBOT_CONTAINER_IMAGE=finbot-ingestion:release .venv/bin/python -m pytest -q tests/integration/test_phase7.py -m container
+          FINBOT_CONTAINER_TESTS=1 FINBOT_CONTAINER_IMAGE=finbot-ingestion:release .venv/bin/python -m pytest -q tests/integration/test_container_lifecycle.py -m container
           .venv/bin/python scripts/check_heartbeat_volume.py finbot-ingestion:release
       - uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
         with:

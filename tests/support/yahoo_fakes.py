@@ -2,11 +2,12 @@
 
 from copy import deepcopy
 from datetime import datetime, time, timedelta
-import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
+import json
 
-TEMPLATE = json.loads((Path(__file__).parent / "fixtures/yahoo_page.json").read_text())
+
+TEMPLATE = json.loads((Path(__file__).parents[1] / "fixtures/yahoo_page.json").read_text())
 
 
 def row(day, *, symbol="AAPL", title="Q3 2026 Earnings Announcement", timing="AMC", at=None):

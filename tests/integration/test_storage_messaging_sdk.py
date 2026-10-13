@@ -1,13 +1,13 @@
 """Validate S3/SNS/SQS wire contracts with the installed botocore model."""
 
-import asyncio
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import json
 from types import SimpleNamespace
+import asyncio
+import json
 
-import boto3
 from botocore.stub import Stubber
+import boto3
 import pytest
 
 from finbot_ingestion.aws_config import AWSIOConfig, MessagingConfig, StorageConfig
@@ -22,6 +22,7 @@ from finbot_ingestion.messaging.sns_publisher import SNSArtifactEventPublisher
 from finbot_ingestion.sec.client import DownloadedDocument
 from finbot_ingestion.storage.errors import StorageConflict, StorageLimitError
 from finbot_ingestion.storage.s3_artifact_store import S3ArtifactStore, provenance
+
 
 NOW = datetime(2026, 10, 8, tzinfo=timezone.utc)
 ACCESSION = "0000320193-26-000001"

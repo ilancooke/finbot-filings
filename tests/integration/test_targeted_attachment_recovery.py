@@ -1,13 +1,14 @@
 """Operator preview/resume and normal worker replay through real AWS adapters."""
+
 from copy import deepcopy
 from dataclasses import replace
-import json
 from types import SimpleNamespace
+import json
 
-import pytest
 from botocore.exceptions import ReadTimeoutError
-
 from scripts import recover_earnings_attachments as recovery
+import pytest
+
 from finbot_ingestion.domain import Filing
 from finbot_ingestion.ingestion.recovery_service import RecoveryService
 from finbot_ingestion.repositories.package_checkpoint import PackageCheckpoint
@@ -15,8 +16,10 @@ from finbot_ingestion.sec.client import DownloadedDocument
 from finbot_ingestion.sec.filing_index import FilingIndex, PackageDocument
 from finbot_ingestion.sec.urls import document_url, filing_index_url
 from finbot_ingestion.selection.policy import AcquisitionPolicy, Decision, POLICY_VERSION
-from test_dynamodb_repositories import db, NOW
-from test_phase4 import system, run
+
+from tests.support.dynamodb import NOW
+from tests.support.ingestion import run
+
 
 ACCOUNT = '123456789012'
 TARGET = {'account': ACCOUNT, 'region': recovery.REGION,

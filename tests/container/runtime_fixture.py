@@ -1,21 +1,23 @@
 """Real runtime/client/adapters with reusable offline SDK and HTTP boundaries."""
 
-import asyncio
 from datetime import datetime, timezone
-import json
-import os
 from pathlib import Path
-import threading
-import time
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
+import asyncio
+import json
+import os
+import threading
+import time
 
 import boto3.session
 
-from aws_fakes import MemoryAWS, MemoryMessages, MemoryS3
 from finbot_ingestion.domain import Company
 from finbot_ingestion.repositories.dynamodb.serialization import record
 from finbot_ingestion.runtime.application import RuntimeApplication
+
+from tests.support.aws_fakes import MemoryAWS, MemoryMessages, MemoryS3
+
 
 RAW = b"\x00SEC\xff\r\noriginal"
 ACCESSION = "0000320193-26-000001"
@@ -135,7 +137,7 @@ def install():
     CurlSession.request = forbidden
 
     if scenario.startswith("yahoo"):
-        from yahoo_fakes import raw_page, row
+        from tests.support.yahoo_fakes import raw_page, row
         from finbot_ingestion.calendar.providers.yahoo_client import YahooSession, YahooPageClient
         blocked = False
         def perform(session, method, url, **kwargs):

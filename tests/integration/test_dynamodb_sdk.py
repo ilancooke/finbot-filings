@@ -1,28 +1,21 @@
 """Validate wire parameters using the actual botocore service model and Stubber."""
 
-import asyncio
-from datetime import datetime, timezone
 from dataclasses import replace
+from datetime import datetime, timezone
+import asyncio
 
-import boto3
-from botocore.stub import Stubber
 import pytest
 
 from finbot_ingestion.domain import Artifact, Filing
-from finbot_ingestion.repositories.dynamodb import DynamoDBArtifactRepository, DynamoDBConfig, DynamoDBExecution, DynamoDBFilingRepository
+from finbot_ingestion.repositories.dynamodb import (
+    DynamoDBArtifactRepository,
+    DynamoDBFilingRepository,
+)
 from finbot_ingestion.repositories.dynamodb.serialization import encode, pending_sort, record
+
 
 NOW = datetime(2026, 10, 8, tzinfo=timezone.utc)
 ACCESSION = "0000320193-26-000001"
-
-
-@pytest.fixture
-def sdk():
-    client = boto3.client("dynamodb", region_name="us-east-1", aws_access_key_id="testing", aws_secret_access_key="testing")
-    config = DynamoDBConfig("us-east-1", "companies", "calendar", "filings", "artifacts")
-    with Stubber(client) as stub, DynamoDBExecution(client, config) as execution:
-        yield client, stub, execution
-        stub.assert_no_pending_responses()
 
 
 def test_sdk_conditional_creation_and_duplicate(sdk):

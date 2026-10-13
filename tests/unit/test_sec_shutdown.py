@@ -1,31 +1,15 @@
-"""Shutdown dispatch boundaries and startup timing, with no network."""
-import asyncio
-from dataclasses import replace
-import threading
+"""SEC admission shutdown across attempts, retries and redirects."""
+
 from concurrent.futures import ThreadPoolExecutor
-from types import SimpleNamespace
+import asyncio
+import threading
 
 import pytest
 
-from finbot_ingestion.runtime.config import RuntimeConfig
-from finbot_ingestion.config import ConfigurationError
-from finbot_ingestion.sec.errors import SECRequestStopped
 from finbot_ingestion.execution import BlockingExecution
-from test_ingestion_transport import make, Response, URL
+from finbot_ingestion.sec.errors import SECRequestStopped
 
-
-@pytest.mark.parametrize("value", [-1, float("inf"), float("nan"), True])
-def test_quiet_period_rejects_invalid_values(value):
-    with pytest.raises(ConfigurationError):
-        RuntimeConfig(sec_startup_quiet_seconds=value)
-
-
-def test_runtime_environment_and_local_default():
-    assert RuntimeConfig().sec_startup_quiet_seconds == 0
-    config = RuntimeConfig.from_env({"RUNTIME_SEC_STARTUP_QUIET_SECONDS": "150", "RUNTIME_METRICS_ENVIRONMENT": "production"})
-    assert config.sec_startup_quiet_seconds == 150 and config.metrics_environment == "production"
-    with pytest.raises(ConfigurationError):
-        RuntimeConfig(metrics_environment="unsafe space")
+from tests.support.sec_transport import make, Response, URL
 
 
 @pytest.mark.parametrize("status,headers", [(429, {}), (302, {"Location": "/Archives/next"})])

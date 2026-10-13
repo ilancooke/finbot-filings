@@ -1,9 +1,10 @@
 """Synthetic SEC-shaped snapshots replayed through the real client and parsers."""
-import json
+
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+import json
 
 import pytest
 
@@ -12,7 +13,12 @@ from finbot_ingestion.domain import Company, Filing
 from finbot_ingestion.sec.client import SecClient
 from finbot_ingestion.sec.errors import SECIncompletePackageError
 from finbot_ingestion.sec.rate_limiter import SECRateLimiter
-from finbot_ingestion.sec.urls import filing_index_url, accession_index_json_url, company_submissions_url
+from finbot_ingestion.sec.urls import (
+    filing_index_url,
+    accession_index_json_url,
+    company_submissions_url,
+)
+
 
 FIXTURES = Path(__file__).parents[1]/'fixtures'
 TIME = datetime(2026,10,8,tzinfo=timezone.utc)

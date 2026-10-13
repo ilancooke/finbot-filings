@@ -4,13 +4,14 @@ from datetime import timedelta
 
 import pytest
 
-from test_ingestion_phase6 import COMPANY, FakeClock, event
 from finbot_ingestion.domain.satisfaction import EventIdentity
 from finbot_ingestion.ingestion.work_queue import WorkQueue
 from finbot_ingestion.runtime.config import RuntimeConfig
 from finbot_ingestion.scheduler.market_sessions import ExchangeMarketSessions
 from finbot_ingestion.scheduler.polling_scheduler import PollingScheduler
 from finbot_ingestion.scheduler.window_policy import WindowPolicy
+
+from tests.support.scheduling import COMPANY, FakeClock, event
 
 
 def scheduler(clock=None):

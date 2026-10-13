@@ -1,61 +1,19 @@
 """Raw Yahoo pages -> real durable calendar repository, with offline SDK boundaries."""
 
-import asyncio
-from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import timedelta
+import asyncio
 
 from botocore.exceptions import ReadTimeoutError
 import pytest
 
-from test_dynamodb_repositories import db, NOW
-from yahoo_fakes import PageSource, row
-from finbot_ingestion.calendar import CalendarConfig
 from finbot_ingestion.calendar.provider import IncompleteCalendarSnapshot
-from finbot_ingestion.calendar.providers.yahoo import YahooEarningsCalendarProvider
-from finbot_ingestion.calendar.providers.yahoo_client import FetchBudget
-from finbot_ingestion.calendar.providers.yahoo_config import YahooConfig
-from finbot_ingestion.calendar.reconciliation import ReplacementOnlyPolicy
-from finbot_ingestion.calendar.service import CalendarSyncService
 from finbot_ingestion.domain import Company, ExpectedEarningsEvent
-from finbot_ingestion.execution import BlockingExecution
 from finbot_ingestion.repositories.dynamodb.serialization import record, restore
 
-COMPANY = Company("AAPL", "320193", "Synthetic company")
-DAY = NOW.date()
-
-
-def event(day=DAY, **options):
-    return ExpectedEarningsEvent(company_cik=COMPANY.cik, ticker=COMPANY.ticker, expected_date=day,
-        synced_at=NOW - timedelta(days=1), provider="yahoo", time_of_day="after_market",
-        replacement_hint=options.pop("replacement_hint", "quarterly-announcement-v1/2026/Q3"), **options)
-
-
-@pytest.fixture(autouse=True)
-def no_backoff(monkeypatch):
-    monkeypatch.setattr(FetchBudget, "wait", lambda budget, seconds: budget.remaining())
-
-
-async def no_sleep(seconds):
-    pass
-
-
-@asynccontextmanager
-async def service(db, source, *, now=lambda:NOW):
-    with BlockingExecution(name="yahoo-sync-test") as execution:
-        provider = YahooEarningsCalendarProvider(YahooConfig(), execution, client=source, now=now)
-        calendar = CalendarSyncService(provider, db.companies, db.calendar,
-            CalendarConfig(provider="yahoo", provider_attempts=1), now=now, sleeper=no_sleep,
-            reconciliation=ReplacementOnlyPolicy(), market_timezone="America/New_York", reconciliation_lookback_days=3)
-        try:
-            yield calendar
-        finally:
-            await provider.close()
-
-
-async def seed(db, events):
-    await db.companies.upsert(COMPANY)
-    await db.calendar.upsert_events(events)
+from tests.support.dynamodb import NOW
+from tests.support.yahoo_fakes import PageSource, row
+from tests.support.yahoo_sync import COMPANY, DAY, event, service, seed
 
 
 def test_absence_never_cancels_but_successful_empty_collection_advances_freshness(db):
@@ -223,3 +181,6 @@ def test_additive_evidence_roundtrip_and_old_record_default():
     item.pop("replacement_hint")
     assert restore(ExpectedEarningsEvent, item).replacement_hint is None
     with pytest.raises(ValueError): replace(value, replacement_hint="unversioned")
+
+# Bypass provider pacing only in tests that use the synthetic Yahoo boundary.
+pytestmark = pytest.mark.usefixtures("no_backoff")

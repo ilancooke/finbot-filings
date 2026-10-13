@@ -1,11 +1,12 @@
 """Stateful release failures verify stop ordering, exact revision and restoration."""
-from copy import deepcopy
-import json
-from types import SimpleNamespace
 
-import pytest
+from copy import deepcopy
+from types import SimpleNamespace
+import json
 
 from scripts.release import Release, ReleaseError, registration
+import pytest
+
 
 REPO = "123456789012.dkr.ecr.us-east-1.amazonaws.com/finbot-ingestion"
 OLD = "sha256:" + "1" * 64

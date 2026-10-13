@@ -1,16 +1,96 @@
-"""Calendar-day matching over existing downloads and mocked durable repositories."""
+"""Durable earnings matching, compatibility and post-match polling."""
 
-import asyncio
 from dataclasses import replace
 from datetime import timedelta
+import asyncio
 
-from test_dynamodb_repositories import db, NOW, ACCESSION, make_filing
-from test_phase4 import system
-from test_phase6 import setup, until
-from test_phase5 import APPLE
+import pytest
+
 from finbot_ingestion.domain.satisfaction import EventIdentity, EventSatisfaction
-from finbot_ingestion.repositories.dynamodb.satisfaction import satisfaction_record, read_satisfaction
+from finbot_ingestion.repositories.dynamodb.satisfaction import (
+    satisfaction_record,
+    read_satisfaction,
+    SATISFACTION_PARTITION,
+)
+from finbot_ingestion.repositories.errors import RepositoryDataError
 from finbot_ingestion.sec.urls import filing_index_url
+
+from tests.support.calendar import APPLE
+from tests.support.dynamodb import make_filing, NOW, ACCESSION
+from tests.support.runtime import until, setup
+
+
+@pytest.mark.parametrize("form,status,items,eligible", [("8-K", "known", ("2.02",), True),
+    ("8-K", "known", ("9.01",), False), ("8-K", "absent", (), False),
+    ("8-K", "ambiguous", (), False), ("8-K/A", "known", ("2.02",), False),
+    ("10-Q", "absent", (), True), ("10-K", "absent", (), True),
+    ("10-Q/A", "absent", (), False), ("10-K/A", "absent", (), False)])
+def test_runtime_satisfaction_and_independent_ingestion(system, tmp_path, form, status, items, eligible):
+    async def scenario():
+        app, expected = await setup(system, tmp_path, form=form, status=status, items=items)
+        task = asyncio.create_task(app.run())
+        await until(lambda: "submissions" in system.sec.calls)
+        # Await evidence-aware discovery and matching, not merely HTTP invocation.
+        await until(lambda: bool(app.scheduler.states) and app.scheduler.states[APPLE.cik].due > app.clock.monotonic())
+        identity = EventIdentity.from_event(expected)
+        assert (await app.satisfaction.get(identity) is not None) is eligible
+        assert app.scheduler.active(APPLE.cik)  # Recent matches retain frequent follow-up polling.
+        assert await system.db.filings.get(ACCESSION) is not None
+        if form in ("8-K", "8-K/A"):
+            await until(lambda: bool(system.messages.events))
+            assert system.s3.objects  # non-matches still acquire and publish
+        app.request_stop()
+        await task
+        assert not (tmp_path / "health.json").exists()
+        assert all(t.done() for t in app.tasks.values())
+    asyncio.run(scenario())
+
+
+def test_satisfaction_restart_refresh_date_move_and_lost_ack(system, tmp_path):
+    async def scenario():
+        app, expected = await setup(system, tmp_path)
+        observations = await app.worker.discovery.discover_with_evidence(APPLE)
+        await app.reload()
+        system.db.memory.lost.append("PutItem")
+        await app.satisfy(observations)
+        original = await app.satisfaction.get(EventIdentity.from_event(expected))
+        assert original.match_reason == "original_8_k_item_2_02" and original.matched_sec_items == ("2.02",)
+        moved = replace(expected, expected_date=expected.expected_date + timedelta(days=1), synced_at=NOW + timedelta(seconds=1))
+        await system.db.calendar.upsert_events([moved])
+        await system.db.calendar.cancel_event(expected, at=NOW + timedelta(seconds=1))
+        restarted, _ = await setup(system, tmp_path)
+        # setup refresh writes older observations, which cannot replace the tombstone.
+        await restarted.reload()
+        assert EventIdentity.from_event(moved) in restarted.scheduler.satisfied
+        assert await restarted.satisfaction.get(EventIdentity.from_event(moved)) == original
+        malformed = satisfaction_record(original)
+        malformed.pop("match_policy_version")
+        with pytest.raises(RepositoryDataError):
+            read_satisfaction(malformed)
+        malformed = satisfaction_record(original)
+        malformed["match_reason"] = "any_filing"
+        with pytest.raises(RepositoryDataError):
+            read_satisfaction(malformed)
+    asyncio.run(scenario())
+
+
+def test_overlapping_expectations_and_unknown_policy_do_not_suppress(system, tmp_path):
+    async def scenario():
+        app, expected = await setup(system, tmp_path)
+        observed = await app.worker.discovery.discover_with_evidence(APPLE)
+        await app.reload()
+        app.scheduler.events += (replace(expected, provider_event_id="other"),)
+        await app.satisfy(observed)
+        assert not app.scheduler.satisfied
+        app.scheduler.events = (expected,)
+        await app.satisfy(observed)
+        key = (SATISFACTION_PARTITION, EventIdentity.from_event(expected).key)
+        system.db.memory.tables["calendar"][key]["match_policy_version"] = "future"
+        with pytest.raises(RepositoryDataError):
+            await app.reload()
+    asyncio.run(scenario())
+
+
 
 
 def test_restart_matches_already_downloaded_early_filing_without_redownload(system, tmp_path):
