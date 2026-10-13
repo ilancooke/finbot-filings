@@ -315,6 +315,14 @@ after-market windows span close minus two hours to close plus three hours. Unkno
 times span the full combined window; non-session expectations retain their date with
 a 07:30–19:00 market-local fallback. Unsatisfied events get two hours of grace.
 
+After the first durable earnings match, frequent polling continues for ten minutes
+at the existing active cadence to discover companion reports and earnings releases.
+The fixed deadline is the recorded `satisfied_at` plus ten minutes; later filings,
+calendar reloads and restarts do not extend it. A restart resumes only the time
+remaining. This follow-up applies even outside the original polling window. After
+it expires, hourly safety polling resumes unless another unsatisfied expectation
+requires active polling. The shared SEC request ceiling and retry backoff still apply.
+
 All SEC polls/indexes/downloads/retries/redirects share a five-request/second ceiling.
 One HTTP attempt is in flight at a time through reused synchronous transport and a
 bounded executor. Slow responses and competing work reduce throughput. Target poll
@@ -324,8 +332,8 @@ The offline replay synchronizes virtual-time advances with worker wait boundarie
 and includes a deliberately slower mocked SDK case so runner speed does not
 determine whether polling and recovery complete in the simulated window.
 
-Version `earnings-satisfaction-v2` stops aggressive polling only after a durable
-satisfaction checkpoint for the same CIK and SEC acceptance on the expected date
+Version `earnings-satisfaction-v2` records a durable satisfaction checkpoint for
+the same CIK and SEC acceptance on the expected date
 in `America/New_York`: midnight inclusive to the following midnight exclusive.
 Matching is independent of polling windows and provider before/after-market timing,
 so early-morning earnings filings can match. There is no matching grace beyond that

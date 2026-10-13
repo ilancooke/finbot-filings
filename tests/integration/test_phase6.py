@@ -90,7 +90,7 @@ def test_runtime_satisfaction_and_independent_ingestion(system, tmp_path, form, 
         await until(lambda: bool(app.scheduler.states) and app.scheduler.states[APPLE.cik].due > app.clock.monotonic())
         identity = EventIdentity.from_event(expected)
         assert (await app.satisfaction.get(identity) is not None) is eligible
-        assert app.scheduler.active(APPLE.cik) is (not eligible)
+        assert app.scheduler.active(APPLE.cik)  # Recent matches retain frequent follow-up polling.
         assert await system.db.filings.get(ACCESSION) is not None
         if form in ("8-K", "8-K/A"):
             await until(lambda: bool(system.messages.events))

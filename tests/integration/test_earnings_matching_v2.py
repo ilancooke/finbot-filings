@@ -10,6 +10,7 @@ from test_phase6 import setup, until
 from test_phase5 import APPLE
 from finbot_ingestion.domain.satisfaction import EventIdentity, EventSatisfaction
 from finbot_ingestion.repositories.dynamodb.satisfaction import satisfaction_record, read_satisfaction
+from finbot_ingestion.sec.urls import filing_index_url
 
 
 def test_restart_matches_already_downloaded_early_filing_without_redownload(system, tmp_path):
@@ -46,6 +47,7 @@ def test_restart_matches_already_downloaded_early_filing_without_redownload(syst
 def test_v1_checkpoint_survives_reload_and_is_not_rewritten(system, tmp_path):
     async def scenario():
         app, expected = await setup(system, tmp_path)
+        app.clock = app.scheduler.clock = FollowUpClock()
         observations = await app.worker.discovery.discover_with_evidence(APPLE)
         window = app.windows.window(expected)
         legacy = EventSatisfaction(identity=EventIdentity.from_event(expected),
@@ -59,10 +61,15 @@ def test_v1_checkpoint_survives_reload_and_is_not_rewritten(system, tmp_path):
         assert read_satisfaction(satisfaction_record(legacy)) == legacy
         await app.reload()
         assert EventIdentity.from_event(expected) in app.scheduler.satisfied
+        assert app.scheduler.active(APPLE.cik)
+        assert app.scheduler.satisfied_at[legacy.identity] == legacy.satisfied_at
         before = len(system.db.memory.calls)
         await app.satisfy(observations)
         assert len(system.db.memory.calls) == before
         assert await app.satisfaction.get(legacy.identity) == legacy
+        app.clock.elapsed = 600
+        await app.reload()
+        assert not app.scheduler.active(APPLE.cik)
     asyncio.run(scenario())
 
 
@@ -84,4 +91,83 @@ def test_one_accession_cannot_satisfy_another_event_after_reload(system, tmp_pat
         await app.satisfy(observations)
         assert await app.satisfaction.get(EventIdentity.from_event(other)) is None
         assert await app.satisfaction.get(original.identity) == original
+    asyncio.run(scenario())
+
+
+class FollowUpClock:
+    def __init__(self):
+        self.elapsed = 0
+
+    def now(self):
+        return NOW + timedelta(seconds=self.elapsed)
+
+    def monotonic(self):
+        return self.elapsed
+
+
+def test_10q_match_continues_polling_and_acquires_companion_8k(system, tmp_path):
+    async def scenario():
+        app, expected = await setup(system, tmp_path, form="10-Q", status="absent", items=())
+        app.clock = app.scheduler.clock = FollowUpClock()
+        app.worker.control.now = app.clock.now
+        observations = await app.worker.discovery.discover_with_evidence(APPLE)
+        await app.reload()
+        await app.satisfy(observations)
+        identity = EventIdentity.from_event(expected)
+        first = await app.satisfaction.get(identity)
+        app.scheduler.completed(APPLE.cik)
+        assert app.scheduler.active(APPLE.cik)
+
+        # Companion report appears 33 seconds after the first match, as in AZZ.
+        app.clock.elapsed = 33
+        accession = "0000320193-26-000002"
+        companion = make_filing(accession_number=accession, filed_at=app.clock.now(),
+                                filing_index_url=filing_index_url(APPLE.cik, accession))
+        system.sec.filings.append(companion)
+        app.scheduler.tick()
+        assert app.polls.contains(APPLE.cik)
+        task = asyncio.create_task(app.poll_loop("poll-0"))
+        try:
+            await until(lambda: not app.polls.contains(APPLE.cik))
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        assert app.filings.contains(companion.accession_number)
+        await app.worker.process_filing(companion.accession_number)
+        assert system.s3.objects and system.messages.events
+        assert await app.satisfaction.get(identity) == first
+        assert app.scheduler.satisfied_at[identity] == first.satisfied_at
+
+        app.clock.elapsed = 600
+        assert not app.scheduler.active(APPLE.cik)
+        app.scheduler.completed(APPLE.cik)
+        assert app.scheduler.states[APPLE.cik].due == 600 + app.config.safety_poll_seconds
+    asyncio.run(scenario())
+
+
+def test_reload_and_compatible_replay_use_original_durable_match_time(system, tmp_path):
+    async def scenario():
+        app, expected = await setup(system, tmp_path)
+        app.clock = app.scheduler.clock = FollowUpClock()
+        observations = await app.worker.discovery.discover_with_evidence(APPLE)
+        await app.reload()
+        await app.satisfy(observations)
+        identity = EventIdentity.from_event(expected)
+        first = await app.satisfaction.get(identity)
+        app.clock.elapsed = 300
+        await app.reload()
+        assert app.scheduler.active(APPLE.cik)
+        assert app.scheduler.satisfied_at[identity] == first.satisfied_at
+        app.clock.elapsed = 600
+        await app.reload()
+        assert not app.scheduler.active(APPLE.cik)
+
+        # Simulate a compatible checkpoint already stored before this process
+        # learned of the acknowledgment. Creating it again must not restart polling.
+        app.scheduler.satisfied.clear()
+        app.satisfied_accessions.clear()
+        await app.satisfy(observations)
+        assert app.scheduler.satisfied_at[identity] == first.satisfied_at
+        assert not app.scheduler.active(APPLE.cik)
+        assert await app.satisfaction.get(identity) == first
     asyncio.run(scenario())

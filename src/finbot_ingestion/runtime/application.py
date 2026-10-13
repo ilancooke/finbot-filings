@@ -94,7 +94,7 @@ class RuntimeApplication:
             events = tuple(e for e in events if e.company_cik in ciks and e.provider == c.provider)
             if len(events) > c.max_snapshot_events:
                 raise ValueError("loaded calendar exceeds configured bound")
-            satisfied, satisfied_accessions = set(), set()
+            satisfied, satisfied_accessions, satisfied_at = set(), set(), {}
             for event in events:
                 # Validate sessions and all event identities before replacing the schedule.
                 self.windows.window(event)
@@ -103,6 +103,7 @@ class RuntimeApplication:
                 if checkpoint is not None:
                     satisfied.add(identity)
                     satisfied_accessions.add(checkpoint.matched_accession_number)
+                    satisfied_at[identity] = checkpoint.satisfied_at
             health = await self.calendar_service.health()
             state = health.state
             success = state.full_success if state is not None else None
@@ -117,7 +118,7 @@ class RuntimeApplication:
                 and success.run.end_date >= required_end
                 and (success.run.end_date - success.run.start_date).days + 1 >= c.lookahead_days)
             self.calendar_health = health
-            self.scheduler.reload(companies, events, satisfied)
+            self.scheduler.reload(companies, events, satisfied, satisfied_at=satisfied_at)
             self.satisfied_accessions = satisfied_accessions
 
     async def satisfy(self, observations):
@@ -150,9 +151,14 @@ class RuntimeApplication:
                         "reason": "overlapping_expectations", "policy_version": decision.policy_version})
                     continue
                 value = EventSatisfaction.from_match(event, window, observation, decision, at=self.clock.now())
-                await self.worker.control.checkpoint(lambda: self.satisfaction.create_if_absent(value),
+                created = await self.worker.control.checkpoint(lambda: self.satisfaction.create_if_absent(value),
                     operation="earnings_satisfaction", identity=value.identity.key)
-                self.scheduler.satisfied.add(value.identity)
+                # Compatible replay can retain an earlier timestamp. Use that
+                # original checkpoint rather than starting another ten minutes.
+                checkpoint = value if created else await self.satisfaction.get(value.identity)
+                if checkpoint is None:
+                    raise ValueError("durable earnings satisfaction disappeared")
+                self.scheduler.mark_satisfied(value.identity, at=checkpoint.satisfied_at)
                 self.satisfied_accessions.add(value.matched_accession_number)
                 self.metrics.count("EarningsExpectationsSatisfied")
                 LOGGER.info("Earnings polling expectation satisfied by scheduling heuristic", extra={

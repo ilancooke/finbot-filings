@@ -1,8 +1,11 @@
 """No durable reads per tick; completion-based schedules and no catch-up bursts."""
 
 from dataclasses import dataclass
+from datetime import timedelta
 
 from finbot_ingestion.domain.satisfaction import EventIdentity
+
+POST_MATCH_POLLING = timedelta(minutes=10)
 
 
 @dataclass(slots=True)
@@ -17,23 +20,39 @@ class PollingScheduler:
     def __init__(self, config, clock, windows, queue):
         self.config, self.clock, self.windows, self.queue = config, clock, windows, queue
         self.states, self.events, self.satisfied = {}, (), set()
+        self.satisfied_at = {}
         self.events_by_cik = {}
 
-    def reload(self, companies, events, satisfied):
+    def reload(self, companies, events, satisfied, *, satisfied_at=None):
         now = self.clock.monotonic()
         self.states = {c.cik: PollState(c, self.states[c.cik].due, self.states[c.cik].active,
             self.states[c.cik].failures) if c.cik in self.states else PollState(c,
             now + (int(c.cik) % 1000) / 1000 * self.config.safety_poll_seconds)
             for c in companies if c.enabled}
         self.events, self.satisfied = tuple(events), set(satisfied)
+        self.satisfied_at = {identity: at for identity, at in (satisfied_at or {}).items()
+                             if identity in self.satisfied}
         self.events_by_cik = {}
         for event in self.events:
             self.events_by_cik.setdefault(event.company_cik, []).append(event)
 
+    def mark_satisfied(self, identity, *, at):
+        # A repeated observation must not extend the first durable match's deadline.
+        if identity not in self.satisfied:
+            self.satisfied.add(identity)
+            self.satisfied_at[identity] = at
+
     def active(self, cik):
         now = self.clock.now()
-        return any(e.company_cik == cik and EventIdentity.from_event(e) not in self.satisfied
-                   and self.windows.window(e).contains(now) for e in self.events_by_cik.get(cik, ()))
+        for event in self.events_by_cik.get(cik, ()):
+            identity = EventIdentity.from_event(event)
+            if identity in self.satisfied:
+                at = self.satisfied_at.get(identity)
+                if at is not None and at <= now < at + POST_MATCH_POLLING:
+                    return True
+            elif self.windows.window(event).contains(now):
+                return True
+        return False
 
     def tick(self):
         now = self.clock.monotonic()

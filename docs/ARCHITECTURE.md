@@ -404,9 +404,9 @@ compatible checkpoint; unknown policy versions fail explicitly. Readers accept
 both v1 and v2. V1 retains its original polling-window/grace validation and bounds;
 v2 additionally requires exact New York day bounds for its observed expected date.
 Existing v1 matches are hydrated as satisfied and never upgraded or rewritten.
-Satisfaction is
-separate from mutable calendar rows and survives refresh/restart. Aggressive
-polling stops only after durable satisfaction; safety polls/recovery continue.
+Satisfaction is separate from mutable calendar rows and survives refresh/restart.
+Durable satisfaction starts a fixed ten-minute follow-up period at the active poll
+cadence; safety polls/recovery continue afterward.
 It neither waits for publication nor proves extracted/validated earnings.
 
 Polling still uses `WindowPolicy` session windows and configured grace. Only
@@ -415,6 +415,17 @@ observations even for completed parents, allowing missing matches to be establis
 on subsequent polls without package enumeration, downloads or republication.
 This is limited to loaded calendar expectations and normal recent submissions;
 it does not introduce historical backfill or change acquisition selection.
+
+The scheduler uses each checkpoint's original `satisfied_at` to continue frequent
+polling until `satisfied_at + 10 minutes`, independent of the original polling
+window's boundaries. This applies to both v1/v2 checkpoints. Reload and restart
+hydrate the same timestamps; expired checkpoints do not start a new follow-up.
+Compatible conditional-write replay also reads the retained timestamp instead of
+using the latest attempted write time. Later filings do not replace the match or
+extend its deadline. Another unsatisfied expectation can still independently keep
+the company active. Completion-based cadence, retry backoff, queue coalescing and
+the shared SEC request budget remain in effect. Scheduler ticks make no durable
+reads, and no new database fields are introduced.
 
 ## Yahoo calendar synchronization
 

@@ -30,6 +30,14 @@ owners; do not change the baseline variable to each GitHub-created revision.
 
 ## Earnings matching policy updates
 
+The ten-minute post-match frequent-polling extension also uses normal application
+delivery, with no CDK, alarm, environment or data-schema changes. It derives its
+deadline from the existing durable `satisfied_at` timestamp. Restarts resume only
+the remainder; matches older than ten minutes stay on safety polling unless an
+unsatisfied expectation requires active polling. `ActiveCompanies` includes
+companies in this follow-up period. Calendar matches remain visible immediately;
+follow-up does not wait for document storage or notification publication.
+
 The `earnings-satisfaction-v2` application change requires no CDK deployment,
 environment changes, table migration or acquisition reset. Update/restart
 `finbot-dashboard` with the v1/v2 checkpoint reader before releasing the ingestion

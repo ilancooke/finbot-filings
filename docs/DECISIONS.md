@@ -321,3 +321,21 @@ support v1/v2, while new v2 bounds are validated strictly. Normal recent-submiss
 polls can link completed filings for loaded expectations without redownloading.
 No data migration, reset, historical traversal or infrastructure change is needed.
 This remains a scheduling heuristic rather than validated financial-result evidence.
+
+<a id="adr-017"></a>
+## ADR 017 — Continue frequent polling briefly after an earnings match
+
+**Accepted 2026-10-13.** Supersedes immediate return to safety polling after
+durable earnings satisfaction. A periodic report can satisfy an expectation
+before its companion earnings release becomes visible in SEC submissions. That
+release can add revised guidance even when the periodic report already contains
+reported and adjusted EPS.
+
+Continue the existing active poll cadence for a fixed ten minutes after the first
+durable match, then return to safety polling unless another unsatisfied expectation
+requires active polling. Derive the deadline from the existing `satisfied_at`;
+later filings, reloads, restarts and compatible checkpoint replays cannot extend it.
+The follow-up can span original polling-window boundaries. Preserve matching and
+acquisition rules, SEC pacing, retry backoff and durable checkpoints. No new
+database fields, infrastructure or alarm changes are needed. Revisit the duration
+if observed companion-report publication delays show that ten minutes is unsuitable.
