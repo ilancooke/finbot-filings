@@ -324,12 +324,20 @@ The offline replay synchronizes virtual-time advances with worker wait boundarie
 and includes a deliberately slower mocked SDK case so runner speed does not
 determine whether polling and recovery complete in the simulated window.
 
-Version `earnings-satisfaction-v1` stops aggressive polling only after a durable
-satisfaction checkpoint for the same CIK and acceptance within window/grace. Exact
-original `10-Q` and `10-K` qualify; original `8-K` also requires unambiguous SEC
-Item `2.02` metadata. Amendments/generic or ambiguous 8-Ks remain ingested without
-satisfying the event. Safety polling and pending recovery continue. This is a
-scheduling heuristic, not evidence of extracted or validated earnings.
+Version `earnings-satisfaction-v2` stops aggressive polling only after a durable
+satisfaction checkpoint for the same CIK and SEC acceptance on the expected date
+in `America/New_York`: midnight inclusive to the following midnight exclusive.
+Matching is independent of polling windows and provider before/after-market timing,
+so early-morning earnings filings can match. There is no matching grace beyond that
+date. Exact original `10-Q` and `10-K` qualify; original `8-K` also requires
+unambiguous submissions Item `2.02` metadata. Amendments/generic or ambiguous 8-Ks
+remain ingested without satisfying the event. Ambiguous expectations and reuse of
+an already matched accession are rejected. Existing `earnings-satisfaction-v1`
+checkpoints remain valid and are not rewritten. Normal SEC polls reevaluate already
+downloaded filings for loaded calendar expectations without downloading them again.
+Safety polling and pending recovery continue. This is a scheduling heuristic, not
+evidence of extracted or validated earnings. See the
+[matching policy rollout](docs/DEPLOYMENT.md#earnings-matching-policy-updates).
 
 Required-loop failure, unexpected return or stalled busy work exits nonzero.
 Sanitized JSON logs go to stderr; bounded CloudWatch EMF records go to stdout with

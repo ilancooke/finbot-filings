@@ -8,7 +8,9 @@ from finbot_ingestion.calendar.contracts import provider_name
 from .identity import normalize_cik, normalize_accession_number
 from .validation import utc_datetime
 from .sec_items import SECItemMetadata
-from finbot_ingestion.scheduler.earnings_satisfaction_policy import POLICY_VERSION, MATCH_REASONS
+from finbot_ingestion.scheduler.earnings_satisfaction_policy import (
+    POLICY_VERSION, SUPPORTED_POLICY_VERSIONS, MATCH_REASONS, matching_window,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,9 +67,13 @@ class EventSatisfaction:
             raise ValueError("satisfaction outside valid acceptance window")
         if self.identity.kind == "date" and self.identity.value != self.observed_expected_date.isoformat():
             raise ValueError("identity date differs from expectation")
-        if (self.match_policy_version != POLICY_VERSION or self.matched_form_type not in MATCH_REASONS
+        if (self.match_policy_version not in SUPPORTED_POLICY_VERSIONS or self.matched_form_type not in MATCH_REASONS
                 or MATCH_REASONS[self.matched_form_type] != self.match_reason):
             raise ValueError("unsupported policy version or match reason")
+        if self.match_policy_version == POLICY_VERSION:
+            window = matching_window(self.observed_expected_date)
+            if (self.window_start, self.window_end, self.grace_end) != (window.start, window.end, window.grace_end):
+                raise ValueError("v2 satisfaction requires exact New York calendar-day bounds")
         evidence = SECItemMetadata(self.matched_accession_number, self.identity.company_cik,
             "known" if self.sec_item_evidence_source is not None else "absent", self.matched_sec_items,
             self.sec_item_evidence_source or "submissions.recent.items")

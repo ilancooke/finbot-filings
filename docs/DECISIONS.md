@@ -299,3 +299,25 @@ public-repository privacy preferences. Existing historical account references
 are outside this change. Normal CDK/release handoff and manual infrastructure
 ownership remain unchanged; no AWS resources or durable data are changed by
 editing these files.
+
+<a id="adr-016"></a>
+## ADR 016 — Match earnings on the expected New York date
+
+**Accepted 2026-10-13.** Supersedes earnings-satisfaction-v1's use of the active
+polling window as an acceptance constraint for new matches. Legitimate early
+earnings filings can arrive before that window and still be downloaded, leaving
+their calendar expectations unsatisfied.
+
+New `earnings-satisfaction-v2` matches use the expected date in
+`America/New_York`, from midnight inclusive to the next midnight exclusive,
+independent of provider timing and polling/session configuration. Keep the same
+CIK, original-form and unambiguous submissions Item 2.02 requirements, deterministic
+candidate ordering and ambiguity safeguards. Do not reuse an already matched
+accession for another expectation. Polling windows, safety cadence, acquisition
+selection and document processing remain as defined previously.
+
+Retain existing v1 checkpoints unchanged; both ingestion and dashboard readers
+support v1/v2, while new v2 bounds are validated strictly. Normal recent-submissions
+polls can link completed filings for loaded expectations without redownloading.
+No data migration, reset, historical traversal or infrastructure change is needed.
+This remains a scheduling heuristic rather than validated financial-result evidence.

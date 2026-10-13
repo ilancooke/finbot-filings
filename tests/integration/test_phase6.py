@@ -134,10 +134,9 @@ def test_satisfaction_sdk_wire_condition_strong_read_and_missing_parent():
     async def scenario():
         filing = make_filing()
         expected = event(time_of_day="after_market")
-        config = RuntimeConfig()
-        window = WindowPolicy(ExchangeMarketSessions(start=date(2026, 1, 1), end=date(2026, 12, 31)), config).window(expected)
+        window = EarningsSatisfactionPolicy().window(expected)
         observation = FilingObservation(filing, SECItemMetadata(ACCESSION, APPLE.cik, "known", ("2.02",)))
-        decision = EarningsSatisfactionPolicy().evaluate(expected, window, filing, observation.sec_items)
+        decision = EarningsSatisfactionPolicy().evaluate(expected, filing, observation.sec_items)
         value = EventSatisfaction.from_match(expected, window, observation, decision, at=NOW)
         assert len(json.dumps(encode(satisfaction_record(value))).encode()) < 2048
         client = boto3.client("dynamodb", region_name="us-east-1", aws_access_key_id="testing", aws_secret_access_key="testing")

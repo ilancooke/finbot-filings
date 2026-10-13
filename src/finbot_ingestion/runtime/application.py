@@ -36,6 +36,7 @@ class RuntimeApplication:
         self.artifacts = WorkQueue(config.artifact_queue_size, self.clock)
         self.scheduler = PollingScheduler(config, self.clock, windows, self.polls)
         self.policy = EarningsSatisfactionPolicy()
+        self.satisfied_accessions = set()
         self.stop = asyncio.Event()
         self.reload_requested = asyncio.Event()
         self._state_lock = asyncio.Lock()
@@ -93,7 +94,7 @@ class RuntimeApplication:
             events = tuple(e for e in events if e.company_cik in ciks and e.provider == c.provider)
             if len(events) > c.max_snapshot_events:
                 raise ValueError("loaded calendar exceeds configured bound")
-            satisfied = set()
+            satisfied, satisfied_accessions = set(), set()
             for event in events:
                 # Validate sessions and all event identities before replacing the schedule.
                 self.windows.window(event)
@@ -101,6 +102,7 @@ class RuntimeApplication:
                 checkpoint = await self.satisfaction.get(identity)
                 if checkpoint is not None:
                     satisfied.add(identity)
+                    satisfied_accessions.add(checkpoint.matched_accession_number)
             health = await self.calendar_service.health()
             state = health.state
             success = state.full_success if state is not None else None
@@ -116,29 +118,33 @@ class RuntimeApplication:
                 and (success.run.end_date - success.run.start_date).days + 1 >= c.lookahead_days)
             self.calendar_health = health
             self.scheduler.reload(companies, events, satisfied)
+            self.satisfied_accessions = satisfied_accessions
 
     async def satisfy(self, observations):
         async with self._state_lock:
             events = [e for e in self.scheduler.events if EventIdentity.from_event(e) not in self.scheduler.satisfied]
             matches = []
             for event in events:
-                window = self.windows.window(event)
-                selected = self.policy.select(event, window, observations)
+                window = self.policy.window(event)
+                selected = self.policy.select(event, observations)
                 if selected is not None:
                     observation, decision = selected
                     matches.append((event, window, observation, decision))
                 else:
                     for observation in observations:
                         if observation.filing.company_cik == event.company_cik and window.contains(observation.filing.filed_at):
-                            decision = self.policy.evaluate(event, window, observation.filing, observation.sec_items)
+                            decision = self.policy.evaluate(event, observation.filing, observation.sec_items)
                             LOGGER.info("Earnings polling expectation remains unsatisfied", extra={
                                 "operation": "earnings_satisfaction", "cik": event.company_cik,
                                 "accession_number": observation.filing.accession_number,
                                 "reason": decision.reason, "policy_version": decision.policy_version})
             for event, window, observation, decision in matches:
                 # One source filing must not suppress two overlapping expectations.
-                if any(other is not event and other.company_cik == event.company_cik
-                       and self.windows.window(other).contains(observation.filing.filed_at) for other in events):
+                if (observation.filing.accession_number in self.satisfied_accessions or
+                        any(EventIdentity.from_event(other) != EventIdentity.from_event(event)
+                            and other.company_cik == event.company_cik
+                            and self.policy.window(other).contains(observation.filing.filed_at)
+                            for other in self.scheduler.events)):
                     LOGGER.warning("Ambiguous overlapping earnings expectations", extra={
                         "operation": "earnings_satisfaction", "cik": event.company_cik,
                         "reason": "overlapping_expectations", "policy_version": decision.policy_version})
@@ -147,6 +153,7 @@ class RuntimeApplication:
                 await self.worker.control.checkpoint(lambda: self.satisfaction.create_if_absent(value),
                     operation="earnings_satisfaction", identity=value.identity.key)
                 self.scheduler.satisfied.add(value.identity)
+                self.satisfied_accessions.add(value.matched_accession_number)
                 self.metrics.count("EarningsExpectationsSatisfied")
                 LOGGER.info("Earnings polling expectation satisfied by scheduling heuristic", extra={
                     "operation": "earnings_satisfaction", "cik": event.company_cik,

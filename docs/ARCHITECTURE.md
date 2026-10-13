@@ -372,8 +372,13 @@ not a hard total I/O deadline; forced termination relies on durable recovery.
 
 ### Earnings satisfaction is a separate scheduling policy
 
-`earnings-satisfaction-v1` requires matching CIK and acceptance in
-`[window_start, grace_end)`, plus one exact original form:
+New checkpoints use `earnings-satisfaction-v2`: matching CIK and SEC acceptance
+on the provider's expected calendar date in `America/New_York`, plus one exact
+original form. Its `[window_start, window_end)` runs from local midnight to the
+following local midnight; `grace_end == window_end`. Construct each midnight in
+the local zone so DST days may span 23 or 25 hours in UTC. Weekends and holidays
+retain the expected date. Before/after-market hints, sessions and runtime polling
+configuration do not narrow or extend this matching interval.
 
 | Form | Required evidence | Saved reason |
 | --- | --- | --- |
@@ -384,7 +389,10 @@ not a hard total I/O deadline; forced termination relies on durable recovery.
 Amendments/generic or ambiguous 8-Ks cannot satisfy expectations. Admission may
 use index/primary routing evidence; satisfaction never fabricates submissions
 evidence from filenames, descriptions or contents. Candidates sort by acceptance
-then accession; ambiguous overlapping expectations remain unsatisfied.
+then accession; ambiguous same-company expectations on the same date remain
+unsatisfied, including overlaps with already-satisfied events. Accessions loaded
+from existing satisfaction checkpoints cannot be reused for a different event,
+even if a provider ID's expected date has moved.
 
 Persist satisfaction only after validating the durable filing and match facts:
 accession/CIK/acceptance, expected date, window/grace bounds, reason/policy version,
@@ -392,10 +400,21 @@ original form and required normalized SEC items/evidence source. Event identity 
 compact canonical JSON `[provider, CIK, "id", provider_event_id]`, or
 `[provider, CIK, "date", expected_date]`, bounded to the 1024-byte sort-key limit.
 Conditional creation and strong conflict/acknowledgment reads retain the first
-compatible checkpoint; unknown policy versions fail explicitly. Satisfaction is
+compatible checkpoint; unknown policy versions fail explicitly. Readers accept
+both v1 and v2. V1 retains its original polling-window/grace validation and bounds;
+v2 additionally requires exact New York day bounds for its observed expected date.
+Existing v1 matches are hydrated as satisfied and never upgraded or rewritten.
+Satisfaction is
 separate from mutable calendar rows and survives refresh/restart. Aggressive
 polling stops only after durable satisfaction; safety polls/recovery continue.
 It neither waits for publication nor proves extracted/validated earnings.
+
+Polling still uses `WindowPolicy` session windows and configured grace. Only
+matching uses the calendar-day policy. Normal discovery returns canonical SEC
+observations even for completed parents, allowing missing matches to be established
+on subsequent polls without package enumeration, downloads or republication.
+This is limited to loaded calendar expectations and normal recent submissions;
+it does not introduce historical backfill or change acquisition selection.
 
 ## Yahoo calendar synchronization
 

@@ -28,6 +28,25 @@ mutate IAM/data or launch standalone tasks. Bootstrap assets are separate from
 application artifact storage/ECR. Baseline and application revisions have different
 owners; do not change the baseline variable to each GitHub-created revision.
 
+## Earnings matching policy updates
+
+The `earnings-satisfaction-v2` application change requires no CDK deployment,
+environment changes, table migration or acquisition reset. Update/restart
+`finbot-dashboard` with the v1/v2 checkpoint reader before releasing the ingestion
+image through normal CI/application delivery. V1 checkpoints remain valid.
+
+After release, normal SEC polls reevaluate existing filings for loaded calendar
+expectations. Early same-date qualifying filings can acquire v2 satisfaction
+checkpoints without downloading or publishing their documents again. Verify the
+previously unlinked expectations in the dashboard after a poll and **Refresh**:
+the calendar should show **Filing found** alongside existing download totals.
+Missing/ambiguous SEC Item 2.02 evidence or overlapping expectations still prevent
+a match. Dates outside the loaded calendar lookback are not historical backfilled.
+
+Once v2 checkpoints exist, an older ingestion image that only understands v1 is
+not a compatible rollback target. Preserve both readers in any rollback build;
+do not delete satisfaction records to make an older image start.
+
 ## Configuration and offline validation
 
 Application setup is in [README](../README.md#install-and-validate). Install the
