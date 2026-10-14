@@ -148,3 +148,20 @@ def test_installed_yahoo_shutdown_waits_for_http_without_new_admissions(docker):
         kinds = [t["kind"] for t in result["trace"]]
         assert kinds.index("yahoo_released") < kinds.index("yahoo_closed") < kinds.index("client_closed")
         assert sum(t["kind"] == "yahoo" for t in result["trace"]) == count
+
+
+@pytest.mark.container
+def test_installed_6k_pipeline_stores_routing_bytes_once_and_publishes(docker):
+    with fixture_container(docker, 'six_k') as name:
+        until(lambda: sum(t.get('operation') == 'Publish' for t in trace(docker, name)) == 2, docker, name)
+        docker('kill', '--signal', 'SIGTERM', name)
+        assert docker('wait', name).stdout.strip() == '0', docker('logs', name).stderr
+        result = final_result(docker, name)
+        assert {row['filename'] for row in result['tables']} == {'Primary.htm', 'release.htm'}
+        assert all(row['form_type'] == '6-K' and row['published_at'] for row in result['tables'])
+        assert all(event['form_type'] == '6-K' for event in result['events'])
+        urls = [entry['url'] for entry in result['trace'] if entry['kind'] == 'sec']
+        assert sum(url.endswith('/Primary.htm') for url in urls) == 1
+        assert not any(url.endswith(('Slides.PDF', 'graphic.jpg')) for url in urls)
+        assert any(bytes.fromhex(value).startswith(b'<h1>First quarter report') for value in result['objects'])
+        assert not result['health_exists']

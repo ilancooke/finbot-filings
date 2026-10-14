@@ -41,7 +41,8 @@ flowchart LR
 
 ## Filing admission and document selection
 
-`selection/policy.py` implements deterministic `earnings-acquisition-v2` routing.
+`selection/policy.py` and `selection/six_k.py` implement deterministic
+`earnings-acquisition-v3` routing.
 `LIVE_INGESTION_START_AT` defaults to **2026-10-06T04:00:00Z**, inclusive, using
 SEC acceptance time (October 6 midnight in America/New_York). It is a fixed saved
 configuration value shared by restarts, deployments and newly enabled companies.
@@ -52,11 +53,12 @@ reset/widen the cutoff to perform backfill.
 | --- | --- |
 | `8-K`, `8-K/A` | Require unambiguous Item 2.02 evidence |
 | `10-Q`, `10-K`, and their `/A` amendments | Retain the primary financial report |
+| `6-K`, `6-K/A` | Require an explicitly identified reported-results release or periodic financial report |
 | Selected earnings 8-K | Retain primary plus identified earnings releases and financial supplements in HTML/text/PDF |
 | Decks, standalone graphics/logos, complete submission TXT bundles, unrelated exhibits, auxiliary files | Exclude |
 | Missing/conflicting item evidence or ambiguous exhibit role | Record an unresolved diagnostic; never assume relevance or irrelevance |
 
-The submissions parser returns all six supported forms without a count cutoff;
+The submissions parser returns all eight supported forms without a count cutoff;
 admission happens separately. Identical accession duplicates collapse. Conflicts,
 invalid relevant rows and invalid acceptance timestamps reject the response rather
 than allowing a caller to checkpoint it as complete. Historical submissions-file
@@ -121,6 +123,46 @@ v2 SELECT checkpoints. It does not reopen/update the completed parent snapshots.
 Pending ACQUIRE work resumes through the normal worker, storage and publication
 path after restart; existing artifacts and calendar/satisfaction records are
 untouched by the helper.
+
+### Earnings-only 6-Ks
+
+6-Ks have no Item 2.02 admission shortcut. A short description/primary section
+must identify reported quarterly, half-year or annual financial results, or an
+actual periodic financial report/statements, together with the reporting period.
+Headlines reporting revenue/net sales/net income/EPS can establish results without
+parsing the values. Future announcements, board approval notices, AGM results,
+prospectus/pro-forma material and historical/boilerplate references are excluded
+as affirmative evidence. A real results report can include guidance or governance
+updates elsewhere. Evidence is evaluated within blocks, never by combining keywords
+across the whole filing.
+
+SEC index descriptions, safe links and short primary sections supply labels.
+Plain numbered exhibit rows and attached-Item/Exhibit paragraphs bind to the
+unique package EX-99.x file; multi-file/multi-number/conflicting bindings remain
+unresolved. Resolve each document's combined labels before using it to qualify
+the filing. At least one affirmative results document must survive that check,
+unless an independent primary section already reports results. Linked exhibit
+descriptions are attachment evidence, not independent primary results evidence.
+Only then may results context select generic supporting supplements. If the sole
+qualifying document has conflicting labels, the filing remains unresolved and
+cannot satisfy the earnings calendar. Unsupported types/formats and missing
+referenced files cannot admit an otherwise generic package. Blocks are capped at
+1,500 normalized characters; primary routing downloads/parsing at 4 MiB.
+Oversized inspection stays unresolved
+unless explicit index evidence already qualifies the package. Normal selected
+acquisition retains its 64-MiB limit. Primary routing bytes reuse immutable storage.
+
+A selected package retains its primary and individually identified results releases,
+periodic financial reports/statements, and financial/operating supplements.
+Presentations, transcripts, newspaper advertisements, graphics, bundles and unrelated
+files are excluded; ambiguous children are omitted while clear documents proceed.
+PDFs can qualify from labels without PDF interpretation. Unknown/image-only layouts
+remain a coverage limit. Persist only existing SELECT/EXCLUDE/UNRESOLVED checkpoints
+with minimal reasons, including parent `earnings_6_k`; no evidence records/excerpts.
+
+V3 keeps domestic v2 selection unchanged and permits affirmative v1/v2 checkpoints
+to upgrade during pending re-evaluation. Existing blocked work stays blocked,
+completed snapshots stay immutable, and no reset/backfill is introduced.
 
 ## Identity, time and public event contract
 
@@ -372,7 +414,7 @@ not a hard total I/O deadline; forced termination relies on durable recovery.
 
 ### Earnings satisfaction is a separate scheduling policy
 
-New checkpoints use `earnings-satisfaction-v2`: matching CIK and SEC acceptance
+New domestic checkpoints use `earnings-satisfaction-v2`: matching CIK and SEC acceptance
 on the provider's expected calendar date in `America/New_York`, plus one exact
 original form. Its `[window_start, window_end)` runs from local midnight to the
 following local midnight; `grace_end == window_end`. Construct each midnight in
@@ -385,6 +427,7 @@ configuration do not narrow or extend this matching interval.
 | `10-Q` | None | `original_10_q` |
 | `10-K` | None | `original_10_k` |
 | `8-K` | Unambiguous submissions Item 2.02 | `original_8_k_item_2_02` |
+| `6-K` | Completed v3 SELECT / earnings_6_k filing checkpoint | `original_6_k_earnings` (matching v3) |
 
 Amendments/generic or ambiguous 8-Ks cannot satisfy expectations. Admission may
 use index/primary routing evidence; satisfaction never fabricates submissions
@@ -401,13 +444,22 @@ compact canonical JSON `[provider, CIK, "id", provider_event_id]`, or
 `[provider, CIK, "date", expected_date]`, bounded to the 1024-byte sort-key limit.
 Conditional creation and strong conflict/acknowledgment reads retain the first
 compatible checkpoint; unknown policy versions fail explicitly. Readers accept
-both v1 and v2. V1 retains its original polling-window/grace validation and bounds;
-v2 additionally requires exact New York day bounds for its observed expected date.
+v1, v2 and v3. V1 retains its original polling-window/grace validation and bounds;
+v2/v3 additionally require exact New York day bounds for the observed expected date.
 Existing v1 matches are hydrated as satisfied and never upgraded or rewritten.
 Satisfaction is separate from mutable calendar rows and survives refresh/restart.
 Durable satisfaction starts a fixed ten-minute follow-up period at the active poll
 cadence; safety polls/recovery continue afterward.
 It neither waits for publication nor proves extracted/validated earnings.
+
+For original 6-Ks, matching uses `earnings-satisfaction-v3` and the same exact
+New York date bounds. Normal polls strongly read the canonical filing checkpoint;
+only completed v3 affirmative earnings routing qualifies. The satisfaction
+repository independently rechecks that checkpoint before conditional creation.
+No SEC item codes or evidence source are invented. Missing classification cannot
+suppress polling; a subsequent poll can link the completed filing without fetching
+its package or documents again. Existing domestic v1/v2 matches remain unchanged.
+The dashboard validates the same form/reason/version and canonical selection facts.
 
 Polling still uses `WindowPolicy` session windows and configured grace. Only
 matching uses the calendar-day policy. Normal discovery returns canonical SEC
@@ -418,7 +470,7 @@ it does not introduce historical backfill or change acquisition selection.
 
 The scheduler uses each checkpoint's original `satisfied_at` to continue frequent
 polling until `satisfied_at + 10 minutes`, independent of the original polling
-window's boundaries. This applies to both v1/v2 checkpoints. Reload and restart
+window's boundaries. This applies to v1/v2/v3 checkpoints. Reload and restart
 hydrate the same timestamps; expired checkpoints do not start a new follow-up.
 Compatible conditional-write replay also reads the retained timestamp instead of
 using the latest attempted write time. Later filings do not replace the match or

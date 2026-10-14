@@ -9,7 +9,8 @@ from .identity import normalize_cik, normalize_accession_number
 from .validation import utc_datetime
 from .sec_items import SECItemMetadata
 from finbot_ingestion.scheduler.earnings_satisfaction_policy import (
-    POLICY_VERSION, SUPPORTED_POLICY_VERSIONS, MATCH_REASONS, matching_window,
+    POLICY_VERSION, SIX_K_POLICY_VERSION, DAY_POLICY_VERSIONS,
+    SUPPORTED_POLICY_VERSIONS, MATCH_REASONS, matching_window,
 )
 
 
@@ -70,10 +71,16 @@ class EventSatisfaction:
         if (self.match_policy_version not in SUPPORTED_POLICY_VERSIONS or self.matched_form_type not in MATCH_REASONS
                 or MATCH_REASONS[self.matched_form_type] != self.match_reason):
             raise ValueError("unsupported policy version or match reason")
-        if self.match_policy_version == POLICY_VERSION:
+        if self.match_policy_version in DAY_POLICY_VERSIONS:
             window = matching_window(self.observed_expected_date)
             if (self.window_start, self.window_end, self.grace_end) != (window.start, window.end, window.grace_end):
-                raise ValueError("v2 satisfaction requires exact New York calendar-day bounds")
+                raise ValueError("satisfaction requires exact New York calendar-day bounds")
+        if self.matched_form_type == "6-K":
+            if (self.match_policy_version != SIX_K_POLICY_VERSION or self.matched_sec_items
+                    or self.sec_item_evidence_source is not None):
+                raise ValueError("6-K satisfaction requires v3 earnings selection without SEC items")
+        elif self.match_policy_version == SIX_K_POLICY_VERSION:
+            raise ValueError("v3 satisfaction is reserved for earnings 6-Ks")
         evidence = SECItemMetadata(self.matched_accession_number, self.identity.company_cik,
             "known" if self.sec_item_evidence_source is not None else "absent", self.matched_sec_items,
             self.sec_item_evidence_source or "submissions.recent.items")
@@ -89,5 +96,5 @@ class EventSatisfaction:
             raise ValueError("matched filing CIK differs")
         return cls(EventIdentity.from_event(event), f.accession_number, f.filed_at, at,
             event.expected_date, window.start, window.end, window.grace_end, f.form_type,
-            decision.reason, decision.policy_version, e.items if e.status == "known" else (),
-            e.source if e.status == "known" else None)
+            decision.reason, decision.policy_version, e.items if e.status == "known" and f.form_type != "6-K" else (),
+            e.source if e.status == "known" and f.form_type != "6-K" else None)

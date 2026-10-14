@@ -104,15 +104,21 @@ def install():
             trace("sec", url=url)
             if "submissions/CIK" in url:
                 payload = {"cik": "320193", "filings": {"recent": {
-                    "accessionNumber": [ACCESSION], "form": ["8-K"],
+                    "accessionNumber": [ACCESSION], "form": ["6-K" if scenario == "six_k" else "8-K"],
                     "acceptanceDateTime": [s3.clock.isoformat()],
-                    "primaryDocument": ["Primary.htm"], "items": ["2.02"]}}}
+                    "primaryDocument": ["Primary.htm"], "items": ["" if scenario == "six_k" else "2.02"]}}}
                 return Response(json.dumps(payload).encode(), "application/json")
             fixtures = Path(os.environ.get("FINBOT_TEST_FIXTURES", "/fixtures"))
             if url.endswith("-index.html"):
-                return Response((fixtures / "index.html").read_bytes(), "text/html")
+                index = (fixtures / "index.html").read_bytes()
+                if scenario == "six_k":
+                    index = index.replace(b">8-K<", b">6-K<")
+                return Response(index, "text/html")
             if url.endswith("index.json"):
                 return Response((fixtures / "directory.json").read_bytes(), "application/json")
+            if scenario == "six_k" and url.endswith("/Primary.htm"):
+                return Response(b'<h1>First quarter report 2026</h1>'
+                    b'<p>99.1 Press release announcing financial results for Q1 2026</p>', "text/html")
             if scenario == "blocking" and not self.blocked:
                 self.blocked = True
                 trace("blocked")

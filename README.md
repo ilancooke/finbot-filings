@@ -49,7 +49,7 @@ Tests are grouped by current responsibility rather than migration phase:
   import other test modules. Shared integration fixtures are registered in
   `tests/integration/conftest.py`.
 - `tests/container/`: mounted subprocess/container harness; never installed in the
-  production image. The eight opt-in cases live in
+  production image. The nine opt-in cases live in
   `tests/integration/test_container_lifecycle.py`.
 - `infra/cdk/tests/`: independent infrastructure and workflow checks, run with the
   CDK virtual environment.
@@ -160,7 +160,7 @@ FINBOT_CONTAINER_TESTS=1 FINBOT_CONTAINER_IMAGE=finbot-ingestion:local \
 ```
 
 Docker must be accessible from the execution environment. Opted-in tests fail if
-Docker/the image is unavailable; ordinary pytest clearly skips these eight cases.
+Docker/the image is unavailable; ordinary pytest clearly skips these nine cases.
 They mount a test-only startup shim and reusable stateful boundaries outside the
 image, leaving the production entry point, configuration, real SEC limiter,
 repositories and supervision intact. Containers have `--network none`, dummy
@@ -169,7 +169,8 @@ installed imports/dependencies, health, PID 1, SIGTERM/SIGINT, original bytes an
 publication, blocked I/O cleanup and unexpected required-loop failure/return.
 Yahoo cases exercise the installed factory through synthetic native-HTTP responses,
 private writable caches and shutdown during a blocked calendar request.
-No mock-mode switch is shipped in the application.
+An installed 6-K case also verifies earnings-only acquisition, primary-byte reuse
+and metadata-only publication. No mock-mode switch is shipped in the application.
 
 ## Acquisition and durable contracts
 
@@ -177,13 +178,13 @@ Initial coverage is the [50-symbol production universe](docs/PRODUCTION_UNIVERSE
 with approximately 500 companies retained as the v0 capacity target.
 Runtime company records require verified ticker/CIK/name/enabled fields.
 Ticker is convenience metadata; CIK normalizes to ten digits. Relevant forms are
-`8-K`, `10-Q`, `10-K` and their `/A` amendments. Accessions retain dashed identity;
+`8-K`, `10-Q`, `10-K`, `6-K` and their `/A` amendments. Accessions retain dashed identity;
 SEC archive URLs use numeric CIK and dash-free accession path components.
 
 `filed_at` is SEC `acceptanceDateTime`, normalized to UTC, rather than a measured
 public-availability instant. Missing, invalid or naive acceptance timestamps fail;
 filing/report dates never substitute. Parsing returns all supported recent rows
-without a count cutoff, then admission applies `earnings-acquisition-v2`:
+without a count cutoff, then admission applies `earnings-acquisition-v3`:
 
 - `LIVE_INGESTION_START_AT` defaults to **2026-10-06T04:00:00Z**, inclusive, using
   SEC acceptance time (October 6 midnight in America/New_York). Keep this fixed
@@ -192,6 +193,10 @@ without a count cutoff, then admission applies `earnings-acquisition-v2`:
   skipped. Missing evidence may be resolved from index metadata or structural
   primary-report headings; unresolved/conflicting evidence stays visible.
 - 10-Q/10-K and their amendments retain their primary financial report.
+- 6-K/6-K/A require explicit reported quarterly, half-year or annual results,
+  or an identified periodic financial report. Index descriptions and bounded primary
+  inspection determine eligibility; generic press releases, meeting/board notices,
+  future earnings announcements and ambiguous references do not qualify.
 
 Identical accession duplicates collapse; conflicts and invalid relevant rows reject
 parsing. A missing primary name can be resolved by package enumeration. Historical
@@ -213,6 +218,26 @@ selected documents proceed. Image-only HTML receives a coverage warning when the
 bounded text inspection detects it; no linked images, OCR or financial extraction.
 Primary routing/text inspection is limited to 4 MiB; larger/unsupported layouts
 stay unresolved. Acquisition still permits selected documents up to 64 MiB.
+
+For 6-Ks, short primary sections, safe same-package links, numbered exhibit
+rows and explicit attached-Item/Exhibit paragraphs bind descriptions to files.
+An unlinked number binds only when exactly one package document has that exhibit
+number. Reporting-period and financial-results language must occur in the same
+block (at most 1,500 normalized characters). Boilerplate/historical references do
+not qualify. A qualified package retains the primary, identified results releases,
+periodic financial reports/statements and financial/operating supplements; decks,
+transcripts, newspaper advertisements and unrelated files are omitted. Generic or
+conflicting attachments stay unresolved. PDF attachments can qualify from labels;
+no PDF parsing or OCR is added. Filing qualification requires a results document
+whose combined descriptions resolve affirmatively, or results reported directly
+in the primary. A disputed attachment cannot establish results context for itself
+or supporting supplements. Opaque layouts can remain unresolved.
+6-K primary routing downloads are bounded to 4 MiB. An oversized primary can still
+qualify from explicit index descriptions and use the normal 64-MiB acquisition
+limit; routing-size rejection alone does not consume a workflow failure budget.
+Only the existing selection outcome/reason checkpoints are persisted; there is no
+new evidence store or retained routing excerpt.
+
 Completed packages are not automatically re-enumerated when routing changes;
 previously omitted attachments require a separate scoped recovery operation.
 The operator-only `scripts/recover_earnings_attachments.py` previews and queues
@@ -371,6 +396,13 @@ remain ingested without satisfying the event. Ambiguous expectations and reuse o
 an already matched accession are rejected. Existing `earnings-satisfaction-v1`
 checkpoints remain valid and are not rewritten. Normal SEC polls reevaluate already
 downloaded filings for loaded calendar expectations without downloading them again.
+
+Original earnings 6-Ks use `earnings-satisfaction-v3` with the same New York
+calendar-day bounds. Matching waits for the canonical filing's completed v3
+`SELECT` / `earnings_6_k` checkpoint and is normally established on the next poll.
+Generic/unresolved 6-Ks and amendments cannot satisfy an expectation. V1/v2
+checkpoints and domestic matching remain unchanged; 6-K matches carry no fabricated
+SEC Item 2.02 evidence. Update the dashboard reader before deploying ingestion.
 Safety polling and pending recovery continue. This is a scheduling heuristic, not
 evidence of extracted or validated earnings. See the
 [matching policy rollout](docs/DEPLOYMENT.md#earnings-matching-policy-updates).

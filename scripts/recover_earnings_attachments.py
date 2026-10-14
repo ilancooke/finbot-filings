@@ -96,8 +96,8 @@ def production_environment(sts, ecs, account):
 
 async def inspect(discovery, target, at, *, resuming=False):
     """Strong canonical reads; source selection uses the normal ingestion path."""
-    if POLICY_VERSION != 'earnings-acquisition-v2':
-        raise RuntimeError('this recovery requires the reviewed v2 selector')
+    if POLICY_VERSION not in {'earnings-acquisition-v2', 'earnings-acquisition-v3'}:
+        raise RuntimeError('this recovery requires the reviewed v2/v3 selector')
     parents, packages, additions, existing = {}, {}, [], {}
     for accession, (ticker, cik, count, names) in TARGETS.items():
         filing = await discovery.filings.get(accession)
@@ -130,7 +130,7 @@ async def inspect(discovery, target, at, *, resuming=False):
         candidates = {a.filename: a for a in package.artifacts(filing, discovered_at=at)}
         if any(name not in decisions or not decisions[name].selected
                or candidates[name].document_type != kind for name, kind in names.items()):
-            raise RuntimeError(f'{accession}: expected attachments are not selected by v2')
+            raise RuntimeError(f'{accession}: expected attachments are not selected by the reviewed selector')
         for name, decision in decisions.items():
             if not decision.selected:
                 continue

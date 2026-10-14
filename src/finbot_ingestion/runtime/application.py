@@ -123,18 +123,21 @@ class RuntimeApplication:
 
     async def satisfy(self, observations):
         async with self._state_lock:
+            selections = {o.filing.accession_number: await self.worker.filings.get_checkpoint(o.filing.accession_number)
+                          for o in observations if o.filing.form_type == "6-K"}
             events = [e for e in self.scheduler.events if EventIdentity.from_event(e) not in self.scheduler.satisfied]
             matches = []
             for event in events:
                 window = self.policy.window(event)
-                selected = self.policy.select(event, observations)
+                selected = self.policy.select(event, observations, selections=selections)
                 if selected is not None:
                     observation, decision = selected
                     matches.append((event, window, observation, decision))
                 else:
                     for observation in observations:
                         if observation.filing.company_cik == event.company_cik and window.contains(observation.filing.filed_at):
-                            decision = self.policy.evaluate(event, observation.filing, observation.sec_items)
+                            decision = self.policy.evaluate(event, observation.filing, observation.sec_items,
+                                selection=selections.get(observation.filing.accession_number))
                             LOGGER.info("Earnings polling expectation remains unsatisfied", extra={
                                 "operation": "earnings_satisfaction", "cik": event.company_cik,
                                 "accession_number": observation.filing.accession_number,

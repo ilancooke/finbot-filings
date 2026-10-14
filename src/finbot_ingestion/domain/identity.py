@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from .validation import utc_datetime
 
-SUPPORTED_FORMS = frozenset({"8-K", "10-Q", "10-K", "8-K/A", "10-Q/A", "10-K/A"})
+SUPPORTED_FORMS = frozenset({"8-K", "10-Q", "10-K", "6-K", "8-K/A", "10-Q/A", "10-K/A", "6-K/A"})
 ACCESSION_PATTERN = re.compile(r"[0-9]{10}-[0-9]{2}-[0-9]{6}")
 
 

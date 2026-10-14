@@ -55,6 +55,34 @@ Once v2 checkpoints exist, an older ingestion image that only understands v1 is
 not a compatible rollback target. Preserve both readers in any rollback build;
 do not delete satisfaction records to make an older image start.
 
+## Earnings-only 6-K rollout
+
+ADR 018 uses normal application delivery with no CDK, IAM, table/index or event
+schema changes. Rebuild/test the ARM64 image. Update/restart `finbot-dashboard`
+with its v3 matching reader before ingestion delivery. Keep the fixed cutoff;
+normal recent-submissions discovery can acquire newly supported 6-Ks on/after it.
+Do not reset data or traverse history as part of this release.
+
+New selection writes use `earnings-acquisition-v3`; domestic routing is unchanged.
+Affirmative v1/v2 pending work may upgrade. Existing exclusions/unresolved work,
+completed enumeration timestamps/counts, bytes, publications and terminal facts
+remain guarded. An original 6-K becomes calendar-match eligible only after its
+completed `SELECT` / `earnings_6_k` parent checkpoint. The next normal poll can
+create an `earnings-satisfaction-v3` match using the existing New York day bounds,
+without document redownload/republication. Amendments do not satisfy expectations.
+
+Verify selected release/statement artifacts and minimal parent/child checkpoints,
+no acquisitions for known meeting/future-announcement filings, visible unresolved
+routing, and dashboard calendar links after a poll/Refresh. This is a conservative
+selector; opaque labels/images can remain uncovered. Keep v1/v2/v3 matching and
+6-K form support in any rollback image; do not delete state to run an older image.
+
+The four-attachment operator helper also accepts the reviewed v3 selector because
+8-K routing is unchanged. Its fixed targets/stopped-service checks remain. Its
+manifest pins the policy and task/image: an existing v2 manifest must be resumed
+with its compatible original helper/image, not rewritten or bypassed with a new
+preview after partial execution.
+
 ## Configuration and offline validation
 
 Application setup is in [README](../README.md#install-and-validate). Install the
@@ -436,8 +464,8 @@ aws logs filter-log-events --log-group-name /finbot/finbot-prod \
 ```
 
 Selection logs use `operation=acquisition_selection`,
-`policy_version=earnings-acquisition-v2`, `selection_decision` and stable reason
-(historical logs can show v1).
+`policy_version=earnings-acquisition-v3`, `selection_decision` and stable reason
+(historical logs can show v1/v2).
 `unresolved_items`, `conflicting_items`, `unresolved_exhibit_role` and
 `possible_image_only_content` need review; they are not terminal download failures.
 Clear selected documents can proceed with unresolved attachments omitted.
@@ -548,8 +576,9 @@ account and SEC contact header from ignored `infra/cdk/config.local.json`
 (`--private-config` overrides the path), and uses the selected AWS profile.
 It checks the fixed production account/service/tables, pins the current task
 definition/image in the manifest and respects its configured cutoff/SEC rate.
-The application must already be running a v2-compatible image before this
-operation; the helper does not build or deploy an image. No CDK deployment,
+The application must already be running a v3-compatible image when using the
+current helper (a retained v2 helper requires its matching compatible image).
+This must be verified before the operation; the helper does not build or deploy an image. No CDK deployment,
 schema migration or infrastructure change is required for the helper.
 
 1. Pause delivery with `FINBOT_DELIVERY_ENABLED=false`; verify no release is
@@ -580,7 +609,7 @@ schema migration or infrastructure change is required for the helper.
 
    Execution re-fetches SEC evidence and strong canonical records, rejects changes
    before writing, and conditionally creates only the four canonical child records
-   with v2 SELECT checkpoints and pending ACQUIRE eligibility. It verifies those
+   with the current selector's SELECT checkpoints and pending ACQUIRE eligibility. It verifies those
    checkpoints, preserved parents and existing selected children before reporting
    `queued`. The first enumeration timestamp/count remains unchanged; those counts
    describe the original snapshot, not today's number of children. No S3/SNS/SQS,

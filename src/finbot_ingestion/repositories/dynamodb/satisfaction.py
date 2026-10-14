@@ -9,6 +9,7 @@ from ..errors import RepositoryConflict, RepositoryDataError, RepositoryBusy
 from .base import DynamoDBRepository
 from .serialization import encode, decode, integer, timestamp
 from finbot_ingestion.ingestion.work_control import retryable
+from finbot_ingestion.scheduler.earnings_satisfaction_policy import qualified_six_k
 
 SATISFACTION_PARTITION = "__event_satisfaction__"
 
@@ -75,6 +76,9 @@ class DynamoDBSatisfactionRepository(DynamoDBRepository):
         if filing is None or (filing.company_cik, filing.form_type, filing.filed_at) != (
                 value.identity.company_cik, value.matched_form_type, value.matched_filed_at):
             raise RepositoryConflict("satisfaction requires matching durable filing")
+        if filing.form_type == "6-K" and not qualified_six_k(
+                filing, await self.filings.get_checkpoint(filing.accession_number)):
+            raise RepositoryConflict("6-K satisfaction requires completed earnings selection")
         try:
             await self._call("put_item", Item=encode(item),
                 ConditionExpression="attribute_not_exists(#key)", ExpressionAttributeNames={"#key": "expected_date"})

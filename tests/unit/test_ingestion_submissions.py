@@ -21,7 +21,7 @@ def payload():
 def test_all_forms_amendments_deduplication_and_source_time(payload):
     filings = parse_company_submissions(COMPANY, payload, discovered_at=NOW)
     assert len(filings) == 6  # No legacy default count=5 cutoff.
-    assert {f.form_type for f in filings} == SUPPORTED_FORMS
+    assert {f.form_type for f in filings} == SUPPORTED_FORMS - {"6-K", "6-K/A"}
     assert [f.accession_number for f in filings] == [
         f"0000320193-26-{number:06d}" for number in range(6, 0, -1)
     ]
@@ -109,3 +109,13 @@ def test_repeated_parsing_observes_new_response_without_cache(payload):
     second = parse_company_submissions(COMPANY, payload, discovered_at=NOW)
     assert first[0].accession_number.endswith("000006")
     assert second[0].accession_number.endswith("000099")
+
+
+@pytest.mark.parametrize('form', ['6-K', '6-K/A'])
+def test_foreign_report_candidates_are_parsed_with_original_identity(payload, form):
+    payload['filings']['recent']['form'][0] = form
+    payload['filings']['recent']['form'][6] = form
+    filings = parse_company_submissions(COMPANY, payload, discovered_at=NOW)
+    filing = filings[-1]
+    assert filing.form_type == form and filing.accession_number == '0000320193-26-000001'
+    assert filing.filed_at == datetime(2026, 10, 1, 20, tzinfo=timezone.utc)

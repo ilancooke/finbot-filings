@@ -6,7 +6,9 @@ import asyncio
 import logging
 
 from finbot_ingestion.selection.policy import (POLICY_VERSION, POLICY_UPGRADES, Decision,
-    document_decision, primary_exhibits, primary_items)
+    MAX_ROUTING_PARSE_BYTES, document_decision, primary_exhibits, primary_items)
+from finbot_ingestion.selection.six_k import SIX_K_FORMS, select_six_k
+from finbot_ingestion.sec.errors import SECDocumentTooLarge
 
 from finbot_ingestion.repositories.errors import RepositoryNotFound
 from finbot_ingestion.repositories.package_checkpoint import PackageCheckpoint
@@ -159,9 +161,11 @@ class DiscoveryService:
         await self.control.checkpoint(lambda: repo.record_selection(identity, decision, at,
             policy_version=POLICY_VERSION), operation="record_selection", identity=identity)
 
-    async def _primary_bytes(self, filing, package):
+    async def _primary_bytes(self, filing, package, *, routing_only=False):
         from finbot_ingestion.sec.urls import document_url
         bound = self.downloader.max_artifact_bytes if self.downloader else 64 * 1024 * 1024
+        if routing_only:
+            bound = min(bound, MAX_ROUTING_PARSE_BYTES)
         return await self.execution.call(self.sec.download_document,
             url=document_url(filing.company_cik, filing.accession_number, package.primary_document_name),
             max_bytes=bound, context={"ticker": filing.ticker, "cik": filing.company_cik,
@@ -176,6 +180,25 @@ class DiscoveryService:
             admission = Decision("UNRESOLVED", "unsupported_primary_document")
             self._log(filing, admission)
             return admission, {}, None
+        if filing.form_type in SIX_K_FORMS:
+            scope = self.selection.filing(filing)
+            if scope.reason == "before_live_cutoff":
+                return scope, {}, None
+            if not package.primary_document_name.lower().endswith((".htm", ".html", ".txt", ".pdf")):
+                return Decision("UNRESOLVED", "unsupported_primary_document"), {}, None
+            admission, decisions = select_six_k(filing, package)
+            if package.primary_document_name.lower().endswith((".htm", ".html", ".txt")):
+                try:
+                    primary = await self._primary_bytes(filing, package, routing_only=True)
+                except SECDocumentTooLarge:
+                    # Large primaries can still qualify from explicit index
+                    # descriptions; unsupported inspection is not workflow failure.
+                    primary = None
+                if primary is not None:
+                    admission, decisions = select_six_k(filing, package, primary.content)
+            if not admission.selected:
+                self._log(filing, admission)
+            return admission, decisions, primary
         admission = self.selection.filing(filing, items=package.items, item_status=package.item_status)
         if (progress.selection_decision == "SELECT" and (progress.selection_policy == POLICY_VERSION
                 or (progress.selection_policy, POLICY_VERSION) in POLICY_UPGRADES)):

@@ -339,3 +339,42 @@ The follow-up can span original polling-window boundaries. Preserve matching and
 acquisition rules, SEC pacing, retry backoff and durable checkpoints. No new
 database fields, infrastructure or alarm changes are needed. Revisit the duration
 if observed companion-report publication delays show that ten minutes is unsuitable.
+
+<a id="adr-018"></a>
+## ADR 018 — Earnings-only foreign-issuer 6-K acquisition
+
+**Accepted 2026-10-13; implemented, activation not recorded here.** Extends ADR 012's
+form scope with 6-K and 6-K/A under `earnings-acquisition-v3`. Preserve domestic
+v2 routing. Require explicit reported periodic financial results or an actual
+periodic financial report, using document-specific index/primary labels and a
+reporting period. Support safe links, unlinked numbered exhibits and explicit
+attached-Item/Exhibit references with unique canonical bindings. Unknown layouts
+and conflicting/generic labels remain unresolved. No issuer or filename guesses,
+LLM, OCR, PDF interpretation, numerical extraction or new evidence store.
+
+Document-label conflicts are resolved before filing admission. Require an
+unambiguously qualifying results document or independent results in the primary;
+a disputed attachment cannot supply the context that admits itself or generic
+supplements. Other clear results documents can still qualify the package.
+
+Retain primary plus identified results releases, periodic financial reports/statements
+and financial/operating supplements. Exclude presentations, transcripts, newspaper
+advertisements, unrelated exhibits and assets. Bound primary routing to 4 MiB and
+short blocks to 1,500 normalized characters; explicit index evidence can still
+qualify a larger primary for normal bounded acquisition. Persist existing minimal
+selection checkpoints, not named routing rules, sources or excerpts. Affirmative
+v1/v2 work may upgrade; blocked and completed historical snapshots retain their
+existing guards. No cutoff change, data reset or backfill is authorized.
+
+Original 6-K calendar matches use `earnings-satisfaction-v3`, extending ADR 016
+with a completed v3 SELECT / earnings_6_k canonical parent prerequisite. Strongly
+recheck it in runtime and the satisfaction repository. Preserve exact New York date,
+identity, amendment, overlap, accession-reuse and fixed post-match polling rules.
+Do not fabricate Item 2.02 evidence. Domestic matching and old checkpoints remain
+unchanged. Update the dashboard reader before ingestion delivery; older images
+cannot safely process these forms/checkpoints. No AWS infrastructure changes.
+
+Revisit conservative coverage for demonstrated unsupported issuer layouts or
+new requested document roles. Current rules are in ARCHITECTURE; rollout is in
+DEPLOYMENT. Application/container tests use synthetic representative source layouts
+and mocked boundaries, not live SEC or AWS calls.

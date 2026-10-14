@@ -112,3 +112,44 @@ def test_8k_evidence_must_identify_the_filing(changes):
     supplied = observation()
     evidence = replace(supplied.sec_items, **changes)
     assert not EarningsSatisfactionPolicy().evaluate(event(), supplied.filing, evidence).eligible
+
+
+def six_k_progress(**changes):
+    from finbot_ingestion.domain import FilingCheckpoint
+    from finbot_ingestion.selection.policy import POLICY_VERSION as selection_version
+    return replace(FilingCheckpoint(accession_number=observation().filing.accession_number,
+        selection_policy=selection_version, selection_decision='SELECT', selection_reason='earnings_6_k',
+        selection_checked_at=NOW, enumeration_completed_at=NOW, resolved_primary_document_name='Primary.htm',
+        enumerated_artifact_count=1), **changes)
+
+
+@pytest.mark.parametrize('changes', [
+    {'selection_decision': 'UNRESOLVED'}, {'selection_decision': 'EXCLUDE'},
+    {'selection_reason': 'primary_report'}, {'selection_policy': 'earnings-acquisition-v2'},
+    {'accession_number': '0000320193-26-000099'},
+    {'enumeration_completed_at': None, 'resolved_primary_document_name': None, 'enumerated_artifact_count': None},
+])
+def test_6k_requires_its_completed_affirmative_selection(changes):
+    supplied = observation('6-K', 'known', ('2.02',))
+    policy = EarningsSatisfactionPolicy()
+    assert not policy.evaluate(event(), supplied.filing, supplied.sec_items).eligible
+    assert not policy.evaluate(event(), supplied.filing, supplied.sec_items, selection=six_k_progress(**changes)).eligible
+
+
+@pytest.mark.parametrize('form,at,cik,eligible', [
+    ('6-K', NOW, '320193', True), ('6-K/A', NOW, '320193', False),
+    ('6-K', NOW, '2', False),
+    ('6-K', datetime(2026, 10, 8, 3, 59, 59, tzinfo=timezone.utc), '320193', False),
+    ('6-K', datetime(2026, 10, 9, 4, tzinfo=timezone.utc), '320193', False),
+])
+def test_6k_matching_retains_identity_date_and_amendment_safeguards(form, at, cik, eligible):
+    supplied = observation(form, 'absent', (), filed_at=at, company_cik=cik)
+    policy = EarningsSatisfactionPolicy()
+    decision = policy.evaluate(event(), supplied.filing, supplied.sec_items, selection=six_k_progress())
+    assert decision.eligible is eligible
+    if eligible:
+        value = EventSatisfaction.from_match(event(), policy.window(event()), supplied, decision, at=NOW)
+        assert value.match_policy_version == 'earnings-satisfaction-v3'
+        assert value.matched_sec_items == () and value.sec_item_evidence_source is None
+        with pytest.raises(ValueError, match='calendar-day bounds'):
+            replace(value, grace_end=value.grace_end + timedelta(seconds=1))

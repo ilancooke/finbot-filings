@@ -10,10 +10,11 @@ from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from finbot_ingestion.config import ConfigurationError
 from finbot_ingestion.domain.validation import utc_datetime
 
-POLICY_VERSION = "earnings-acquisition-v2"
+POLICY_VERSION = "earnings-acquisition-v3"
 # Filing admission is unchanged. Only already affirmative work may upgrade;
 # blocked work still needs an explicit operator operation.
-POLICY_UPGRADES = frozenset({("earnings-acquisition-v1", "earnings-acquisition-v2")})
+POLICY_UPGRADES = frozenset({("earnings-acquisition-v1", "earnings-acquisition-v2"),
+    ("earnings-acquisition-v1", POLICY_VERSION), ("earnings-acquisition-v2", POLICY_VERSION)})
 DEFAULT_LIVE_START = "2026-10-06T04:00:00Z"
 MAX_ROUTING_PARSE_BYTES = 4 * 1024 * 1024
 PERIODIC_FORMS = frozenset({"10-Q", "10-Q/A", "10-K", "10-K/A"})
@@ -120,6 +121,8 @@ class AcquisitionPolicy:
             return Decision("EXCLUDE", "before_live_cutoff")
         if filing.form_type in PERIODIC_FORMS:
             return Decision("SELECT", "periodic_report")
+        if filing.form_type in {"6-K", "6-K/A"}:
+            return Decision("UNRESOLVED", "unresolved_6_k")
         if item_status == "known":
             return (Decision("SELECT", "earnings_item_2_02") if "2.02" in (items or ())
                     else Decision("EXCLUDE", "non_earnings_8_k"))
