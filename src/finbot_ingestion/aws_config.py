@@ -80,7 +80,7 @@ class MessagingConfig:
         AWSIOConfig(self.region)
         match = re.fullmatch(r"arn:(aws|aws-us-gov|aws-cn):sns:([a-z0-9-]+):[0-9]{12}:([A-Za-z0-9_-]{1,256})", self.topic_arn)
         if match is None or match[2] != self.region:
-            raise ConfigurationError("ARTIFACT_READY_TOPIC_ARN must be a same-region standard SNS topic")
+            raise ConfigurationError("FILING_READY_TOPIC_ARN must be a same-region standard SNS topic")
         parts = urlsplit(self.dead_letter_queue_url)
         suffix = "amazonaws.com.cn" if match[1] == "aws-cn" else "amazonaws.com"
         if (parts.scheme != "https" or parts.netloc != f"sqs.{self.region}.{suffix}"
@@ -90,5 +90,5 @@ class MessagingConfig:
     @classmethod
     def from_env(cls, environ=None):
         values = os.environ if environ is None else environ
-        return cls(values.get("AWS_REGION", ""), values.get("ARTIFACT_READY_TOPIC_ARN", ""),
+        return cls(values.get("AWS_REGION", ""), values.get("FILING_READY_TOPIC_ARN", ""),
                    values.get("INGESTION_DEAD_LETTER_QUEUE_URL", ""))

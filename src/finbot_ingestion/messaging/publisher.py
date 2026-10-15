@@ -1,10 +1,10 @@
 from typing import Protocol
 
-from finbot_ingestion.domain.events import ArtifactReady
+from finbot_ingestion.domain.filing_ready import FilingReady
 
 
-class ArtifactEventPublisher(Protocol):
-    async def publish_artifact_ready(self, event: ArtifactReady) -> None: ...
+class FilingEventPublisher(Protocol):
+    async def publish_filing_ready(self, event: FilingReady) -> None: ...
 
 
 class InvalidPublishResponse(RuntimeError):

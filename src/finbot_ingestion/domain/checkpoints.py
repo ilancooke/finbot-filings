@@ -105,6 +105,9 @@ class FilingCheckpoint(ProcessingCheckpoint):
     enumeration_completed_at: datetime | None = None
     resolved_primary_document_name: str | None = None
     enumerated_artifact_count: int | None = None
+    selected_artifact_ids: tuple[str, ...] | None = None
+    ready_snapshot_id: str | None = None
+    ready_published_at: datetime | None = None
     retry_count: int = 0
     last_error: str | None = None
     last_error_at: datetime | None = None
@@ -112,7 +115,7 @@ class FilingCheckpoint(ProcessingCheckpoint):
     def __post_init__(self) -> None:
         ProcessingCheckpoint.__post_init__(self)
         object.__setattr__(self, "accession_number", normalize_accession_number(self.accession_number))
-        for name in ("enumeration_completed_at", "last_error_at"):
+        for name in ("enumeration_completed_at", "last_error_at", "ready_published_at"):
             value = getattr(self, name)
             if value is not None:
                 object.__setattr__(self, name, utc_datetime(value, name))
@@ -130,7 +133,28 @@ class FilingCheckpoint(ProcessingCheckpoint):
             raise ValueError("error fields must be recorded together")
         if self.last_error is not None and (not isinstance(self.last_error, str) or not self.last_error):
             raise ValueError("last_error must be a nonempty string")
-        if self.acquisition_failures or self.publication_failures or self.failure_stage not in (None, "ENUMERATE"):
-            raise ValueError("filings can only have enumeration failures")
-        if self.terminal_at is not None and self.enumeration_completed_at is not None:
-            raise ValueError("completed enumeration cannot be terminal")
+        if self.selected_artifact_ids is not None:
+            from .identity import artifact_identity
+            ids = tuple(self.selected_artifact_ids)
+            if (self.enumeration_completed_at is None or not ids or tuple(sorted(set(ids))) != ids
+                    or any(not identity.startswith(self.accession_number + "/") for identity in ids)):
+                raise ValueError("selected artifact membership requires completed enumeration and sorted unique IDs")
+            for identity in ids:
+                accession, filename = identity.split("/", 1)
+                if artifact_identity(accession, filename) != identity:
+                    raise ValueError("invalid selected artifact identity")
+            if artifact_identity(self.accession_number, self.resolved_primary_document_name) not in ids:
+                raise ValueError("selected membership must contain the primary")
+            object.__setattr__(self, "selected_artifact_ids", ids)
+        if self.ready_snapshot_id is not None:
+            import re
+            if self.selected_artifact_ids is None or not re.fullmatch(r"[0-9a-f]{64}", self.ready_snapshot_id):
+                raise ValueError("ready snapshot requires selected membership and a SHA-256 identity")
+        if self.ready_published_at is not None and self.ready_snapshot_id is None:
+            raise ValueError("filing publication requires a saved ready snapshot")
+        if self.acquisition_failures or self.failure_stage not in (None, "ENUMERATE", "PUBLISH"):
+            raise ValueError("filings can only have enumeration or publication failures")
+        if self.publication_failures and self.selected_artifact_ids is None:
+            raise ValueError("filing publication failures require selected membership")
+        if self.terminal_stage == "ENUMERATE" and self.enumeration_completed_at is not None:
+            raise ValueError("completed enumeration cannot have an enumeration terminal failure")

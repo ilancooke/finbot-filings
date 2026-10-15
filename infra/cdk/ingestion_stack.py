@@ -59,7 +59,7 @@ class IngestionStack(Stack):
             "CALENDAR_PROVIDER_ATTEMPTS": "1" if config.calendar_provider == "yahoo" else "3",
             "YAHOO_CACHE_DIR": config.yahoo_cache_dir,
             "ARTIFACT_BUCKET": state.bucket.bucket_name,
-            "ARTIFACT_READY_TOPIC_ARN": state.topic.topic_arn,
+            "FILING_READY_TOPIC_ARN": state.topic.topic_arn,
             "INGESTION_DEAD_LETTER_QUEUE_URL": state.failed_work.queue_url,
             "RUNTIME_SEC_STARTUP_QUIET_SECONDS": "150", "RUNTIME_METRICS_ENVIRONMENT": config.environment}
         env.update({name.upper() + "_TABLE": table.table_name for name, table in state.tables.items()})
@@ -149,3 +149,7 @@ class IngestionStack(Stack):
             "ReleaseRoleArn": self.release_role.role_arn, "TaskRoleArn": self.task_role.role_arn,
             "ExecutionRoleArn": self.execution_role.role_arn, "LogGroupName": log_group.log_group_name}.items():
             CfnOutput(self, name, value=value)
+        # Preserve the old strong import/export while the state stack adds the
+        # new topic. This is migration inventory only, not a publisher permission
+        # or application setting. Legacy topic/export retirement is separate work.
+        CfnOutput(self, "LegacyArtifactTopicArn", value=state.legacy_topic.topic_arn)

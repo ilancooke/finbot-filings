@@ -51,7 +51,7 @@ def seeded(system, monkeypatch):
     async def seed():
         for accession, (ticker, cik, count, names) in recovery.TARGETS.items():
             filing = Filing(accession_number=accession, company_cik=cik, ticker=ticker,
-                form_type='8-K', filed_at=NOW, discovered_at=NOW,
+                form_type='8-K', filed_at=NOW, discovered_at=NOW, company_name=ticker + ' company',
                 filing_index_url=filing_index_url(cik, accession), primary_document_name='primary.htm')
             rows = [PackageDocument('primary.htm', document_url(cik, accession, 'primary.htm'), '8-K')]
             if ticker == 'JNJ':
@@ -137,7 +137,11 @@ def test_execute_preserves_history_and_normal_worker_downloads_once(seeded, tmp_
     operation(seeded, path)
     result = operation(seeded, path, execute=True)
     assert len(result['queued']) == 4
-    assert system.db.memory.tables['filings'] == before['filings']
+    for key, old in before['filings'].items():
+        current = system.db.memory.tables['filings'][key]
+        assert current['enumeration_completed_at'] == old['enumeration_completed_at']
+        assert current['enumerated_artifact_count'] == old['enumerated_artifact_count']
+        assert len(current['selected_artifact_ids']) > len(old['selected_artifact_ids'])
     assert all(system.db.memory.tables['artifacts'][key] == row for key, row in before['artifacts'].items())
     assert system.db.memory.tables['calendar'] == before['calendar']
     assert system.db.memory.tables['companies'] == before['companies']
@@ -148,8 +152,10 @@ def test_execute_preserves_history_and_normal_worker_downloads_once(seeded, tmp_
     async def finish():
         assert len((await system.db.artifacts.list_pending('ACQUIRE')).items) == 4
         summary = await RecoveryService(seeded.worker).run_pass()
-        assert summary.complete == 4 and summary.errors == summary.terminal == 0
-        assert len(system.s3.objects) == len(system.messages.events) == 4
+        assert summary.complete >= 4 and summary.errors == summary.terminal == 0
+        assert len(system.s3.objects) == 4 and len(system.messages.events) == 3
+        events = [json.loads(params['Message']) for op, params in system.messages.events if op == 'Publish']
+        assert sum(len(event['artifacts']) for event in events) == 8
         for identity in result['queued']:
             child = await system.db.artifacts.get(identity)
             assert child.stored_at is not None and child.published_at is not None
@@ -160,7 +166,9 @@ def test_execute_preserves_history_and_normal_worker_downloads_once(seeded, tmp_
         restarted = system.worker()
         restarted.discovery.selection = seeded.discovery.selection
         await RecoveryService(restarted).run_pass()
-        assert len(system.s3.objects) == len(system.messages.events) == 4
+        assert len(system.s3.objects) == 4 and len(system.messages.events) == 3
+        events = [json.loads(params['Message']) for op, params in system.messages.events if op == 'Publish']
+        assert sum(len(event['artifacts']) for event in events) == 8
     run(finish())
     assert all(system.db.memory.tables['artifacts'][key] == row for key, row in before['artifacts'].items())
 

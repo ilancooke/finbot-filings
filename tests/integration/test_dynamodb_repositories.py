@@ -177,7 +177,10 @@ def test_partial_snapshot_restart_and_first_completion(db):
         assert (await db.filings.get(ACCESSION)).primary_document_name is None
         assert (await db.filings.list_pending()).items == ()
         await restarted.persist(filing, (*children, make_artifact("later.xml")), primary_document_name="Primary.htm", completed_at=NOW + timedelta(days=2))
-        assert await db.filings.get_checkpoint(ACCESSION) == progress
+        updated = await db.filings.get_checkpoint(ACCESSION)
+        assert updated.enumeration_completed_at == progress.enumeration_completed_at
+        assert updated.enumerated_artifact_count == progress.enumerated_artifact_count
+        assert len(updated.selected_artifact_ids) == 4
         assert len((await db.artifacts.list_pending("ACQUIRE")).items) == 4
     run(scenario())
 

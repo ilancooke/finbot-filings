@@ -20,6 +20,7 @@ class Filing:
     discovered_at: datetime
     filing_index_url: str
     primary_document_name: str | None = None
+    company_name: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "accession_number", normalize_accession_number(self.accession_number))
@@ -28,5 +29,7 @@ class Filing:
         object.__setattr__(self, "form_type", normalize_form(self.form_type))
         for name in ("filed_at", "discovered_at"):
             object.__setattr__(self, name, utc_datetime(getattr(self, name), name))
+        if self.company_name is not None and (not isinstance(self.company_name, str) or not self.company_name.strip()):
+            raise ValueError("company_name must be omitted or nonempty")
         if self.primary_document_name is not None:
             validate_filename(self.primary_document_name)

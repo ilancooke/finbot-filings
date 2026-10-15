@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "finbot-filings"
 version = "0.2.0"
-description = "Restart-safe SEC document acquisition and artifact publication service"
+description = "Restart-safe SEC document acquisition and filing publication service"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

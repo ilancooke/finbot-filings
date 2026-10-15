@@ -17,7 +17,7 @@ background worker with outbound SEC/Yahoo access and no inbound API.
 | Owner | Responsibility |
 | --- | --- |
 | `CDKToolkit` | Shared deployment asset bucket/repository, five roles and bootstrap version |
-| State stack | Raw S3, four tables/indexes, ArtifactReady SNS, failed-work SQS, application ECR |
+| State stack | Raw S3, four tables/indexes, Filings SNS, failed-work SQS, application ECR |
 | Runtime stack | Network, cluster/service, baseline task definition, roles, logs and alarms |
 | GitHub release | Digest-pinned application revisions matching baseline configuration except image |
 | Operator | Reviewed configuration, company inputs, readiness, approval and infrastructure maintenance |
@@ -27,6 +27,59 @@ release role publishes images/updates this service. Release cannot deploy CDK,
 mutate IAM/data or launch standalone tasks. Bootstrap assets are separate from
 application artifact storage/ECR. Baseline and application revisions have different
 owners; do not change the baseline variable to each GitHub-created revision.
+
+## FilingReady rollout
+
+ADRs 019–020 replace per-document events with `filing.ready` / `1.0` on the new
+`finbot-prod-filing-ready` SNS topic. This release changes application configuration
+and state/runtime infrastructure. Use the following order; do not deploy the new
+application to an active old baseline or activate the old application with the new
+baseline's `FILING_READY_TOPIC_ARN` setting.
+
+1. Pause delivery (`FINBOT_DELIVERY_ENABLED=false`), verify no release is running,
+   and update/restart the dashboard with the reserved `__filing_ready__/` record
+   filter. Stop ingestion and wait for every observed service task to be STOPPED.
+2. Commit/review the changes and require successful main CI, including rebuilt
+   ARM64 lifecycle checks. While ingestion remains stopped, enable delivery and
+   manually stage with `activate=false`. Approve the reviewed run and record its
+   new image digest; disable delivery again after staging. A stopped task can
+   carry the old baseline temporarily, but must not be started with it.
+3. Save that compatible image digest in `infra/cdk/config.prod.json`. Select both
+   public/private inputs as described below. Synthesize and review both stack
+   diffs. The state change should add `FilingReady` and its HTTPS-only policy;
+   existing resources and exports, including the old topic/export, stay intact.
+   The runtime changes the task SNS publish grant and environment to the new topic
+   and stays at desired count zero.
+4. Deploy the reviewed state stack first, then the runtime stack, using the manual
+   CDK procedures. Read the new state `FilingTopicArn` output and verify the stopped
+   baseline uses it in `FILING_READY_TOPIC_ARN` with a publish grant only to that
+   topic. Update the saved GitHub `BaselineTaskDefinitionArn` variable from the new
+   runtime output and reapply the environment variables.
+5. Restore delivery and explicitly activate the reviewed image through the normal
+   application workflow. Verify actual revision/digest, new topic ARN, task health,
+   calendar state and SEC progress. Verify a new selected filing has one complete
+   stored manifest, saved event/ready time and publication checkpoints. Repeated
+   delivery retains the same logical payload and snapshot identity.
+
+`ARTIFACT_READY_TOPIC_ARN` is no longer an accepted application setting. Consumers
+must subscribe to `FilingTopicArn` and deduplicate by `(filing_id, snapshot_id)`.
+Subscriptions on the old topic do not transfer to the new topic. Confirm existing
+subscriptions before retiring anything; earnings should bind to the new topic.
+
+The old topic retains its `ArtifactReady` construct/logical ID, physical name,
+HTTPS policy and `ArtifactTopicArn` state output. The runtime's
+`LegacyArtifactTopicArn` output deliberately preserves its strong import/export so
+state can deploy first without an export-in-use failure. It grants no legacy
+publish permission and is not an application setting. Retirement of the old topic,
+subscriptions and cross-stack reference requires a separately reviewed migration;
+this release does not delete them. Do not change/remove the legacy export during
+this cutover. See ADR 020.
+
+File publication checkpoints mean inclusion in an acknowledged filing event.
+Keep a rollback image compatible with filing PUBLISH work, new checkpoints and
+`FILING_READY_TOPIC_ARN`; do not restore an older image blindly. No data reset,
+cutoff adjustment, company reseed or historical notification replay is needed.
+See [FILING_READY](FILING_READY.md) for exact event contracts and limits.
 
 ## Earnings matching policy updates
 
@@ -612,18 +665,20 @@ schema migration or infrastructure change is required for the helper.
    with the current selector's SELECT checkpoints and pending ACQUIRE eligibility. It verifies those
    checkpoints, preserved parents and existing selected children before reporting
    `queued`. The first enumeration timestamp/count remains unchanged; those counts
-   describe the original snapshot, not today's number of children. No S3/SNS/SQS,
-   calendar, satisfaction or company writes occur in the helper. If interrupted,
+   describe the original snapshot, not today's number of children. The helper also commits the full reviewed filing membership, preserving the first
+   enumeration timestamp/count. No S3/SNS/SQS, calendar, satisfaction or company
+   writes occur in the helper. If interrupted,
    keep ingestion stopped and resume **the same manifest** with `--execute`;
    compatible partial creates/selection writes are idempotent. Unexpected conflicts
    stop the operation for review. Do not delete records or regenerate the preview
    to bypass a conflict.
 4. Restore desired count one on the same service/task definition and wait for
    stability. Normal pending recovery downloads/stores the four raw attachments,
-   publishes their artifact-ready events, and performs normal calendar satisfaction
+   publishes complete filing-ready events including existing selected files, and performs normal calendar satisfaction
    handling. Verify HEALTHY task/container state, four strong artifact records with
    `stored_at`, `s3_uri` and `published_at`, corresponding S3 keys, and no new terminal
-   failures. Existing files/events are not replayed. Then restore delivery with
+   failures. Existing files are not downloaded again. Each new snapshot includes all selected
+   stored files; previous notification payloads remain unchanged. Then restore delivery with
    `FINBOT_DELIVERY_ENABLED=true`. Keep the preview outside Git for interrupted
    recovery.
 

@@ -11,7 +11,7 @@ and [BACKLOG](BACKLOG.md) for open work. Historical plans are recoverable in Git
 The repository/distribution is `finbot-filings`; the installed Python namespace
 is `finbot_ingestion`. It discovers SEC filings, selects relevant documents,
 preserves original response-content bytes in S3, records durable facts in
-DynamoDB and publishes metadata-only `ArtifactReady` events through SNS.
+DynamoDB and publishes metadata-only `FilingReady` events through SNS.
 
 Initial coverage is the [50-company curated universe](PRODUCTION_UNIVERSE.md).
 Approximately 500 companies is the capacity target, not the current company count.
@@ -32,7 +32,7 @@ flowchart LR
     SEC[SEC submissions and package metadata] --> Runtime
     Runtime --> S3[Immutable original documents in S3]
     S3 --> Stored[DynamoDB stored checkpoint]
-    Stored --> SNS[SNS ArtifactReady]
+    Stored --> SNS[SNS FilingReady]
     SNS --> Published[DynamoDB published checkpoint]
     SNS --> Consumers[Consumer-owned SQS queues]
     Runtime --> Failed[SQS failed work]
@@ -193,32 +193,13 @@ consumers decode the URI path to obtain the actual key. No application content
 hash or ETag-based identity is used. Original discovery/ticker facts remain
 canonical on rediscovery, including after ticker configuration changes.
 
-`ArtifactReady` is `artifact.ready` / schema `1.0`:
+`FilingReady` is `filing.ready` / schema `1.0`. The unit of notification is a
+filing with its complete selected stored document list, including a primary ID,
+company name, deterministic snapshot ID and stable readiness time. The exact
+payload, hash encoding, persisted notification rows and recovery rules are in
+[FILING_READY](FILING_READY.md). The topic is `<prefix>-<environment>-filing-ready`, supplied through
+`FILING_READY_TOPIC_ARN`. There are no per-file notifications in the new runtime. Consumers deduplicate by `(filing_id, snapshot_id)` and own their queues.
 
-```json
-{
-  "event_type": "artifact.ready",
-  "schema_version": "1.0",
-  "artifact_id": "0001018724-26-012345/ex991.htm",
-  "filing_id": "0001018724-26-012345",
-  "cik": "0001018724",
-  "ticker": "AMZN",
-  "form_type": "8-K",
-  "document_type": "EX-99.1",
-  "filename": "ex991.htm",
-  "s3_uri": "s3://example-artifacts/AMZN/2026-10-31_8-K_0001018724-26-012345/ex991.htm",
-  "filed_at": "2026-10-31T20:05:02Z",
-  "discovered_at": "2026-10-31T20:05:08Z",
-  "stored_at": "2026-10-31T20:05:09Z"
-}
-```
-
-Events contain references, never document bytes/text. The worker validates matching
-canonical filing/artifact metadata and paired storage facts before sending plain
-JSON to the standard SNS topic. A MessageId is required before checkpointing
-publication. Delivery is **at least once**: lost SNS/checkpoint acknowledgments
-can repeat the same logical event. Consumers own their subscriptions/queues and
-deduplicate by `artifact_id`. Consumer receipt is outside ingestion's checkpoint.
 
 ## DynamoDB schema and access patterns
 
@@ -245,7 +226,7 @@ encoded in `raw_provider_payload_json`; SDK AttributeValues never escape adapter
 | --- | --- |
 | Company | Ticker/name/enabled plus `enabled_marker=ENABLED` only while enabled; configuration is mutable |
 | Calendar expectation | Ticker/timing/provider, optional source ID/update time, `synced_at`, optional diagnostic JSON/replacement hint, `calendar_active` tombstone flag |
-| Filing | Canonical CIK/ticker/form/acceptance/discovery/source/primary metadata; enumeration and processing checkpoints |
+| Filing | Canonical CIK/ticker/company name/form/acceptance/discovery/source/primary metadata; enumeration, selected membership and filing publication checkpoints |
 | Artifact | Canonical parent/CIK/ticker/form/type/filename/source/discovery metadata; paired `s3_uri`/`stored_at`, optional content type/byte count, publication and processing checkpoints |
 
 Base-key reads and calendar date queries are strong. GSI queries are eventual;
@@ -283,7 +264,9 @@ replace first observations. Artifact creation accepts unprocessed discoveries.
 Updates require existence plus matching revision, with bounded CAS retries that
 reread and recompute. Missing records fail without phantom upserts. Compatible
 repeated checkpoints preserve the first time; incompatible storage facts fail.
-`mark_published` requires paired storage facts and removes pending eligibility.
+`mark_published` requires paired storage facts and removes file pending eligibility
+after an acknowledged filing notification. Filing readiness/publication has its own
+durable pending checkpoint and saved event; see FILING_READY.
 Late failures cannot resurrect completed work. Repeated logical failure writes
 reuse timestamp/error; equal matching or older observations do not count again,
 and equal-time conflicts fail. Error text is bounded to 2048 characters. Legacy
@@ -306,6 +289,7 @@ retries never move it. Pending keys change in the same write as durable progress
 | Durable facts | Pending work |
 | --- | --- |
 | Incomplete parent enumeration | `ENUMERATE` |
+| Completed selected filing awaiting readiness/SNS checkpoint | Filing `PUBLISH` |
 | Unstored artifact | `ACQUIRE` |
 | Stored, unpublished artifact | `PUBLISH` |
 | Terminal failure, send not checkpointed | `DEAD_LETTER` |
@@ -319,7 +303,7 @@ storage, publication or terminal success/failure. Contradictory evidence can blo
 previous SELECT work; blocked work cannot automatically re-enter pending indexes.
 Published/terminal records, including pending dead letters, remain untouched.
 
-Enumeration/acquisition/publication have independent persisted workflow-failure
+Enumeration, file acquisition and filing publication have independent persisted workflow-failure
 counters and paired latest stage/error/time facts. Immutable terminal facts contain
 stage/error/type/time; optional `dead_lettered_at` records the first successful
 operational send. Terminal stage must agree with unfinished work. Old rows may omit
@@ -343,8 +327,8 @@ workers never redrive terminal work; durable facts remain after queue retention.
 
 ## Storage, acquisition and repair
 
-The ordered path is **S3 → stored checkpoint → strong reload → SNS → published
-checkpoint**. When a record lacks storage facts, inspect S3 before downloading.
+The ordered path is **all selected S3 objects → stored checkpoints → strong
+reloads → saved filing event → SNS → filing published checkpoint**. When a record lacks storage facts, inspect S3 before downloading.
 Compatible existing objects repair metadata without replacing bytes. Missing,
 malformed or conflicting provenance fails explicitly; HEAD permission errors do
 not mean absence.
@@ -368,7 +352,7 @@ buffer conversion can temporarily retain two copies per workflow. Shared admissi
 slots bound primary routing bodies as well. Up to 32 package decision maps are
 cached without bodies; eviction/restart rechecks metadata. Primary bytes fetched
 for routing reuse the same immutable storage path rather than downloading twice.
-Stored artifacts never download again for publication retries.
+Stored artifacts never download again for filing publication retries.
 
 ## SEC transport and runtime
 
@@ -563,6 +547,9 @@ Production deployment settings are tracked in `infra/cdk/config.prod.json`;
 account and contact inputs are supplied separately through the ignored local
 file. The loader permits only those private fields, preventing hidden overrides
 of the cutoff or image. See ADR 015 and the runbook for file selection.
+The filing-topic cutover retains the legacy topic/export until a separate
+retirement migration. Its runtime output preserves the old strong import while
+publication/configuration use only the new topic; see ADR 020 and the runbook.
 Automatic recovery uses min/max 0/100, 120-second stop timeout, 150-second SEC quiet
 period and 300-second ECS health startup allowance. These reduce overlap risk
 without formal cross-process exclusion and can delay earnings discovery materially.

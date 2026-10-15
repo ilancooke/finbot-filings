@@ -50,18 +50,20 @@ def test_full_pipeline_order_bytes_duplicate_and_canonical_alias(system, monkeyp
         await w.discover_company(Company(ticker="NEW", cik="320193", name="Apple"))
         assert len(system.s3.objects) == 4
         events = [json.loads(params["Message"]) for op, params in system.messages.events]
-        assert len(events) == 4 and all(e["ticker"] == "AAPL" for e in events)
+        assert len(events) == 1 and len(events[0]["artifacts"]) == 4 and all(e["ticker"] == "AAPL" for e in events)
         assert all(body == RAW for body, _ in system.s3.objects.values())
-        assert all(e["stored_at"] == "2026-10-08T20:00:01Z" for e in events)
+        assert events[0]["event_type"] == "filing.ready"
+        assert events[0]["company_name"] == "Apple"
         assert all(e["schema_version"] == "1.0" and "content" not in e for e in events)
         for index, value in enumerate(timeline):
             if value == "sns":
-                assert timeline[index-2:index] == ["s3", "database"]
+                assert timeline[:index].count("s3") == 4
+                assert timeline[index-1] == "database"
                 assert timeline[index+1] == "database"
         downloads = system.sec.calls.count("download")
         await w.discover_company(Company(ticker="AAPL", cik="320193", name="Apple"))
         await RecoveryService(w, page_size=1).run_pass()
-        assert system.sec.calls.count("download") == downloads and len(system.messages.events) == 4
+        assert system.sec.calls.count("download") == downloads and len(system.messages.events) == 1
     run(scenario())
 
 
@@ -75,7 +77,7 @@ def test_lost_acknowledgments_repair_without_replacing_or_redownloading(system, 
             system.messages.lost.append("Publish")
         else:
             original = system.db.memory.api
-            target = "s3_uri" if boundary == "stored_ack" else "published_at"
+            target = "s3_uri" if boundary == "stored_ack" else "ready_published_at"
             def lose(op, params):
                 result = original(op, params)
                 if op == "UpdateItem" and target in params.get("ExpressionAttributeNames", {}).values():
@@ -119,7 +121,7 @@ def test_sns_failure_retries_only_publication(system):
         child = await seed(system)
         system.messages.failures.extend([("Publish", aws_error("InternalError", 500, "Publish"))] * 2)
         assert await system.worker().process_artifact(child.artifact_id) == Outcome.COMPLETE
-        progress = await system.db.artifacts.get_checkpoint(child.artifact_id)
+        progress = await system.db.filings.get_checkpoint(ACCESSION)
         assert progress.publication_failures == 2 and progress.acquisition_failures == 0
         assert system.sec.calls.count("download") == 1
     run(scenario())
@@ -140,7 +142,8 @@ def test_stage_budgets_are_separate_and_survive_restart(system, monkeypatch):
         system.messages.failures.extend([("Publish", aws_error("InternalError", 500, "Publish"))] * 2)
         assert await system.worker().process_artifact(child.artifact_id) == Outcome.COMPLETE
         progress = await system.db.artifacts.get_checkpoint(child.artifact_id)
-        assert progress.acquisition_failures == 1 and progress.publication_failures == 2
+        assert progress.acquisition_failures == 1 and progress.publication_failures == 0
+        assert (await system.db.filings.get_checkpoint(ACCESSION)).publication_failures == 2
         assert progress.terminal_at is None
     run(scenario())
 
@@ -178,7 +181,8 @@ def test_terminal_artifact_retains_facts_and_stable_dlq_duplicates(system, stage
         system.messages.lost.append("SendMessage")
         with pytest.raises(ReadTimeoutError):
             await system.worker().process_artifact(child.artifact_id)
-        progress = await system.db.artifacts.get_checkpoint(child.artifact_id)
+        repo, identity = ((system.db.artifacts, child.artifact_id) if stage == "ACQUIRE" else (system.db.filings, ACCESSION))
+        progress = await repo.get_checkpoint(identity)
         assert progress.terminal_stage == stage and progress.pending_dead_letter
         await RecoveryService(system.worker(), page_size=1).run_pass()
         messages = [params["MessageBody"] for op, params in system.messages.events if op == "SendMessage"]
@@ -217,7 +221,7 @@ def test_failed_partial_creation_restarts_enumeration_and_acquires_all_children(
         assert (await system.db.filings.get_checkpoint(ACCESSION)).enumeration_completed_at is None
         system.db.memory.fail_put = None
         await RecoveryService(system.worker(), page_size=1).run_pass()
-        assert len(system.s3.objects) == 4 and len(system.messages.events) == 4
+        assert len(system.s3.objects) == 4 and len(system.messages.events) == 1
     run(scenario())
 
 
@@ -228,8 +232,9 @@ def test_amendments_have_independent_raw_objects_and_events(system):
             filing_index_url=filing_index_url("320193", amendment)))
         await system.worker().discover_company(Company(ticker="AAPL", cik="320193", name="Apple"))
         assert len(system.s3.objects) == 8
-        identities = [json.loads(p["Message"])["artifact_id"] for _, p in system.messages.events]
-        assert len(set(identities)) == 8
+        events = [json.loads(p["Message"]) for _, p in system.messages.events]
+        assert len({event["filing_id"] for event in events}) == 2
+        assert sum(len(event["artifacts"]) for event in events) == 8
     run(scenario())
 
 
@@ -237,7 +242,8 @@ def test_delayed_gsi_visibility_requires_later_complete_pass(system):
     async def scenario():
         await seed(system)
         system.db.memory.index_snapshots["PendingArtifactWork"] = []
-        assert (await RecoveryService(system.worker()).run_pass()).candidates == 0
+        summary = await RecoveryService(system.worker()).run_pass()
+        assert summary.candidates == summary.deferred == 1
         assert not system.s3.objects
         del system.db.memory.index_snapshots["PendingArtifactWork"]
         assert (await RecoveryService(system.worker()).run_pass()).complete == 1
@@ -286,7 +292,7 @@ def test_recovery_follows_empty_candidate_pages_and_recovers_old_disabled_compan
         # First query is pending filings. Second is an empty artifact page with a cursor.
         ghost = {"artifact_id": "0000320193-26-000001/Absent.htm", "pending_work_kind": "ACQUIRE",
                  "pending_work_sort": "1999-01-01T00:00:00.000000Z/0000320193-26-000001/Absent.htm"}
-        system.db.memory.query_responses.extend([{"Items": []}, {"Items": [], "LastEvaluatedKey": encode(ghost)}])
+        system.db.memory.query_responses.extend([{"Items": []}, {"Items": []}, {"Items": [], "LastEvaluatedKey": encode(ghost)}])
         summary = await RecoveryService(system.worker(), page_size=1).run_pass()
         assert summary.complete == 1 and (await system.db.artifacts.get(child.artifact_id)).published_at is not None
         queries = [params for op, params in system.db.memory.calls if op == "Query"]
@@ -298,8 +304,12 @@ def test_recovery_follows_empty_candidate_pages_and_recovers_old_disabled_compan
 def test_bad_oldest_candidate_does_not_starve_later_work(system):
     async def scenario():
         child = await seed(system)
-        later = make_artifact("release.htm", discovered_at=NOW + timedelta(seconds=1))
-        await system.db.artifacts.create_if_absent(later)
+        later_filing = make_filing(accession_number="0000320193-26-000002")
+        later = make_artifact("release.htm", accession_number=later_filing.accession_number,
+            discovered_at=NOW + timedelta(seconds=1))
+        await system.db.filings.create_if_absent(later_filing)
+        await PackageCheckpoint(system.db.filings, system.db.artifacts).persist(later_filing, [later],
+            primary_document_name=later.filename, completed_at=NOW)
         system.sec.failures.extend([("download", SECNetworkError("down"))] * 3)
         system.messages.failures.extend([("SendMessage", aws_error("InternalError", 500, "SendMessage"))] * 2)
         summary = await RecoveryService(system.worker(), page_size=1).run_pass()
@@ -381,7 +391,7 @@ def test_full_sec_transport_to_event_replay_under_shared_budget(system):
             w = system.worker()
             w.discovery.sec, w.downloader.sec = client, client
             await w.discover_company(Company(ticker="AAPL", cik="320193", name="Apple"))
-        assert len(replay.starts) == 7 and len(system.messages.events) == 4
+        assert len(replay.starts) == 7 and len(system.messages.events) == 1
         assert all(sum(t <= x <= t + 1 for x in replay.starts) <= 5 for t in replay.starts)
         assert all(response.closed for response in routes.values())
     run(scenario())
@@ -413,7 +423,7 @@ def test_lost_enumeration_commit_ack_recovers_every_known_child(system, monkeypa
             return result
         monkeypatch.setattr(system.db.client, "_make_api_call", lose)
         await RecoveryService(system.worker(), page_size=1).run_pass()
-        assert len(system.s3.objects) == 4 and len(system.messages.events) == 4
+        assert len(system.s3.objects) == 4 and len(system.messages.events) == 1
         progress = await system.db.filings.get_checkpoint(ACCESSION)
         assert progress.enumeration_completed_at is not None and progress.enumeration_failures == 0
     run(scenario())
@@ -432,7 +442,7 @@ def test_existing_unverifiable_s3_object_terminalizes_without_replacing_bytes(sy
     run(scenario())
 
 
-def test_whole_artifact_workflow_admission_bounds_retained_bytes_through_publication(system, monkeypatch):
+def test_download_slots_bound_retained_bytes_and_filing_publishes_once(system, monkeypatch):
     async def scenario():
         filing = make_filing()
         children = tuple(make_artifact(name) for name in ("Primary.htm", "release.htm", "Slides.PDF", "graphic.jpg"))
@@ -441,20 +451,17 @@ def test_whole_artifact_workflow_admission_bounds_retained_bytes_through_publica
             primary_document_name="Primary.htm", completed_at=NOW)
         w = system.worker(max_inflight_artifacts=1)
         active, maximum = 0, 0
-        acquire, publish = w.downloader.acquire, w.publisher.publish_artifact_ready
+        acquire = w.downloader.acquire
         async def observe_acquire(child, parent):
             nonlocal active, maximum
             active += 1
             maximum = max(maximum, active)
             await asyncio.sleep(0)
-            return await acquire(child, parent)
-        async def observe_publish(event):
-            nonlocal active
-            assert active == 1
-            await publish(event)
-            active -= 1
+            try:
+                return await acquire(child, parent)
+            finally:
+                active -= 1
         monkeypatch.setattr(w.downloader, "acquire", observe_acquire)
-        monkeypatch.setattr(w.publisher, "publish_artifact_ready", observe_publish)
         results = await asyncio.gather(*(w.process_artifact(child.artifact_id) for child in children))
         assert results == [Outcome.COMPLETE] * 4 and maximum == 1 and active == 0
     run(scenario())

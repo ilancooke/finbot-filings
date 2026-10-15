@@ -61,6 +61,8 @@ class RecoveryService:
         w = self.worker
         await self._pages(lambda token: w.filings.list_pending(page_size=self.page_size, token=token),
                           lambda filing: w.process_filing(filing.accession_number), summary)
+        await self._pages(lambda token: w.filings.list_pending(kind="PUBLISH", page_size=self.page_size, token=token),
+                          lambda filing: w.publish_filing(filing.accession_number), summary)
         for kind in ("ACQUIRE", "PUBLISH"):
             await self._pages(lambda token: w.artifacts.list_pending(kind, page_size=self.page_size, token=token),
                               lambda artifact: w.process_artifact(artifact.artifact_id), summary)

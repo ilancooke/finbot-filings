@@ -12,8 +12,15 @@ def test_isolated_aws_configuration_has_no_client_or_credential_resolution():
     assert StorageConfig.from_env({"ARTIFACT_BUCKET": "finbot-artifacts"}).max_artifact_bytes == 64 * 1024 * 1024
     assert WorkflowConfig.from_env({"INGESTION_MAX_STAGE_FAILURES": "4"}).max_stage_failures == 4
     assert MessagingConfig.from_env({"AWS_REGION": "us-east-1",
-        "ARTIFACT_READY_TOPIC_ARN": "arn:aws:sns:us-east-1:123456789012:artifacts",
+        "FILING_READY_TOPIC_ARN": "arn:aws:sns:us-east-1:123456789012:artifacts",
         "INGESTION_DEAD_LETTER_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123456789012/failed"})
+
+
+def test_legacy_topic_setting_does_not_silently_select_the_old_topic():
+    with pytest.raises(ConfigurationError, match="FILING_READY_TOPIC_ARN"):
+        MessagingConfig.from_env({"AWS_REGION": "us-east-1",
+            "ARTIFACT_READY_TOPIC_ARN": "arn:aws:sns:us-east-1:123456789012:artifact-ready",
+            "INGESTION_DEAD_LETTER_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123456789012/failed"})
 
 
 @pytest.mark.parametrize("factory", [

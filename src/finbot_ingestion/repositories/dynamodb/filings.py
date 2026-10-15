@@ -3,11 +3,13 @@ from datetime import datetime
 from finbot_ingestion.domain import Filing
 from finbot_ingestion.domain.checkpoints import FilingCheckpoint
 from finbot_ingestion.domain.identity import normalize_accession_number
-from ..errors import RepositoryConflict
+from finbot_ingestion.domain.filing_ready import FilingReady
+from finbot_ingestion.messaging.publisher import bounded_json_message
+from ..errors import RepositoryConflict, RepositoryDataError
 from ..package_checkpoint import assert_same_filing
 from ..pagination import Page
 from .base import DynamoDBRepository
-from .serialization import integer, pending_sort, record, restore, validate_pending
+from .serialization import encode, integer, pending_sort, record, restore, timestamp, validate_pending
 
 PENDING_INDEX = "PendingFilingEnumeration"
 
@@ -17,7 +19,11 @@ def work_kind(progress):
         return "DEAD_LETTER" if progress.pending_dead_letter else None
     if progress.selection_blocked:
         return None
-    return "ENUMERATE" if progress.enumeration_completed_at is None else None
+    if progress.enumeration_completed_at is None:
+        return "ENUMERATE"
+    if progress.selected_artifact_ids is not None and progress.ready_published_at is None:
+        return "PUBLISH"
+    return None
 
 
 class DynamoDBFilingRepository(DynamoDBRepository):
@@ -56,12 +62,15 @@ class DynamoDBFilingRepository(DynamoDBRepository):
         return restore(FilingCheckpoint, item)
 
     async def mark_enumerated(self, accession_number: str, *, primary_document_name: str,
-                              artifact_count: int, completed_at: datetime) -> None:
+                              artifact_count: int, completed_at: datetime, artifact_ids=None) -> None:
         """Low-level commit; callers use PackageCheckpoint to confirm child durability."""
         key = normalize_accession_number(accession_number)
+        if artifact_ids is not None and len(artifact_ids) != artifact_count:
+            raise ValueError("artifact_count must match the selected membership")
         progress = FilingCheckpoint(accession_number=key, enumeration_completed_at=completed_at,
                                     resolved_primary_document_name=primary_document_name,
-                                    enumerated_artifact_count=artifact_count)
+                                    enumerated_artifact_count=artifact_count,
+                                    selected_artifact_ids=artifact_ids)
 
         def decide(item):
             if restore(FilingCheckpoint, item).selection_blocked:
@@ -73,12 +82,130 @@ class DynamoDBFilingRepository(DynamoDBRepository):
             if "enumeration_completed_at" in item:
                 if item["resolved_primary_document_name"] != primary_document_name:
                     raise RepositoryConflict("enumerated primary conflicts with checkpoint")
-                # The first completed snapshot's timestamp/count are immutable.
-                return None
-            return ({name: value for name, value in record(progress).items()
-                     if name in ("enumeration_completed_at", "resolved_primary_document_name", "enumerated_artifact_count")},
-                    ("pending_work_kind", "pending_work_sort"))
+                # Keep the first enumeration facts, but explicit package recovery
+                # can add members and produce a new complete filing notification.
+                if artifact_ids is None:
+                    return None
+                old = set(item.get("selected_artifact_ids", ()))
+                members = sorted(old | set(artifact_ids))
+                if members == item.get("selected_artifact_ids"):
+                    return None
+                if item.get("ready_snapshot_id") and "ready_published_at" not in item:
+                    raise RepositoryConflict("publish the saved snapshot before adding documents")
+                return ({"selected_artifact_ids": members, "pending_work_kind": "PUBLISH",
+                         "pending_work_sort": pending_sort(datetime.fromisoformat(item["discovered_at"]), key)},
+                        ("ready_snapshot_id", "ready_published_at"))
+            sets = {name: value for name, value in record(progress).items()
+                    if name in ("enumeration_completed_at", "resolved_primary_document_name",
+                                "enumerated_artifact_count", "selected_artifact_ids")}
+            if artifact_ids is not None:
+                sets["pending_work_kind"] = "PUBLISH"
+                return sets, ()
+            return sets, ("pending_work_kind", "pending_work_sort")
         await self._update(key, decide, self._validate)
+
+    @staticmethod
+    def _ready_key(accession, snapshot_id):
+        return f"__filing_ready__/{accession}/{snapshot_id}"
+
+    @staticmethod
+    def _restore_ready(row):
+        try:
+            if row.get("record_type") != "filing_ready" or integer(row.get("repository_schema_version"), "schema version") != 1:
+                raise ValueError("unknown notification record")
+            integer(row.get("revision"), "revision")
+            if not isinstance(row.get("event_json"), str):
+                raise ValueError("notification JSON must be a string")
+            event = FilingReady.from_json(bounded_json_message(row["event_json"]))
+            if row["accession_number"] != DynamoDBFilingRepository._ready_key(event.filing_id, event.snapshot_id):
+                raise ValueError("notification record key mismatch")
+            if "published_at" in row and timestamp(datetime.fromisoformat(row["published_at"])) != row["published_at"]:
+                raise ValueError("notification publication timestamp must use fixed-width UTC")
+            return event
+        except (ValueError, KeyError, TypeError) as exc:
+            raise RepositoryDataError("invalid saved filing notification") from exc
+
+    async def get_ready_event(self, accession_number):
+        progress = await self.get_checkpoint(accession_number)
+        if progress is None or progress.ready_snapshot_id is None:
+            return None
+        row = await self._get(self._ready_key(accession_number, progress.ready_snapshot_id))
+        if row is None:
+            raise RepositoryConflict("saved filing notification is missing")
+        event = self._restore_ready(row)
+        if (event.filing_id, event.snapshot_id) != (accession_number, progress.ready_snapshot_id):
+            raise RepositoryConflict("saved filing notification identity mismatch")
+        return event
+
+    async def save_ready_event(self, event):
+        """Save immutable bytes first; attach only to the matching durable selection."""
+        try:
+            message = bounded_json_message(event.to_json())
+        except ValueError as exc:
+            raise RepositoryConflict(str(exc)) from exc
+        key = self._ready_key(event.filing_id, event.snapshot_id)
+        row = {"accession_number": key, "repository_schema_version": 1,
+               "event_json": message, "record_type": "filing_ready", "revision": 0}
+        try:
+            await self._call("put_item", Item=encode(row), ConditionExpression="attribute_not_exists(#key)",
+                             ExpressionAttributeNames={"#key": "accession_number"})
+        except self.execution.client.exceptions.ConditionalCheckFailedException:
+            existing = await self._get(key)
+            if existing is None:
+                raise RepositoryConflict("saved notification disappeared")
+            canonical = self._restore_ready(existing)
+            if canonical.manifest() != event.manifest():
+                raise RepositoryConflict("conflicting filing notification")
+            event = canonical
+
+        def decide(item):
+            filing, progress = self._validate(item), restore(FilingCheckpoint, item)
+            if progress.terminal_at is not None or progress.selection_blocked:
+                raise RepositoryConflict("blocked filing cannot become ready")
+            if (tuple(child.artifact_id for child in event.artifacts) != progress.selected_artifact_ids
+                    or event.primary_artifact_id != event.filing_id + "/" + progress.resolved_primary_document_name
+                    or (event.cik, event.ticker, event.form_type, event.filed_at, event.company_name) !=
+                       (filing.company_cik, filing.ticker, filing.form_type, filing.filed_at, filing.company_name)):
+                raise RepositoryConflict("notification disagrees with canonical filing selection")
+            if progress.ready_snapshot_id is not None:
+                if progress.ready_snapshot_id != event.snapshot_id:
+                    raise RepositoryConflict("filing already has a different ready snapshot")
+                return None
+            return {"ready_snapshot_id": event.snapshot_id}, ()
+        await self._update(event.filing_id, decide, self._validate)
+        return event
+
+    async def mark_ready_published(self, accession_number, snapshot_id, at):
+        at = timestamp(at)
+        current = await self.get_checkpoint(accession_number)
+        if (current is None or current.ready_snapshot_id != snapshot_id
+                or current.terminal_at is not None or current.selection_blocked):
+            raise RepositoryConflict("publication requires the current unblocked saved snapshot")
+        # Preserve each snapshot's first publication acknowledgment, including
+        # after a later attachment creates a new current snapshot on the parent.
+        key = self._ready_key(accession_number, snapshot_id)
+        def archive(item):
+            return None if "published_at" in item else ({"published_at": at}, ())
+        await self._update(key, archive, self._restore_ready)
+        archived = await self._get(key)
+        at = archived["published_at"]
+        def decide(item):
+            progress = restore(FilingCheckpoint, item)
+            if progress.terminal_at is not None or progress.selection_blocked:
+                raise RepositoryConflict("blocked filing cannot be published")
+            if progress.ready_snapshot_id != snapshot_id:
+                raise RepositoryConflict("publication requires the saved snapshot")
+            if progress.ready_published_at is not None:
+                return None
+            return {"ready_published_at": at}, ("pending_work_kind", "pending_work_sort")
+        await self._update(normalize_accession_number(accession_number), decide, self._validate)
+
+    async def freeze_company_name(self, accession_number, name):
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("company name must be nonempty")
+        def decide(item):
+            return None if item.get("company_name") is not None else ({"company_name": name.strip()}, ())
+        await self._update(normalize_accession_number(accession_number), decide, self._validate)
 
     async def record_failure(self, accession_number: str, error: str, at: datetime) -> None:
         await self._failure(normalize_accession_number(accession_number), error, at,
@@ -91,8 +218,8 @@ class DynamoDBFilingRepository(DynamoDBRepository):
 
     async def record_stage_failure(self, accession_number, stage, error, at, *, max_failures,
                                    error_type, terminal=False):
-        if stage != "ENUMERATE":
-            raise ValueError("filing failures must be ENUMERATE")
+        if stage not in ("ENUMERATE", "PUBLISH"):
+            raise ValueError("filing failures must be ENUMERATE or PUBLISH")
         await self._stage_failure(normalize_accession_number(accession_number), stage, error, at,
                                  max_failures=max_failures, error_type=error_type, terminal=terminal,
                                  validate=self._validate,
@@ -102,8 +229,8 @@ class DynamoDBFilingRepository(DynamoDBRepository):
         await self._mark_dead_lettered(normalize_accession_number(accession_number), at, self._validate)
 
     async def list_pending(self, *, kind="ENUMERATE", page_size=None, token=None) -> Page[Filing]:
-        if kind not in ("ENUMERATE", "DEAD_LETTER"):
-            raise ValueError("filing work kind must be ENUMERATE or DEAD_LETTER")
+        if kind not in ("ENUMERATE", "PUBLISH", "DEAD_LETTER"):
+            raise ValueError("filing work kind must be ENUMERATE, PUBLISH or DEAD_LETTER")
         items, token = await self._query(index=PENDING_INDEX, partition="pending_work_kind",
                                          value=kind, page_size=page_size, token=token)
         filings = []

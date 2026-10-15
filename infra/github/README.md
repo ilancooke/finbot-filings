@@ -159,6 +159,17 @@ and [`gh variable set --env-file`](https://cli.github.com/manual/gh_variable_set
 Manual dispatch uses [`gh workflow run`](https://cli.github.com/manual/gh_workflow_run).
 Review uses the [pending-deployments API](https://docs.github.com/en/rest/actions/workflow-runs#review-pending-deployments-for-a-workflow-run).
 
+## FilingReady topic cutover
+
+The producer now targets `finbot-prod-filing-ready` through the CDK-managed
+`FILING_READY_TOPIC_ARN` task setting. This release requires manual state/runtime
+CDK deployment and a new baseline ARN before active application delivery.
+Pause/stop first, stage the compatible new digest at zero, reconcile both stacks
+and saved GitHub baseline variables, then explicitly activate. See the exact
+[FilingReady rollout](../../docs/DEPLOYMENT.md#filingready-rollout). An old baseline
+or old application image is not a compatible active combination. Keep the legacy
+topic/export intact during cutover; subscriptions are not transferred automatically.
+
 ## Checkpoint compatibility
 
 Filtering is delivered. For future incompatible schema/configuration changes,

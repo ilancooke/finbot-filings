@@ -20,7 +20,7 @@ ENV = {
     "AWS_EC2_METADATA_DISABLED": "true", "COMPANIES_TABLE": "companies",
     "CALENDAR_TABLE": "calendar", "FILINGS_TABLE": "filings", "ARTIFACTS_TABLE": "artifacts",
     "ARTIFACT_BUCKET": "fixture-artifacts",
-    "ARTIFACT_READY_TOPIC_ARN": "arn:aws:sns:us-east-1:123456789012:fixture",
+    "FILING_READY_TOPIC_ARN": "arn:aws:sns:us-east-1:123456789012:fixture",
     "INGESTION_DEAD_LETTER_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123456789012/fixture",
     "RUNTIME_SAFETY_POLL_SECONDS": ".3", "RUNTIME_ACTIVE_POLL_SECONDS": ".1",
     "RUNTIME_HEARTBEAT_SECONDS": ".1", "RUNTIME_TICK_SECONDS": ".05",

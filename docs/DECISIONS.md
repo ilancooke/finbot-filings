@@ -378,3 +378,51 @@ Revisit conservative coverage for demonstrated unsupported issuer layouts or
 new requested document roles. Current rules are in ARCHITECTURE; rollout is in
 DEPLOYMENT. Application/container tests use synthetic representative source layouts
 and mocked boundaries, not live SEC or AWS calls.
+
+<a id="adr-019"></a>
+## ADR 019 — Publish complete filings as the unit of work
+
+**Accepted 2026-10-14; implemented locally, activation not recorded here.**
+Topic naming and infrastructure rollout details below are superseded by ADR 020.
+Supersedes ADR 004's per-document notification unit. Publish one `FilingReady`
+(`filing.ready` / `1.0`) after every selected file in the filing is stored.
+The payload lists the full document manifest and company/filing context so earnings
+can process it in one request. Retain the existing SNS topic and consumer-owned queues.
+
+Persist exact selected membership, immutable payloads and first readiness time;
+recover filing-level publication without downloading stored files again. Manifest
+SHA-256 identifies input snapshots, not document bytes. Explicit later attachments
+produce a new full snapshot; previous payloads remain immutable. Failed selected
+files block readiness. At-least-once delivery requires snapshot deduplication.
+
+Reuse the existing Filings table/index for filing publication and reserved saved
+notification rows. Preserve original enumeration counts/times and artifact
+checkpoints. Do not automatically replay historical completed filings. Older
+images are incompatible rollback targets; update the dashboard reader first.
+No infrastructure change, cutoff change, reset or cloud activation is authorized
+by this local implementation. See FILING_READY for the authoritative contract.
+
+<a id="adr-020"></a>
+## ADR 020 — Name the producer topic for filing-level work
+
+**Accepted 2026-10-14; implemented locally, activation not recorded here.**
+Supersedes ADR 019's use of the existing topic for new filing notifications.
+Use `<prefix>-<environment>-filing-ready` (`finbot-prod-filing-ready`), CDK state
+output `FilingTopicArn`, and application setting `FILING_READY_TOPIC_ARN`.
+The payload remains FilingReady 1.0. Do not fall back to the old artifact setting.
+
+SNS topics cannot be renamed in place. Add a `FilingReady` CDK construct and
+switch the runtime's environment and scoped publish grant to its ARN. Preserve
+the deployed `ArtifactReady` resource, policy, output and strong export during
+cutover; a runtime `LegacyArtifactTopicArn` output keeps the old import alive.
+This prevents the producer-first deployment from removing an export still used by
+the deployed runtime. The legacy output supplies migration inventory, not runtime
+publisher configuration. Other retained state and alarms remain unchanged.
+
+Retirement of the old topic/subscriptions/export is a separate reviewed migration,
+not incidental deletion in this release. Subscriptions do not move automatically.
+New earnings subscriptions use the new topic. Review existing consumers before
+retirement. The state/runtime CDK deployment and baseline handoff are required
+before activating the compatible application image; see DEPLOYMENT.
+
+No resources were deployed or deleted by implementing this local change.

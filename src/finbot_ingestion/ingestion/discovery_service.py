@@ -42,6 +42,7 @@ class DiscoveryService:
         # Legacy component replay; the production factory always supplies selection.
         observed = await self.execution.call(self.sec.get_company_submissions, company=company)
         for filing in observed:
+            filing = replace(filing, company_name=company.name)
             await self.control.checkpoint(lambda: self.filings.create_if_absent(filing),
                 operation="create_filing", identity=filing.accession_number)
         return tuple(filing.accession_number for filing in observed)
@@ -52,7 +53,7 @@ class DiscoveryService:
         observed = await self.execution.call(self.sec.get_company_submissions_with_evidence, company=company)
         canonical = []
         for observation in observed:
-            filing = observation.filing
+            filing = replace(observation.filing, company_name=company.name)
             decision = None
             if self.selection is not None:
                 evidence = observation.sec_items

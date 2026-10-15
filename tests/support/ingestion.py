@@ -20,7 +20,7 @@ from finbot_ingestion.ingestion.discovery_service import DiscoveryService
 from finbot_ingestion.ingestion.ingestion_worker import IngestionWorker
 from finbot_ingestion.ingestion.work_control import WorkControl
 from finbot_ingestion.messaging.dead_letter import SQSDeadLetterPublisher
-from finbot_ingestion.messaging.sns_publisher import SNSArtifactEventPublisher
+from finbot_ingestion.messaging.sns_publisher import SNSFilingEventPublisher
 from finbot_ingestion.repositories.package_checkpoint import PackageCheckpoint
 from finbot_ingestion.sec.client import DownloadedDocument
 from finbot_ingestion.sec.filing_index import parse_filing_index
@@ -32,7 +32,7 @@ from tests.support.dynamodb import make_filing, make_artifact, NOW, ACCESSION
 
 RAW = b"\x00SEC\xff\r\noriginal"
 BUCKET = "finbot-artifacts"
-MESSAGING = MessagingConfig("us-east-1", "arn:aws:sns:us-east-1:123456789012:artifact-ready",
+MESSAGING = MessagingConfig("us-east-1", "arn:aws:sns:us-east-1:123456789012:filing-ready",
                             "https://sqs.us-east-1.amazonaws.com/123456789012/ingestion-failed")
 
 
@@ -94,7 +94,7 @@ def system(db, monkeypatch):
             control = WorkControl(config, sleeper=no_sleep, now=lambda: NOW + timedelta(seconds=2), random_value=lambda: 0)
             discovery = DiscoveryService(sec, sec_execution, db.filings, db.artifacts, control)
             return IngestionWorker(discovery, ArtifactDownloader(sec, sec_execution, store,
-                max_artifact_bytes=64 * 1024 * 1024), SNSArtifactEventPublisher(executions["sns"], MESSAGING),
+                max_artifact_bytes=64 * 1024 * 1024), SNSFilingEventPublisher(executions["sns"], MESSAGING),
                 SQSDeadLetterPublisher(executions["sqs"], MESSAGING), db.filings, db.artifacts, control)
         yield SimpleNamespace(db=db, sec=sec, s3=s3, messages=messages, store=store, worker=worker)
 

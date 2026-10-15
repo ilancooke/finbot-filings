@@ -3,7 +3,7 @@
 `finbot-filings` is a focused SEC document-acquisition service. Its installed
 Python namespace is `finbot_ingestion`. It discovers relevant filings, acquires
 original document bytes, stores immutable artifacts in S3, maintains DynamoDB
-metadata/checkpoints and publishes `ArtifactReady` events to SNS. Document
+metadata/checkpoints and publishes filing-level `FilingReady` events to SNS. Document
 interpretation, earnings extraction, features and consumer queues belong downstream.
 
 The migration from the POC and the subsequent earnings-focused filtering work
@@ -262,7 +262,7 @@ URI path to obtain the original key.
 No application content hashes or interpretation are used. Amendments create new
 immutable records and objects, preserving historical information sets.
 
-The ordered path is **S3 → DynamoDB stored checkpoint → SNS → published checkpoint**.
+The ordered path is **all selected S3 objects → stored checkpoints → saved filing event → SNS → filing published checkpoint**.
 S3 writes use `IfNoneMatch="*"`. Before downloading an unstored record, acquisition
 inspects existing objects and validates canonical versioned provenance. Compatible
 objects repair metadata without replacing bytes; missing/conflicting metadata
@@ -276,15 +276,23 @@ workflows run concurrently by default. Buffer conversion can retain two copies
 per workflow temporarily; container memory must account for that. Stored artifacts
 skip download when publication is retried.
 
-`ArtifactReady` is `artifact.ready` / schema `1.0`, containing artifact/filing/CIK/
-ticker/form/document/filename/S3 references and acceptance/discovery/storage times,
-without document contents. Delivery is at least once. Consumers deduplicate by
-`artifact_id` and own their subscribed SQS queues. Lost publication acknowledgments
-can produce identical logical events again.
+`FilingReady` is `filing.ready` / schema `1.0`: one event after every selected
+file in the filing is stored. It includes company/filing details, the primary
+artifact ID, a deterministic snapshot ID, readiness time and the complete list of
+artifact IDs, original filenames, S3 URIs, byte counts and optional types.
+See [the exact event contract and recovery behavior](docs/FILING_READY.md).
+Production uses the CDK-managed `finbot-prod-filing-ready` topic and
+`FILING_READY_TOPIC_ARN` task setting. Topic cutover requires state/runtime CDK
+deployment before activation; see [the rollout](docs/DEPLOYMENT.md#filingready-rollout).
+No document contents are included. Delivery is at least once; consumers deduplicate
+by `(filing_id, snapshot_id)` and own their subscribed SQS queues. Normal ingestion
+no longer emits individual `artifact.ready` events.
 
 ## Persistence, recovery and terminal work
 
-Four existing tables and fixed indexes are required; all keys are strings:
+Four existing tables and fixed indexes are required; all keys are strings. The
+Filings table also retains reserved `__filing_ready__/` notification rows, while
+canonical completed filings use its existing pending index for `PUBLISH` work:
 
 | Table | Base partition / sort key | Required GSIs |
 | --- | --- | --- |
@@ -492,7 +500,7 @@ utilities need only their own relevant settings.
 | SEC transport | `SEC_CONNECT_TIMEOUT_SECONDS=10`, `SEC_READ_TIMEOUT_SECONDS=30`, `SEC_MAX_ATTEMPTS=3`, `SEC_BACKOFF_BASE_SECONDS=1`, `SEC_BACKOFF_CAP_SECONDS=30`, `SEC_MAX_REDIRECTS=5` |
 | AWS/DynamoDB | Required `AWS_REGION`, four distinct `COMPANIES_TABLE`, `CALENDAR_TABLE`, `FILINGS_TABLE`, `ARTIFACTS_TABLE` names |
 | DynamoDB execution | Connect/read timeouts 5/10 seconds, 3 attempts, page size 100, 4 workers, 4 CAS attempts, maximum date span 366 days; `DYNAMODB_*` names below |
-| Storage/messaging | Required `ARTIFACT_BUCKET`, same-region standard `ARTIFACT_READY_TOPIC_ARN`, standard `INGESTION_DEAD_LETTER_QUEUE_URL`; `MAX_ARTIFACT_BYTES=67108864` |
+| Storage/messaging | Required `ARTIFACT_BUCKET`, same-region standard `FILING_READY_TOPIC_ARN`, standard `INGESTION_DEAD_LETTER_QUEUE_URL`; `MAX_ARTIFACT_BYTES=67108864` |
 | Ingestion | AWS connect/read 5/30 seconds, attempts/workers 3/2, stage failures 3, checkpoint/dead-letter attempts 3/3, inflight artifacts 2, recovery page 100, backoff 1/30 seconds; `INGESTION_*` names below |
 | Calendar | Provider `placeholder` or `yahoo` (default placeholder), lookahead/near-term 30/3 days, full/near-term refresh 86400/0 seconds, stale after 172800 seconds, maximum companies/events 1000/5000, company page 100, provider attempts 1 for Yahoo or 3 otherwise, checkpoint attempts 3, backoff 1/30 seconds |
 | Yahoo | HTTP timeout 20 seconds, request spacing 1 second, page size 100, maximum pages per slice 20, HTTP attempts 300, raw rows 30000, whole-fetch deadline 600 seconds, request attempts 2, backoff cap 30 seconds, cache `/tmp/finbot-yahoo`; `YAHOO_*` names below |
@@ -614,6 +622,7 @@ are defined in CDK; no runtime adapter provisions them.
 ## Design documents and legacy recovery
 
 - [ARCHITECTURE](docs/ARCHITECTURE.md): current scope and durable contracts.
+- [FILING_READY](docs/FILING_READY.md): filing notification payload and publication recovery.
 - [DECISIONS](docs/DECISIONS.md): numbered decisions, rationale and revisit triggers.
 - [DEPLOYMENT](docs/DEPLOYMENT.md): operator procedures and dated verification.
 - [BACKLOG](docs/BACKLOG.md): unresolved investigations and deferred scope.

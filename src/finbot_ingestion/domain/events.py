@@ -1,4 +1,4 @@
-"""Versioned ArtifactReady wire contract; publication itself is a later phase."""
+"""Historical ArtifactReady model retained for offline compatibility; never emitted by runtime."""
 
 import json
 from dataclasses import asdict, dataclass, field

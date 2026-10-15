@@ -46,11 +46,15 @@ class StateStack(Stack):
             self.tables[name] = table
             CfnOutput(self, name.capitalize() + "Table", value=table.table_name)
         # ADR 010 accepts unencrypted SNS message bodies at rest; HTTPS is required.
-        self.topic = sns.Topic(self, "ArtifactReady", topic_name=f"{config.name}-artifact-ready")
-        self.topic.apply_removal_policy(RemovalPolicy.RETAIN)
-        self.topic.add_to_resource_policy(iam.PolicyStatement(effect=iam.Effect.DENY,
-            principals=[iam.AnyPrincipal()], actions=["sns:Publish"], resources=[self.topic.topic_arn],
-            conditions={"Bool": {"aws:SecureTransport": "false"}}))
+        # Keep the deployed topic and its logical ID during the filing-level cutover.
+        # Replacing its exported ARN in place would block the state-stack update.
+        self.legacy_topic = sns.Topic(self, "ArtifactReady", topic_name=f"{config.name}-artifact-ready")
+        self.topic = sns.Topic(self, "FilingReady", topic_name=f"{config.name}-filing-ready")
+        for topic in (self.legacy_topic, self.topic):
+            topic.apply_removal_policy(RemovalPolicy.RETAIN)
+            topic.add_to_resource_policy(iam.PolicyStatement(effect=iam.Effect.DENY,
+                principals=[iam.AnyPrincipal()], actions=["sns:Publish"], resources=[topic.topic_arn],
+                conditions={"Bool": {"aws:SecureTransport": "false"}}))
         self.failed_work = sqs.Queue(self, "FailedWork", queue_name=f"{config.name}-failed-work",
             encryption=sqs.QueueEncryption.SQS_MANAGED, enforce_ssl=True,
             retention_period=Duration.days(14), removal_policy=RemovalPolicy.RETAIN)
@@ -58,7 +62,8 @@ class StateStack(Stack):
             image_tag_mutability=ecr.TagMutability.IMMUTABLE, image_scan_on_push=True,
             removal_policy=RemovalPolicy.RETAIN, empty_on_delete=False)
         for name, value in {
-            "ArtifactBucket": self.bucket.bucket_name, "ArtifactTopicArn": self.topic.topic_arn,
+            "ArtifactBucket": self.bucket.bucket_name, "ArtifactTopicArn": self.legacy_topic.topic_arn,
+            "FilingTopicArn": self.topic.topic_arn,
             "FailedWorkQueueUrl": self.failed_work.queue_url,
             "ImageRepositoryUri": self.repository.repository_uri,
         }.items():

@@ -68,19 +68,27 @@ def selected_worker(system, monkeypatch, *, items=('2.02', '9.01'), index_items=
     return worker, filing, parsed, downloads
 
 
+async def persist_legacy(system, filing, children, *, primary_document_name, completed_at):
+    children = tuple(children)
+    for child in children:
+        await system.db.artifacts.create_if_absent(child)
+    await system.db.filings.mark_enumerated(filing.accession_number,
+        primary_document_name=primary_document_name, artifact_count=len(children), completed_at=completed_at)
+
+
 def test_full_filtered_pipeline_never_requests_excluded_documents(system, monkeypatch):
     worker, filing, _, downloads = selected_worker(system, monkeypatch)
     async def scenario():
         assert await worker.discover_company(COMPANY) == (ACCESSION,)
         assert set(downloads) == {'Primary.htm', 'release.htm', 'supplement.pdf'}
-        assert len(system.s3.objects) == len(system.messages.events) == 3
+        assert len(system.s3.objects) == 3 and len(system.messages.events) == 1
         parent = await system.db.filings.get_checkpoint(ACCESSION)
         assert parent.enumerated_artifact_count == 3 and parent.selection_decision == 'SELECT'
         children = (await system.db.artifacts.list_for_filing(ACCESSION)).items
         assert {child.filename for child in children} == set(downloads)
         assert all(child.published_at is not None for child in children)
         await RecoveryService(worker).run_pass()
-        assert len(downloads) == 3 and len(system.messages.events) == 3
+        assert len(downloads) == 3 and len(system.messages.events) == 1
     run(scenario())
 
 
@@ -121,7 +129,8 @@ def test_v2_evidence_selects_only_results_documents_and_survives_restart(system,
         await worker.discover_company(COMPANY)
         assert set(downloads) == expected
         assert downloads.count('Primary.htm') == 1
-        assert len(downloads) == len(system.s3.objects) == len(system.messages.events) == len(expected)
+        assert len(downloads) == len(system.s3.objects) == len(expected)
+        assert len(system.messages.events) == 1
         parent = await system.db.filings.get_checkpoint(ACCESSION)
         assert parent.selection_policy == POLICY_VERSION and parent.enumerated_artifact_count == len(expected)
         children = (await system.db.artifacts.list_for_filing(ACCESSION)).items
@@ -131,7 +140,7 @@ def test_v2_evidence_selects_only_results_documents_and_survives_restart(system,
         restarted = system.worker()
         restarted.discovery.selection = worker.discovery.selection
         await RecoveryService(restarted).run_pass()
-        assert len(downloads) == len(system.messages.events) == len(expected)
+        assert len(downloads) == len(expected) and len(system.messages.events) == 1
     run(scenario())
 
 
@@ -142,7 +151,7 @@ def test_v1_completed_package_is_not_automatically_reenumerated(system, monkeypa
         await system.db.filings.record_selection(ACCESSION, Decision('SELECT', 'earnings_item_2_02'), NOW,
             policy_version='earnings-acquisition-v1')
         primary = next(a for a in parsed.artifacts(filing, discovered_at=NOW) if a.filename == 'Primary.htm')
-        await PackageCheckpoint(system.db.filings, system.db.artifacts).persist(filing, (primary,),
+        await persist_legacy(system, filing, (primary,),
             primary_document_name='Primary.htm', completed_at=NOW)
         assert (await worker.enumerate_only(ACCESSION)).outcome == Outcome.COMPLETE
         assert await system.db.artifacts.get(ACCESSION + '/release.htm') is None
@@ -167,7 +176,7 @@ def test_v1_pending_package_upgrades_and_preserves_admission_evidence(system, mo
         parent = await system.db.filings.get_checkpoint(ACCESSION)
         assert parent.selection_policy == POLICY_VERSION and parent.selection_reason == 'earnings_item_2_02'
         assert parent.enumerated_artifact_count == 3
-        assert len(system.s3.objects) == len(system.messages.events) == 3
+        assert len(system.s3.objects) == 3 and len(system.messages.events) == 1
         for name in ('Primary.htm', 'release.htm', 'supplement.pdf'):
             progress = await system.db.artifacts.get_checkpoint(ACCESSION + '/' + name)
             assert progress.selection_policy == POLICY_VERSION
@@ -203,7 +212,7 @@ def test_v1_pending_child_upgrades_without_replacing_stored_bytes(system, monkey
             policy_version='earnings-acquisition-v1')
         children = tuple(a for a in parsed.artifacts(filing, discovered_at=NOW)
                          if a.filename in {'Primary.htm', 'release.htm', 'supplement.pdf'})
-        await PackageCheckpoint(system.db.filings, system.db.artifacts).persist(filing, children,
+        await persist_legacy(system, filing, children,
             primary_document_name='Primary.htm', completed_at=NOW)
         child = next(a for a in children if a.filename == 'release.htm')
         await system.db.artifacts.record_selection(child.artifact_id, Decision('SELECT', 'earnings_release'), NOW,
@@ -218,7 +227,8 @@ def test_v1_pending_child_upgrades_without_replacing_stored_bytes(system, monkey
         after = await system.db.artifacts.get(child.artifact_id)
         progress = await system.db.artifacts.get_checkpoint(child.artifact_id)
         assert progress.selection_policy == POLICY_VERSION and progress.selection_reason == 'earnings_release'
-        assert after.published_at is not None and len(system.messages.events) == 1
+        assert after.stored_at is not None and after.published_at is None
+        assert not system.messages.events
         if stored:
             assert (after.s3_uri, after.stored_at, after.size_bytes) == (before.s3_uri, before.stored_at, before.size_bytes)
             assert 'release.htm' not in downloads
@@ -256,7 +266,7 @@ def test_missing_index_items_can_use_structural_primary_and_reuse_bytes(system, 
     async def scenario():
         await worker.discover_company(COMPANY)
         assert downloads.count('Primary.htm') == 1
-        assert len(system.messages.events) == 3
+        assert len(system.messages.events) == 1
     run(scenario())
 
 
@@ -281,7 +291,7 @@ def test_ambiguous_exhibit_keeps_primary_but_leaves_no_download_work(system, mon
         await worker.discover_company(COMPANY)
         assert set(downloads) == {'Primary.htm', 'release.htm'}
         assert await system.db.artifacts.get(ACCESSION + '/supplement.pdf') is None
-        assert len(system.messages.events) == 2
+        assert len(system.messages.events) == 1
     run(scenario())
 
 
@@ -291,7 +301,7 @@ def test_legacy_pending_attachment_is_removed_from_indexes_without_erasing_facts
     async def scenario():
         await system.db.filings.create_if_absent(filing)
         children = parsed.artifacts(filing, discovered_at=NOW)
-        await PackageCheckpoint(system.db.filings, system.db.artifacts).persist(filing, children,
+        await persist_legacy(system, filing, children,
             primary_document_name='Primary.htm', completed_at=NOW)
         identity = ACCESSION + '/graphic.jpg'
         if stored:
@@ -390,7 +400,7 @@ def test_concurrent_legacy_children_share_metadata_and_primary_bytes(system, mon
     worker, filing, parsed, downloads = selected_worker(system, monkeypatch, generic=True)
     async def scenario():
         await system.db.filings.create_if_absent(filing)
-        await PackageCheckpoint(system.db.filings, system.db.artifacts).persist(filing,
+        await persist_legacy(system, filing,
             parsed.artifacts(filing, discovered_at=NOW), primary_document_name='Primary.htm', completed_at=NOW)
         outcomes = await asyncio.wait_for(asyncio.gather(
             worker.process_artifact(ACCESSION + '/release.htm'),
@@ -405,7 +415,7 @@ def test_recovery_pass_drains_legacy_exclusions_and_keeps_original_snapshot(syst
     worker, filing, parsed, downloads = selected_worker(system, monkeypatch)
     async def scenario():
         await system.db.filings.create_if_absent(filing)
-        await PackageCheckpoint(system.db.filings, system.db.artifacts).persist(filing,
+        await persist_legacy(system, filing,
             parsed.artifacts(filing, discovered_at=NOW), primary_document_name='Primary.htm', completed_at=NOW)
         summary = await RecoveryService(worker, page_size=1).run_pass()
         assert summary.skipped == 3 and summary.complete == 3 and summary.errors == 0
@@ -417,36 +427,15 @@ def test_recovery_pass_drains_legacy_exclusions_and_keeps_original_snapshot(syst
     run(scenario())
 
 
-def test_primary_routing_waits_while_publication_retains_all_download_slots(system, monkeypatch):
-    worker, filing, parsed, downloads = selected_worker(system, monkeypatch, generic=True)
+def test_publication_waits_for_all_selected_documents(system, monkeypatch):
+    worker, filing, _, downloads = selected_worker(system, monkeypatch, generic=True)
     async def scenario():
         await worker.discovery.discover_with_evidence(COMPANY)
         await worker.enumerate_only(ACCESSION)
-        active, both_publishing, release = 0, asyncio.Event(), asyncio.Event()
-        publish = worker.publisher.publish_artifact_ready
-        async def blocked_publish(event):
-            nonlocal active
-            active += 1
-            if active == 2:
-                both_publishing.set()
-            await release.wait()
-            await publish(event)
-        monkeypatch.setattr(worker.publisher, 'publish_artifact_ready', blocked_publish)
-        jobs = [asyncio.create_task(worker.process_artifact(ACCESSION + '/' + name))
-                for name in ('Primary.htm', 'release.htm')]
-        await asyncio.wait_for(both_publishing.wait(), timeout=5)
-        next_filing = replace(filing, accession_number='0000320193-26-000002',
-            filing_index_url=filing.filing_index_url.replace(ACCESSION, '0000320193-26-000002'))
-        await system.db.filings.create_if_absent(next_filing)
-        requests_before = system.sec.calls.count('index')
-        enumeration = asyncio.create_task(worker.enumerate_only(next_filing.accession_number))
-        try:
-            await asyncio.sleep(.02)
-            assert not enumeration.done()
-            assert system.sec.calls.count('index') == requests_before
-        finally:
-            release.set()
-            enumeration.cancel()
-            await asyncio.gather(enumeration, return_exceptions=True)
-            await asyncio.wait_for(asyncio.gather(*jobs), timeout=5)
+        await worker.process_artifact(ACCESSION + '/Primary.htm')
+        await worker.process_artifact(ACCESSION + '/release.htm')
+        assert not system.messages.events
+        await worker.process_artifact(ACCESSION + '/supplement.pdf')
+        assert len(system.messages.events) == 1
+        assert len(downloads) == 3
     run(scenario())

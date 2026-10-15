@@ -75,6 +75,8 @@ def record(model) -> dict:
         name = "cik" if field.name == "company_cik" else field.name
         if isinstance(value, datetime):
             value = timestamp(value)
+        elif isinstance(value, tuple):
+            value = list(value)
         elif type(value) is date:
             value = value.isoformat()
         elif field.name == "raw_provider_payload":

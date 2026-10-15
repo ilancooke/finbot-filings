@@ -66,7 +66,7 @@ class PackageCheckpoint:
             raise RepositoryConflict("snapshot primary conflicts with checkpoint")
         for child in children:
             # A repeated discovery may carry today's ticker. Children must agree
-            # with the original parent for the unchanged ArtifactReady contract.
+            # with the original parent and the filing notification manifest.
             child = replace(child, ticker=existing.ticker)
             await self.artifacts.create_if_absent(child)
             durable = await self.artifacts.get(child.artifact_id)
@@ -78,4 +78,5 @@ class PackageCheckpoint:
         await self.filings.mark_enumerated(
             filing.accession_number, primary_document_name=primary_document_name,
             artifact_count=len(children), completed_at=completed_at,
+            artifact_ids=tuple(sorted(child.artifact_id for child in children)),
         )

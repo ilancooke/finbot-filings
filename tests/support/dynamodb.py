@@ -29,7 +29,7 @@ CONFIG = DynamoDBConfig("us-east-1", "companies", "calendar", "filings", "artifa
 
 def make_filing(**changes):
     return replace(Filing(accession_number=ACCESSION, company_cik="320193", ticker="AAPL",
-                          form_type="8-K", filed_at=NOW - timedelta(seconds=10), discovered_at=NOW,
+                          form_type="8-K", filed_at=NOW - timedelta(seconds=10), discovered_at=NOW, company_name="Apple",
                           filing_index_url=filing_index_url("320193", ACCESSION)), **changes)
 
 

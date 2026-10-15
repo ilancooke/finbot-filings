@@ -36,7 +36,7 @@ def build_application(stack, environ=None):
     from .ingestion.ingestion_worker import IngestionWorker
     from .ingestion.recovery_service import RecoveryService
     from .storage.s3_artifact_store import S3ArtifactStore
-    from .messaging.sns_publisher import SNSArtifactEventPublisher
+    from .messaging.sns_publisher import SNSFilingEventPublisher
     from .messaging.dead_letter import SQSDeadLetterPublisher
     from .sec.client import SecClient
     from .sec.rate_limiter import SECRateLimiter
@@ -90,8 +90,8 @@ def build_application(stack, environ=None):
     control = WorkControl(workflow)
     discovery = DiscoveryService(sec, sec_execution, filings, artifacts, control, selection=selection)
     downloader = ArtifactDownloader(sec, sec_execution, S3ArtifactStore(s3, storage), max_artifact_bytes=storage.max_artifact_bytes)
-    worker = IngestionWorker(discovery, downloader, SNSArtifactEventPublisher(sns, messaging),
-        SQSDeadLetterPublisher(sqs, messaging), filings, artifacts, control)
+    worker = IngestionWorker(discovery, downloader, SNSFilingEventPublisher(sns, messaging),
+        SQSDeadLetterPublisher(sqs, messaging), filings, artifacts, control, companies=companies)
     if yahoo is not None:
         from .calendar.providers.yahoo import YahooEarningsCalendarProvider
         yahoo_execution = stack.enter_context(BlockingExecution(max_workers=1, name="yahoo"))

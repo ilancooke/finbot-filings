@@ -125,6 +125,35 @@ def test_stopped_fargate_and_no_ingress(templates):
     assert not resources(runtime, "AWS::ApplicationAutoScaling::ScalableTarget")
 
 
+def test_filing_topic_cutover_preserves_old_export_and_moves_only_the_publisher(templates):
+    state, runtime = templates
+    topics = {key: value for key, value in state["Resources"].items() if value["Type"] == "AWS::SNS::Topic"}
+    legacy = state["Outputs"]["ArtifactTopicArn"]["Value"]
+    current = state["Outputs"]["FilingTopicArn"]["Value"]
+    assert topics[current["Ref"]]["Properties"]["TopicName"] == "finbot-example-filing-ready"
+    assert topics[legacy["Ref"]]["Properties"]["TopicName"] == "finbot-example-artifact-ready"
+    assert len(topics) == 2
+    exports = {output["Export"]["Name"]: output["Value"] for output in state["Outputs"].values() if "Export" in output}
+    legacy_import = runtime["Outputs"]["LegacyArtifactTopicArn"]["Value"]
+    assert exports[legacy_import["Fn::ImportValue"]] == legacy
+    # Existing deployments import this exact export; changing/removing it would
+    # block the producer stack before the runtime can switch to the new topic.
+    assert legacy_import["Fn::ImportValue"] == "state:ExportsOutputRefArtifactReady5C43D30340EA3F0E"
+    task = resources(runtime, "AWS::ECS::TaskDefinition")[0]["Properties"]
+    env = {item["Name"]: item["Value"] for item in task["ContainerDefinitions"][0]["Environment"]}
+    assert "ARTIFACT_READY_TOPIC_ARN" not in env
+    topic_import = env["FILING_READY_TOPIC_ARN"]
+    assert exports[topic_import["Fn::ImportValue"]] == current
+    publish_grants = [statement for statement in statements(runtime)
+                      if statement["Effect"] == "Allow" and statement["Action"] == "sns:Publish"]
+    assert len(publish_grants) == 1 and publish_grants[0]["Resource"] == topic_import
+    policy = next(resource["Properties"] for resource in resources(state, "AWS::SNS::TopicPolicy")
+                  if resource["Properties"]["Topics"] == [current])
+    assert any(statement["Effect"] == "Deny"
+               and statement["Condition"]["Bool"]["aws:SecureTransport"] == "false"
+               for statement in policy["PolicyDocument"]["Statement"])
+
+
 def test_yahoo_selection_is_explicit_and_does_not_activate_or_add_resources():
     config = replace(fixture_config(), calendar_provider="yahoo")
     app = App()

@@ -64,13 +64,13 @@ def test_selected_original_bytes_events_and_restart_do_not_reacquire(system, mon
         assert downloads[0][1] == 4 * 1024 * 1024
         parent = await system.db.filings.get_checkpoint(ACCESSION)
         assert (parent.selection_policy, parent.selection_reason, parent.enumerated_artifact_count) == (POLICY_VERSION, 'earnings_6_k', 4)
-        assert len(system.s3.objects) == len(system.messages.events) == 4
+        assert len(system.s3.objects) == 4 and len(system.messages.events) == 1
         assert any('/2026-10-08_' + form.replace('/', '-') + '_' in key for _, key in system.s3.objects)
         assert (FIXTURES / 'asml_primary.html').read_bytes() in [body for body, _ in system.s3.objects.values()]
         restarted = system.worker()
         restarted.discovery.selection = worker.discovery.selection
         await RecoveryService(restarted).run_pass()
-        assert len(downloads) == len(system.messages.events) == 4
+        assert len(downloads) == 4 and len(system.messages.events) == 1
     run(scenario())
 
 

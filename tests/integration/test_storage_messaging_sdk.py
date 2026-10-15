@@ -14,11 +14,11 @@ from finbot_ingestion.aws_config import AWSIOConfig, MessagingConfig, StorageCon
 from finbot_ingestion.aws_execution import AWSExecution
 from finbot_ingestion.domain import Artifact, Filing
 from finbot_ingestion.domain.checkpoints import ArtifactCheckpoint
-from finbot_ingestion.domain.events import ArtifactReady
+from finbot_ingestion.domain.filing_ready import FilingReady
 from finbot_ingestion.domain.identity import artifact_key
 from finbot_ingestion.messaging.dead_letter import SQSDeadLetterPublisher, WorkFailure
 from finbot_ingestion.messaging.publisher import InvalidPublishResponse
-from finbot_ingestion.messaging.sns_publisher import SNSArtifactEventPublisher
+from finbot_ingestion.messaging.sns_publisher import SNSFilingEventPublisher
 from finbot_ingestion.sec.client import DownloadedDocument
 from finbot_ingestion.storage.errors import StorageConflict, StorageLimitError
 from finbot_ingestion.storage.s3_artifact_store import S3ArtifactStore, provenance
@@ -124,16 +124,17 @@ def event():
     from dataclasses import replace
     filing = Filing(accession_number=ACCESSION, company_cik="320193", ticker="AAPL", form_type="8-K",
                     filed_at=NOW, discovered_at=NOW, filing_index_url="https://www.sec.gov/index")
-    return ArtifactReady.from_artifact(filing, replace(ARTIFACT, s3_uri="s3://finbot-artifacts/" + KEY, stored_at=NOW))
+    return FilingReady.from_artifacts(filing, [replace(ARTIFACT, s3_uri="s3://finbot-artifacts/" + KEY,
+        stored_at=NOW, size_bytes=12)], primary_document_name=ARTIFACT.filename, company_name="Apple", ready_at=NOW)
 
 
 def test_sns_plain_json_message_and_acknowledgment():
     with sdk("sns") as (execution, stub):
         stub.add_response("publish", {"MessageId": "message-1"}, {"TopicArn": CONFIG.topic_arn, "Message": event().to_json()})
-        asyncio.run(SNSArtifactEventPublisher(execution, CONFIG).publish_artifact_ready(event()))
+        asyncio.run(SNSFilingEventPublisher(execution, CONFIG).publish_filing_ready(event()))
         stub.add_response("publish", {}, {"TopicArn": CONFIG.topic_arn, "Message": event().to_json()})
         with pytest.raises(InvalidPublishResponse):
-            asyncio.run(SNSArtifactEventPublisher(execution, CONFIG).publish_artifact_ready(event()))
+            asyncio.run(SNSFilingEventPublisher(execution, CONFIG).publish_filing_ready(event()))
 
 
 def test_sqs_versioned_metadata_envelope_and_acknowledgment():

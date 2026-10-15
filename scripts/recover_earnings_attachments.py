@@ -160,6 +160,25 @@ async def inspect(discovery, target, at, *, resuming=False):
             'packages': packages, 'existing': existing, 'additions': additions}
 
 
+def matches_preview(observed, planned):
+    """Allow only the reviewed membership commit when resuming execution."""
+    for accession, original in planned['parents'].items():
+        expected = dict(original['checkpoint'])
+        selected = sorted(accession + '/' + name for name, decision in
+            planned['packages'][accession]['decisions'].items() if decision['outcome'] == 'SELECT')
+        updated = {**expected, 'selected_artifact_ids': selected}
+        if selected != expected.get('selected_artifact_ids'):
+            if expected.get('ready_snapshot_id') and not expected.get('ready_published_at'):
+                return False
+            updated.pop('ready_snapshot_id', None)
+            updated.pop('ready_published_at', None)
+        actual = observed['parents'][accession]['checkpoint']
+        if actual not in (expected, updated):
+            return False
+        observed['parents'][accession]['checkpoint'] = expected
+    return observed == planned
+
+
 async def recover(discovery, target, manifest, *, execute=False, check_stopped):
     """Revalidate a saved preview; conditional creates allow interrupted resumes."""
     def guard():
@@ -170,7 +189,7 @@ async def recover(discovery, target, manifest, *, execute=False, check_stopped):
         planned = json.loads(manifest.read_text())
         at = datetime.fromisoformat(planned['created_at'])
         fresh = await inspect(discovery, target, at, resuming=True)
-        if fresh != planned:
+        if not matches_preview(fresh, planned):
             raise RuntimeError('preview changed; no writes performed')
         guard()
         for addition in fresh['additions']:
@@ -192,10 +211,22 @@ async def recover(discovery, target, manifest, *, execute=False, check_stopped):
                     checkpoint.selection_reason) != (POLICY_VERSION, 'SELECT', addition['reason']):
                 raise RuntimeError(f'{child.artifact_id}: selection checkpoint verification failed')
         guard()
-        if await inspect(discovery, target, at, resuming=True) != planned:
+        if not matches_preview(await inspect(discovery, target, at, resuming=True), planned):
             raise RuntimeError('recovery verification failed; keep ingestion stopped')
+        # Commit the entire reviewed selection before restart so a filing event
+        # cannot publish the earlier manifest while these additions are pending.
+        for accession, parent in fresh['parents'].items():
+            guard()
+            checkpoint = parent['checkpoint']
+            ids = tuple(sorted(accession + '/' + name for name, decision in
+                fresh['packages'][accession]['decisions'].items() if decision['outcome'] == 'SELECT'))
+            await discovery.filings.mark_enumerated(accession,
+                primary_document_name=checkpoint['resolved_primary_document_name'], artifact_count=len(ids),
+                completed_at=datetime.fromisoformat(checkpoint['enumeration_completed_at']), artifact_ids=ids)
+        if not matches_preview(await inspect(discovery, target, at, resuming=True), planned):
+            raise RuntimeError('filing membership verification failed; keep ingestion stopped')
         return {'queued': [a['artifact']['artifact_id'] for a in fresh['additions']],
-                'next': 'Restart ingestion to download and publish queued attachments.'}
+                'next': 'Restart ingestion to download queued attachments and publish complete filing events.'}
     fresh = await inspect(discovery, target, datetime.now(timezone.utc))
     guard()
     with manifest.open('x') as out:
