@@ -3,7 +3,7 @@
   "environment": "prod",
   "prefix": "finbot",
   "github_subject": "repo:ilancooke@8453151/finbot-filings@1341430877:environment:production",
-  "image_digest": "sha256:0350911986434e211a38bc3e149b1d4b63483f1dbbc70b1b55fd1312ad631e64",
+  "image_digest": "sha256:6ffc463c52086421bd4259beb5c97ad0b2b215474727376f0149ee421257efb8",
   "monitoring_enabled": true,
   "calendar_provider": "yahoo",
   "calendar_lookahead_days": 30,
