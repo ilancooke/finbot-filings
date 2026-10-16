@@ -166,8 +166,13 @@ def install():
             body = kwargs["json"]
             day = date.fromisoformat(body["query"]["operands"][2]["operands"][1])
             today = datetime.now(ZoneInfo("America/New_York")).date()
-            rows = [row(day)] if day == today and body["offset"] == 0 else []
-            payload = raw_page(day, body["size"], body["offset"], rows, int(day == today))
+            rows = ([row(day),
+                     row(day, symbol="OTHER", title="Q1 2026 Earnings Announcement"),
+                     row(day, symbol="OTHER", title="Q2 2026 Earnings Announcement")]
+                    if day == today and body["offset"] == 0 else [])
+            total = 2 if day == today else 0
+            payload = raw_page(day, body["size"], body["offset"], rows, total)
+            trace("yahoo_page", company_groups=len({entry[0] for entry in rows}), event_rows=len(rows))
             return SimpleNamespace(status_code=200, content=b"{}", headers={}, json=lambda:payload)
         YahooSession._perform = perform
         original_yahoo_close = YahooPageClient.close

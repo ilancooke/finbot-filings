@@ -51,3 +51,22 @@ class PageSource:
 
     def close(self):
         self.closed = True
+
+
+class GroupedPageSource(PageSource):
+    """Yahoo counts/paginates tickers while returning every event in each group."""
+
+    def page(self, day, size, offset, budget):
+        budget.remaining()
+        budget.attempts += 1
+        budget.pages += 1
+        self.calls.append((day, size, offset))
+        groups = {}
+        for entry in self.days.get(day, []):
+            groups.setdefault(entry[0], []).append(entry)
+        selected = list(groups.values())[offset:offset + size]
+        rows = [entry for group in selected for entry in group]
+        payload = raw_page(day, size, offset, rows, len(groups))
+        if self.mutate:
+            self.mutate(payload, day, size, offset, len(self.calls))
+        return payload

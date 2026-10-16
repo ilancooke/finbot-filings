@@ -5,6 +5,7 @@
   "github_subject": "repo:ilancooke@8453151/finbot-filings@1341430877:environment:production",
   "image_digest": "sha256:6ffc463c52086421bd4259beb5c97ad0b2b215474727376f0149ee421257efb8",
   "monitoring_enabled": true,
+  "discovery_latency_alarm_enabled": false,
   "calendar_provider": "yahoo",
   "calendar_lookahead_days": 30,
   "calendar_full_refresh_seconds": 86400,

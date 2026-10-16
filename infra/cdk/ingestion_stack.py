@@ -122,11 +122,13 @@ class IngestionStack(Stack):
             "TerminalFailures": (metric("TerminalFailures", "Sum"), 1, cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD, cw.TreatMissingData.NOT_BREACHING),
             "SecErrors": (metric("SecRequestErrors", "Sum"), config.sec_error_threshold, cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD, cw.TreatMissingData.NOT_BREACHING),
             "PublishErrors": (metric("ArtifactPublishFailures", "Sum"), config.publish_error_threshold, cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD, cw.TreatMissingData.NOT_BREACHING),
-            "DiscoveryLatency": (metric("DiscoveryLatencyMs"), config.discovery_latency_ms, cw.ComparisonOperator.GREATER_THAN_THRESHOLD, cw.TreatMissingData.NOT_BREACHING),
             "FailedWorkVisible": (state.failed_work.metric_approximate_number_of_messages_visible(period=Duration.minutes(1)), 1, cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD, cw.TreatMissingData.NOT_BREACHING),
             "FailedWorkInflight": (state.failed_work.metric_approximate_number_of_messages_not_visible(period=Duration.minutes(1)), 1, cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD, cw.TreatMissingData.NOT_BREACHING),
             "FailedWorkAge": (state.failed_work.metric_approximate_age_of_oldest_message(period=Duration.minutes(1)), config.failed_work_age_seconds, cw.ComparisonOperator.GREATER_THAN_THRESHOLD, cw.TreatMissingData.NOT_BREACHING),
         }
+        if config.discovery_latency_alarm_enabled:
+            alarm_specs["DiscoveryLatency"] = (metric("DiscoveryLatencyMs"), config.discovery_latency_ms,
+                cw.ComparisonOperator.GREATER_THAN_THRESHOLD, cw.TreatMissingData.NOT_BREACHING)
         alarm_arns = []
         for name, (m, threshold, comparison, missing) in alarm_specs.items():
             alarm = cw.Alarm(self, name, metric=m, threshold=threshold, comparison_operator=comparison,

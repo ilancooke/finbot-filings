@@ -54,7 +54,7 @@ class YahooObservation:
 
 @dataclass(frozen=True, slots=True)
 class YahooPage:
-    total: int
+    total: int  # Number of ticker groups, not expanded event rows.
     schema: tuple[tuple[str, str], ...]
     observations: tuple[YahooObservation, ...]
 
@@ -107,8 +107,6 @@ def parse_page(payload, *, day, size, offset, zone):
         names = [item[0] for item in schema]
         if len(names) != len(set(names)) or any(dict(schema).get(name) != type_ for name, type_ in REQUIRED_TYPES.items()):
             raise ValueError("missing/conflicting columns")
-        if len(rows) > size:
-            raise ValueError("overfull page")
         observations = []
         start = datetime.combine(day, time.min, ZoneInfo(zone))
         end = datetime.combine(day + timedelta(days=1), time.min, ZoneInfo(zone))
@@ -123,6 +121,10 @@ def parse_page(payload, *, day, size, offset, zone):
             if not start <= at <= end:
                 raise ValueError("row outside source slice")
             observations.append(YahooObservation(symbol, title, at, timing))
+        # SP_EARNINGS paginates ticker groups; one ticker can expand into
+        # several event rows. All rows still undergo validation above.
+        if len({observation.ticker for observation in observations}) > size:
+            raise ValueError("overfull company page")
         return YahooPage(total, schema, tuple(observations))
     except (KeyError, ValueError, TypeError, AttributeError, OverflowError) as exc:
         raise IncompleteCalendarSnapshot("invalid Yahoo page or scope evidence") from None

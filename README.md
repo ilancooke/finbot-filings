@@ -377,6 +377,9 @@ scope or insufficient scheduling coverage triggers a refresh.
 
 The pinned yfinance transport collects raw day slices, checks query/schema/totals,
 requires terminal pagination evidence and repeats each slice for consistency.
+Yahoo page sizes, offsets and totals count distinct ticker groups; one ticker may
+return several event rows. Every event is retained and validated, and the raw-row
+budget still counts all returned events. Repeated ticker groups across pages fail.
 It uses its own single-worker executor, pacing and finite HTTP/row/page/deadline
 budgets. This establishes validated observed collection, not independently verified
 Yahoo coverage of every company. Malformed, capped or inconsistent collections
@@ -454,7 +457,10 @@ Sanitized JSON logs go to stderr; bounded CloudWatch EMF records go to stdout wi
 Service/Environment dimensions; `SecRequests` also has company and call-type
 breakdowns described below. Local health separates liveness from calendar
 age/scope/provider configuration. CloudWatch collection, DLQ-depth monitoring and
-alarms are defined by CDK and require manual infrastructure deployment.
+alarms are defined by CDK and require manual infrastructure deployment. Discovery latency
+remains a metric; its alarm is omitted by default through
+`discovery_latency_alarm_enabled=false` in CDK configuration. Enable it explicitly
+when the service has a production latency commitment. Other alarms are unaffected.
 CDK can provision an alarm SNS topic and email subscription using `alarm_email`
 in ignored `infra/cdk/config.local.json`, or route to an existing `alarm_action_arn`.
 Email subscriptions require recipient confirmation; `monitoring_enabled` controls

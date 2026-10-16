@@ -40,6 +40,7 @@ class YahooEarningsCalendarProvider:
     def _enumerate(self, day, budget):
         total = schema = None
         observations = {}
+        tickers = set()
         offset = 0
         for _ in range(self.config.max_pages_per_slice):
             budget.remaining()
@@ -52,17 +53,21 @@ class YahooEarningsCalendarProvider:
                 total, schema = page.total, page.schema
             if page.total != total or page.schema != schema:
                 raise IncompleteCalendarSnapshot("Yahoo total/schema changed during enumeration")
-            if len(observations) == total:
+            page_tickers = {observation.ticker for observation in page.observations}
+            if len(tickers) == total:
                 if page.observations:
                     raise IncompleteCalendarSnapshot("Yahoo terminal page contains unexpected rows")
                 return observations
-            if not page.observations or len(page.observations) != min(self.config.page_size, total - offset):
+            if not page_tickers or len(page_tickers) != min(self.config.page_size, total - offset):
                 raise IncompleteCalendarSnapshot("Yahoo page cannot account for reported total")
+            if tickers & page_tickers:
+                raise IncompleteCalendarSnapshot("Yahoo repeated company group across pages")
             for observation in page.observations:
                 if observation.key in observations:
                     raise IncompleteCalendarSnapshot("Yahoo duplicate/conflicting event across pages")
                 observations[observation.key] = observation
-            offset += len(page.observations)
+            tickers.update(page_tickers)
+            offset += len(page_tickers)
         raise IncompleteCalendarSnapshot("Yahoo slice page bound exhausted")
 
     def _collect(self, start, end, companies):

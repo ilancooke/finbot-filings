@@ -179,11 +179,31 @@ def test_oidc_and_liveness_alarms(templates):
     assert oidc["Condition"]["StringEquals"]["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
     assert oidc["Condition"]["StringEquals"]["token.actions.githubusercontent.com:sub"] == "repo:EXAMPLE/finbot-filings:environment:production"
     alarms = [a["Properties"] for a in resources(runtime, "AWS::CloudWatch::Alarm")]
-    assert len(alarms) == 11 and not any(a["ActionsEnabled"] for a in alarms)
+    assert len(alarms) == 10 and not any(a["ActionsEnabled"] for a in alarms)
+    assert not any(a.get("MetricName") == "DiscoveryLatencyMs" for a in alarms)
     liveness = next(a for a in alarms if a.get("MetricName") == "RuntimeHealthy")
     assert liveness["TreatMissingData"] == "breaching"
     assert {d["Name"]: d["Value"] for d in liveness["Dimensions"]} == {"Service": "finbot-ingestion", "Environment": "example"}
     assert any(a.get("MetricName") == "CalendarStale" for a in alarms)
+
+
+def test_discovery_latency_alarm_is_opt_in_and_preserves_other_resources(templates):
+    config = replace(fixture_config(), discovery_latency_alarm_enabled=True)
+    app = App()
+    env = Environment(account=config.account, region=config.region)
+    state = StateStack(app, "state", config=config, env=env)
+    stack = IngestionStack(app, "runtime", config=config, state=state, env=env)
+    app.synth()
+    template = Template.from_stack(stack).to_json()
+    _, baseline = templates
+    added = set(template["Resources"]) - set(baseline["Resources"])
+    assert len(added) == 1
+    alarm = template["Resources"][added.pop()]
+    assert alarm["Type"] == "AWS::CloudWatch::Alarm"
+    assert alarm["Properties"]["MetricName"] == "DiscoveryLatencyMs"
+    assert alarm["Properties"]["Threshold"] == config.discovery_latency_ms
+    for key, resource in baseline["Resources"].items():
+        assert template["Resources"][key] == resource
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -207,7 +227,7 @@ def test_managed_email_alarm_routing_preserves_runtime(templates, enabled):
     assert subscription["Protocol"] == "email"
     assert subscription["Endpoint"] == config.alarm_email
     alarms = resources(template, "AWS::CloudWatch::Alarm")
-    assert len(alarms) == 11
+    assert len(alarms) == 10
     assert all(a["Properties"]["ActionsEnabled"] == enabled for a in alarms)
     assert all(len(a["Properties"]["AlarmActions"]) == 1 for a in alarms)
     policy = resources(template, "AWS::SNS::TopicPolicy")[0]["Properties"]["PolicyDocument"]["Statement"]
@@ -225,6 +245,7 @@ def test_managed_email_alarm_routing_preserves_runtime(templates, enabled):
 @pytest.mark.parametrize("changes", [{"github_subject": "repo:org/repo:*"}, {"image_digest": "latest"},
     {"account": "123"}, {"region": "invalid"}, {"cpu": 1024, "memory_mib": 512},
     {"monitoring_enabled": "false"}, {"discovery_latency_ms": float("nan")},
+    {"discovery_latency_alarm_enabled": "false"},
     {"publish_error_threshold": 0}, {"github_oidc_provider_arn": "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com"},
     {"alarm_email": ""}, {"alarm_email": "operator"}, {"alarm_email": "person@example.invalid\n"},
     {"alarm_email": "operator@example.invalid", "alarm_action_arn": "arn:aws:sns:us-east-1:123456789012:existing"},

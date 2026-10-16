@@ -489,7 +489,13 @@ Pinned `yfinance==1.7.0` / `curl_cffi==0.16.3` use an owned private `YfData.post
 seam; public DataFrames discard completeness evidence. Upgrade review must check
 this boundary. Raw day slices validate query/schema/offset/total/count, terminal
 empty pages and repeated slice consistency under aggregate HTTP/row/page/deadline
-bounds. Each slice is enumerated twice; instability permits at most one bounded
+bounds. Page sizes, offsets and totals use distinct ticker groups, while every
+expanded event row is retained, validated and charged to the raw-row budget.
+Require exactly the expected number of ticker groups per page and total; advance
+offsets by groups received and reject a ticker repeated on another page, even with
+a different event. A terminal page must be empty. Compare the complete event maps
+across verification passes, not just ticker membership. Curated-company event
+ambiguity remains a failure. See ADR 022. Each slice is enumerated twice; instability permits at most one bounded
 restart. Request/auth/redirect/retry budgets are independent of SEC. New York
 midnight bounds handle DST/adjacent overlap; D through D+29 uses upper query date
 D+30. Curated ticker mapping must be unambiguous; BMO/AMC normalize to coarse
@@ -543,7 +549,10 @@ buffers cap samples/names and report drops. Operational samples can repeat durin
 repair and are not an exactly-once ledger. Discovery latency measures SEC acceptance
 to first discovery; download latency is artifact discovery to storage; ingestion
 latency is acceptance to storage. None measures public availability or consumer
-completion. Atomic local heartbeat health is separate from calendar scope/age and
+completion. Discovery latency remains observable as a metric; its CloudWatch
+alarm is disabled by default via `discovery_latency_alarm_enabled=false` until
+production latency commitments justify explicit activation. Other alarms remain
+independent. See ADR 021. Atomic local heartbeat health is separate from calendar scope/age and
 provider readiness; no inbound health API is exposed.
 
 CDK owns retained state and a stopped-by-default ARM64 runtime. GitHub owns tested

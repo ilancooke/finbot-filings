@@ -124,6 +124,8 @@ def test_installed_yahoo_factory_refreshes_with_private_caches_and_stops(docker)
             return health if health and health["provider_configured"] and not health["calendar_stale"] else None
         health = until(ready, docker, name)
         assert health["calendar_coverage_start"] and health["calendar_coverage_end"]
+        assert any(entry["kind"] == "yahoo_page" and entry["company_groups"] == 2
+                   and entry["event_rows"] == 3 for entry in trace(docker, name))
         assert docker("exec", name, "stat", "-c", "%a:%u", "/tmp/finbot-yahoo").stdout.strip() == "700:10001"
         requests = sum(t["kind"] == "yahoo" for t in trace(docker, name))
         assert requests >= 62  # every day verified, plus nonempty terminal pages

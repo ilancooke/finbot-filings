@@ -42,15 +42,13 @@ and coordination with live ingestion. Do not reset/widen the live cutoff as a
 substitute. Current recent-response coverage does not promise recovery of long
 outage gaps.
 
-## OPS-001 — Historical versus live discovery latency
+## OPS-001 — Historical versus live discovery latency (closed)
 
-Initial catch-up triggered the acceptance-to-discovery alarm for older filings;
-one verified example was accepted August 7 and discovered at October 10 startup.
-Assess whether current fixed-cutoff behavior resolves the operational problem or
-needs separate alarm applicability/metrics. Preserve original timestamps rather
-than relabeling old work as timely. Close after review or deliver a tested metric/
-alarm change. Alarm OK does not prove terminal work repaired; sparse counter
-evaluation and failed-work queue state have different meanings.
+Closed by ADR 021 on October 15, 2026 Pacific: retain `DiscoveryLatencyMs` and
+original timestamps, but omit the latency alarm during research operation.
+The specifically requested production alarm was removed without a service restart;
+CDK enables future alarm creation only through explicit opt-in. Revisit alarm
+applicability and thresholds when there is a customer latency commitment.
 
 ## OPS-002 — Observe live selection and daily calendar operation
 
@@ -64,6 +62,21 @@ Verify ongoing daily Yahoo scope/freshness, coverage gaps, provider
 access arrangements, recovery reliability and sustained memory use. Local/cloud
 collection success is not complete all-company coverage or long-term reliability.
 Close observations on recorded evidence without reopening the completed migration.
+
+The October 16 UTC alarm investigation confirmed no successful Yahoo refresh since
+October 13, and repeated `IncompleteCalendarSnapshot` failures from October 14,
+before the universe expansion. The stale alarm crossed the 48-hour age bound; the
+current scope alarm followed the saved 50-company snapshot's mismatch with 72
+companies. Follow-up live inspection showed that Yahoo's pagination counts distinct tickers,
+while a company may expand into multiple event rows: 192 companies produced 194
+events. The adapter currently compares event-row counts against company counts.
+The local pagination fix counts tickers and preserves all events, retaining
+bounded collection, terminal-page evidence, verification passes and curated-company
+ambiguity safeguards (ADR 022). A read-only 30-day collection check
+completed for all 72 companies with the normal bounds (45 observed companies;
+27 without observations in that window). Production delivery remains pending.
+Verify a complete refresh and its durable 72-company scope/freshness; do not clear the alarms by overwriting health state.
+See the dated investigation in DEPLOYMENT for evidence and limits.
 
 ## OPS-003 — Accepted image finding
 

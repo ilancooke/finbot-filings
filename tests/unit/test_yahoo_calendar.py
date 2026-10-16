@@ -17,7 +17,7 @@ from finbot_ingestion.config import ConfigurationError
 from finbot_ingestion.domain import Company
 from finbot_ingestion.execution import BlockingExecution
 
-from tests.support.yahoo_fakes import PageSource, raw_page, row
+from tests.support.yahoo_fakes import GroupedPageSource, PageSource, raw_page, row
 
 
 DAY = date(2026, 10, 13)
@@ -93,6 +93,72 @@ def test_multipage_exact_and_short_terminal_evidence(count, no_backoff):
     assert result.complete and result.events == ()
     expected_offsets = list(range(0, count, 2)) + [count]
     assert [c[2] for c in source.calls] == expected_offsets * 2
+
+
+@pytest.mark.parametrize("page_size", [1, 2, 3, 100])
+def test_pagination_counts_companies_and_preserves_every_event(page_size, no_backoff):
+    source_rows = [row(DAY, symbol="OTHER", title="Q1 2026 Earnings Announcement"),
+                  row(DAY, symbol="OTHER", title="Q2 2026 Earnings Announcement"),
+                  row(DAY, symbol="AAPL"), row(DAY, symbol="LAST")]
+    source = GroupedPageSource({DAY: source_rows})
+    config = YahooConfig(page_size=page_size)
+    async def scenario():
+        with BlockingExecution(name="yahoo-test") as execution:
+            provider = YahooEarningsCalendarProvider(config, execution, client=source)
+            try:
+                budget = FetchBudget(config, provider.stop)
+                collected = await execution.call(provider._enumerate, day=DAY, budget=budget)
+                assert len(collected) == budget.rows == 4
+                assert {observation.title for observation in collected.values()
+                        if observation.ticker == "OTHER"} == {
+                            "Q1 2026 Earnings Announcement", "Q2 2026 Earnings Announcement"}
+            finally:
+                await provider.close()
+    asyncio.run(scenario())
+    assert [call[2] for call in source.calls] == list(range(0, 3, page_size)) + [3]
+    result = fetch(GroupedPageSource({DAY: source_rows}), config=config)
+    assert result.complete and len(result.events) == 1 and result.events[0].ticker == "AAPL"
+
+
+def test_expanded_page_preserves_curated_company_ambiguity_rejection(no_backoff):
+    source = GroupedPageSource({DAY: [row(DAY), row(DAY, title="Q4 2026 Earnings Announcement")]})
+    with pytest.raises(IncompleteCalendarSnapshot, match="conflicting announcements"):
+        fetch(source, config=YahooConfig(page_size=1))
+
+
+def test_live_192_company_194_event_shape_uses_company_offsets(no_backoff):
+    rows = [row(DAY, symbol="AAPL" if n == 77 else f"OTHER{n}") for n in range(192)]
+    rows += [row(DAY, symbol=symbol, title="Q4 2026 Earnings Announcement")
+             for symbol in ("OTHER0", "OTHER191")]
+    page_lengths = []
+    def observe(payload, day, size, offset, call):
+        page_lengths.append(len(payload["finance"]["result"][0]["documents"][0]["rows"]))
+    source = GroupedPageSource({DAY: rows}, observe)
+    result = fetch(source)
+    assert result.complete and len(result.events) == 1 and result.events[0].ticker == "AAPL"
+    assert [call[2] for call in source.calls] == [0, 100, 192] * 2
+    assert page_lengths == [101, 93, 0] * 2
+
+
+@pytest.mark.parametrize("fault", ["repeat_ticker", "short_groups", "extra_terminal", "changed_event", "row_budget"])
+def test_grouped_pagination_does_not_weaken_completeness_checks(fault, no_backoff):
+    rows = [row(DAY, symbol="OTHER", title="Q1 2026 Earnings Announcement"),
+            row(DAY, symbol="OTHER", title="Q2 2026 Earnings Announcement"),
+            row(DAY, symbol="AAPL")]
+    def mutate(payload, day, size, offset, call):
+        result = payload["finance"]["result"][0]
+        entries = result["documents"][0]["rows"]
+        if fault == "repeat_ticker" and offset == 1:
+            entries[:] = [row(DAY, symbol="OTHER", title="Q4 2026 Earnings Announcement")]
+        if fault == "short_groups" and offset == 0:
+            result["total"] = 3
+        if fault == "extra_terminal" and offset == 2:
+            entries[:] = [row(DAY, symbol="EXTRA")]
+        if fault == "changed_event" and call % 6 == 4:
+            entries[0][2] = "Changed announcement"
+    config = YahooConfig(page_size=1, max_raw_rows=2 if fault == "row_budget" else 30000)
+    with pytest.raises(IncompleteCalendarSnapshot):
+        fetch(GroupedPageSource({DAY: rows}, mutate), config=config)
 
 
 @pytest.mark.parametrize("fault", ["missing_schema", "bad_type", "bad_criteria", "wrong_region", "wrong_offset",

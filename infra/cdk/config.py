@@ -27,6 +27,7 @@ class InfraConfig:
     sec_error_threshold: int = 10
     publish_error_threshold: int = 3
     discovery_latency_ms: float = 60000
+    discovery_latency_alarm_enabled: bool = False
     failed_work_age_seconds: float = 300
     calendar_provider: str = "placeholder"
     calendar_lookahead_days: int = 30
@@ -72,6 +73,8 @@ class InfraConfig:
             raise ValueError("image must be a resolved SHA256 digest")
         if type(self.monitoring_enabled) is not bool:
             raise ValueError("monitoring_enabled must be boolean")
+        if type(self.discovery_latency_alarm_enabled) is not bool:
+            raise ValueError("discovery_latency_alarm_enabled must be boolean")
         if self.alarm_email is not None and (not isinstance(self.alarm_email, str) or
                 not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", self.alarm_email)):
             raise ValueError("alarm_email must be an email address")

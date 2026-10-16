@@ -192,7 +192,8 @@ schema/policy checks in [infra/validation](../infra/validation/README.md).
 | `alarm_email`, `alarm_action_arn` | Mutually exclusive managed email/existing topic |
 | `monitoring_enabled` | Notification actions; default false, independent of ingestion |
 | `sec_error_threshold`, `publish_error_threshold` | Initially 10 / 3 per minute |
-| `discovery_latency_ms`, `failed_work_age_seconds` | Initially 60000 / 300 |
+| `discovery_latency_alarm_enabled` | Default false; explicitly opt in when latency becomes an operational commitment |
+| `discovery_latency_ms`, `failed_work_age_seconds` | Initially 60000 / 300; latency threshold applies only when its alarm is enabled |
 
 Read the actual GitHub OIDC subject before configuring trust:
 
@@ -539,17 +540,39 @@ Normal missing-heartbeat evaluation restores ALARM; verify successful SNS action
 history/email. This changes temporary alarm state, not configuration/data/ECS count.
 The managed alarm has only SNS ALARM action, no compute/scaling action.
 
-Eleven alarms use `Finbot/Ingestion`, Service=`finbot-ingestion`, Environment from
+Ten default alarms use `Finbot/Ingestion`, Service=`finbot-ingestion`, Environment from
 config, plus native failed-work SQS metrics. Liveness treats three missing/unhealthy
 one-minute periods as breaching. Calendar scope/stale/provider checks do not require
 an age sample. Failed-work counts/age, SEC/publication errors, terminal transitions
-and acceptance-to-discovery latency surface issues. Non-liveness sparse missing
+surface issues. Acceptance-to-discovery latency remains a metric; its alarm is
+opt-in through `discovery_latency_alarm_enabled=true`. Non-liveness sparse missing
 data is nonbreaching. Planned stops can breach liveness; evaluation continues stopped.
 
 TerminalFailures emits on new transitions, not continuous zeros. Sparse evaluation
 may retain ALARM longer than nominal window; OK does not mean failures repaired or
 queue emptied. Historical catch-up can inflate acceptance latency. No default
 RunningTaskCount, Container Insights or metrics sidecar is required.
+
+### Discovery latency in research deployments
+
+Keep `discovery_latency_alarm_enabled=false` in tracked production configuration
+until discovery latency becomes an operational commitment. This omits the alarm
+entirely: no email actions and no ALARM entry in CloudWatch. Disabling actions
+alone does not meet that requirement. `DiscoveryLatencyMs` emission and historical
+metric data are unchanged; `monitoring_enabled` continues to govern the other
+alarms' notification actions. Re-enabling the latency alarm requires an explicit
+configuration change and reviewed CDK deployment.
+
+On `2026-10-16T01:13:55Z` (October 15 Pacific), the operator-requested discovery
+latency alarm was deleted directly and verified absent; the metric retained data
+and the two calendar alarms were unchanged. This scoped operation did not deploy
+CDK, change ECS desired count, restart ingestion, or alter company/calendar data.
+The deployed CloudFormation stack still records the removed alarm until its next
+normal infrastructure reconciliation. Use the updated configuration on that
+reviewed deployment so the omitted resource is removed from the stack rather than
+recreated. Application delivery does not deploy this CDK change. Alarm configuration
+backup and removal verification are saved outside Git in
+`/private/tmp/finbot-discovery-latency-alarm-{before,removed}-20261016.json`.
 
 ## Failed-work investigation
 
@@ -570,6 +593,69 @@ Selection logs use `operation=acquisition_selection`,
 `unresolved_items`, `conflicting_items`, `unresolved_exhibit_role` and
 `possible_image_only_content` need review; they are not terminal download failures.
 Clear selected documents can proceed with unresolved attachments omitted.
+
+## Calendar alarm investigation (2026-10-16 UTC)
+
+The last successful full Yahoo refresh completed `2026-10-13T14:48:45.962504Z`
+for 50 companies, with 45 observed events and date coverage through November 11.
+CloudWatch shows repeated `IncompleteCalendarSnapshot` refresh failures from
+`2026-10-14T14:48:50Z`, before the October 15 universe expansion. Failed collection
+preserves the prior expectations and successful freshness checkpoint.
+
+`CalendarStale` transitioned to ALARM at `2026-10-15T14:49:44Z`, after the last
+success reached the configured 172800-second (48-hour) age limit. This is calendar
+collection age, not expiry of the stored events' dates. `CalendarScope` has one
+recorded transition in the inspected four-day history: OK to ALARM at
+`2026-10-16T00:28:04Z`, after the expansion to 72. The current successful snapshot
+still covers only 50 CIKs, so its company scope no longer matches. The underlying
+refresh failure predates the expansion; the current scope mismatch follows it.
+
+A read-only local reproduction with the production Yahoo adapter rejected the
+October 15 first page: requested size 100, reported total 192, but 101 event rows
+returned. Follow-up inspection resolved the apparent inconsistency: that first
+page contains exactly 100 distinct tickers, and offset 100 contains 92 distinct
+tickers with 93 event rows. Offset 200 is empty. Across the pages there are 192
+distinct tickers and 194 distinct events. PLLMF and PLLMD each carry two quarterly
+announcements. This demonstrates that the observed endpoint paginates company
+groups while expanding multiple events into rows; the current adapter incorrectly
+uses event-row counts for page size, total and offset accounting.
+
+The fix is to validate/count distinct tickers for pagination, advance offsets by
+the company count, and retain every event row for event validation and repeated-pass
+comparison. Keep terminal-empty evidence, stable totals/schema, request/row/deadline
+bounds, cross-page group checks and same-CIK/date ambiguity rejection. Multiple
+events for a company in the curated universe remain ambiguous; unrelated companies
+with multiple events must not prevent a valid global page from being enumerated.
+The adapter fix is implemented locally with regression and installed-container
+coverage; production deployment remains pending. Cloud logs retain only the
+exception type; this is a live reproduction using the production adapter rather
+than a saved raw cloud response.
+
+Local validation with the corrected adapter completed a read-only 30-day check
+for all 72 reviewed companies (`2026-10-15` through `2026-11-13`) in 223 seconds,
+using the existing 300-request/600-second/30000-row bounds. Yahoo supplied 45
+observations for 45 companies; the report explicitly lists 27 companies without
+observations. This verifies consistent collection for the requested scope, not
+independent provider coverage of every company. The report is
+`/private/tmp/finbot-yahoo-grouped-pagination-72-20261016.json`. No AWS/SEC requests
+or durable calendar writes were made by this diagnostic.
+
+The calendar alarms remain enabled. A complete validated refresh for all 72 CIKs
+is needed to repair freshness and scope. The fix uses normal application delivery;
+no CDK, environment, table schema, universe, or checkpoint reset is needed. After
+activation, verify a new successful calendar checkpoint covering all 72 companies
+and the expected dates, then confirm both alarms return to OK through normal
+metric evaluation. A local read-only check does not update those checkpoints. Existing calendar observations and SEC
+polling/recovery remain intact. New companies without calendar observations rely
+on safety polling. Do not fabricate a success checkpoint or force alarms to OK.
+See OPS-002 for follow-up.
+
+Alarm histories and aggregated log evidence are saved outside Git at
+`/private/tmp/finbot-calendar-alarm-investigation-20261016.json`; bounded public
+pagination summaries are under
+`/private/tmp/finbot-yahoo-pagination-evidence-20261016.json` and
+`/private/tmp/finbot-yahoo-pagination-union-20261016.json`. No raw Yahoo
+payloads, cookies or credentials are retained in these reports.
 
 ## Last recorded verification
 

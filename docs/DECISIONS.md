@@ -426,3 +426,47 @@ retirement. The state/runtime CDK deployment and baseline handoff are required
 before activating the compatible application image; see DEPLOYMENT.
 
 No resources were deployed or deleted by implementing this local change.
+
+
+<a id="adr-021"></a>
+## ADR 021 — Keep discovery latency informational during research operation
+
+**Accepted 2026-10-15 Pacific.** Discovery latency remains a useful metric, but the
+current research service has no customer latency commitment. Omit its CloudWatch
+alarm by default with `discovery_latency_alarm_enabled=false`; disabling email
+actions alone would still leave an unwanted red alarm. Keep `DiscoveryLatencyMs`
+emission, original acceptance/discovery timestamps and historical data unchanged.
+Other operational alarms and their notification configuration remain in force.
+
+The specifically requested production latency alarm was removed directly without
+restarting ingestion. CDK now makes that alarm opt-in; its next normal reviewed
+infrastructure deployment reconciles the removed resource in CloudFormation.
+Revisit and explicitly enable it when the service has a production latency target;
+review whether the threshold and acceptance-based measurement fit that commitment.
+
+
+<a id="adr-022"></a>
+## ADR 022 — Count Yahoo ticker groups separately from calendar event rows
+
+**Implemented locally; production activation pending.** Refines ADR 009's raw-page
+completeness validation. Live October 15 responses reported 192 companies and
+returned 194 distinct events: two non-curated tickers each had two quarterly
+announcements. The first page held 100 tickers/101 events; offset 100 held 92
+tickers/93 events, followed by an empty page. Event counts are not pagination
+counts for this endpoint.
+
+Validate requested page size, stable total and offsets using distinct normalized
+tickers. Preserve and validate every expanded event row, reject repeated ticker
+groups across pages and duplicate/conflicting events, require terminal-empty
+response evidence, and compare all events across the two verification passes.
+Continue charging every event to the bounded raw-row budget. Keep query/date/
+schema evidence, request/page/deadline limits, bounded restart and curated-company
+same-date ambiguity checks. This is a counting correction, not acceptance of
+unexplained missing/extra companies or an assumption that Yahoo has complete
+company coverage.
+
+Use normal application delivery without infrastructure, schema, cutoff or universe
+changes. Failed refreshes keep the prior expectations/freshness until a complete
+collection is applied. Do not rewrite health checkpoints or force alarms to OK.
+Revisit the ticker-group assumption if provider evidence changes; unknown or
+inconsistent layouts must continue to fail explicitly.
