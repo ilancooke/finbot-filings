@@ -1,10 +1,16 @@
-# Initial production universe
+# Production universe
 
 On 2026-10-09, the user selected these 50 distinct ticker symbols for the initial
 production universe. Preserve the supplied order. This supersedes the unresolved
 universe choice; approximately 500 companies remains a v0 capacity target.
 
-## Selected symbols
+The current reviewed universe contains **72 companies** in one consolidated
+[`infra/seed/companies.prod.json`](../infra/seed/companies.prod.json) file. It lists
+the original 50 first, followed by the 22 additions below, with no duplicate CIKs
+or tickers. DynamoDB remains the running service's source of enabled companies;
+editing this file alone does not update production.
+
+## Initial selected symbols
 
 ```text
 DAL
@@ -132,14 +138,34 @@ before applying the seed; no ticker substitutions or inferred aliases were used.
 ## Reviewed seed and maintenance
 
 [`infra/seed/companies.prod.json`](../infra/seed/companies.prod.json) is the
-create-only DynamoDB transaction for these 50 enabled companies, in the selected
-order, targeting account `559007813222`, `us-east-1`, `finbot-prod-companies`.
+consolidated create-only DynamoDB transaction for all 72 reviewed companies,
+targeting account `559007813222`, `us-east-1`, `finbot-prod-companies`.
 Each item contains repository schema version and enabled-index marker; every Put
 requires `attribute_not_exists(cik)`. This input cannot overwrite an existing CIK.
-Keep the initial seed unchanged once applied; later universe changes need separate
-reviewed inputs. The runtime reads the Companies table, not this document/seed.
+The original 50 and later 22 were already applied in separate transactions; their
+local JSON inputs are now consolidated. Use the additive loader after appending
+reviewed new records to this single file:
 
-On 2026-10-09 local time the seed was applied and strong base-table verification
+```bash
+.venv/bin/python scripts/load_companies.py --profile default
+```
+
+It inserts missing CIKs and skips existing records with a successful exit, so the
+file can be loaded repeatedly. Existing names, symbols, enabled states and other
+attributes remain unchanged; mismatches are reported. Removing records from the
+file does not disable or delete them in DynamoDB. The loader validates all input
+before AWS access, checks the account from the table ARN, and conditionally creates
+each missing row. Identical duplicates collapse; conflicting duplicates reject
+the input. A failed/interrupted partial load can resume with the same command.
+`--dry-run` reports missing/existing records without writes.
+
+The JSON retains its create-only transaction format for compatibility. Submitting
+it directly to `aws dynamodb transact-write-items` still fails atomically if any
+CIK exists; routine additions use the loader instead. Its top-level transaction
+token is ignored by the loader. The runtime reads the Companies table, not this
+document/seed. See [operator details](DEPLOYMENT.md#company-universe).
+
+On 2026-10-09 local time the original 50-company seed was applied and strong base-table verification
 matched all 50 records, with no missing, extra or mismatched attributes. The enabled
 index subsequently returned 50 records. Initial seeding is complete; it is not a
 recurring readiness check. See [deployment procedures](DEPLOYMENT.md#company-universe)
@@ -147,6 +173,84 @@ for initial setup and [dated verification](DEPLOYMENT.md#last-recorded-verificat
 for service delivery evidence.
 
 The first ordered `text` block is read by `tests/unit/test_production_seed.py`
-to verify the seed against the independently selected ticker list. Preserve its
-order/format when maintaining this document. The mapping is a reviewed initial
-snapshot, not a live registry or historical ticker mapping.
+to verify the original 50 entries in the consolidated seed against the independently
+selected ticker list. Preserve its order/format when maintaining this document.
+The mapping is a reviewed initial snapshot, not a live registry or historical
+ticker mapping.
+
+## October 15, 2026 additions
+
+The user requested 23 symbols on October 15 (America/Los_Angeles). `META` was
+already enabled and is retained once. The following 22 new companies extend the
+reviewed universe to **72 enabled companies**. The original ordered 50-company
+list is preserved as the first 50 entries in the consolidated seed.
+
+| Ticker | CIK | SEC registrant name | Exchange |
+| --- | --- | --- | --- |
+| NFLX | `0001065280` | NETFLIX INC | Nasdaq |
+| RTX | `0000101829` | RTX Corp | NYSE |
+| MMM | `0000066740` | 3M CO | NYSE |
+| COF | `0000927628` | CAPITAL ONE FINANCIAL CORP | NYSE |
+| GM | `0001467858` | General Motors Co | NYSE |
+| NOC | `0001133421` | NORTHROP GRUMMAN CORP /DE/ | NYSE |
+| UAL | `0000100517` | United Airlines Holdings, Inc. | Nasdaq |
+| HAL | `0000045012` | HALLIBURTON CO | NYSE |
+| TSLA | `0001318605` | Tesla, Inc. | Nasdaq |
+| LRCX | `0000707549` | LAM RESEARCH CORP | Nasdaq |
+| PM | `0001413329` | Philip Morris International Inc. | NYSE |
+| SAP | `0001000184` | SAP SE | NYSE |
+| IBM | `0000051143` | INTERNATIONAL BUSINESS MACHINES CORP | NYSE |
+| ABT | `0000001800` | ABBOTT LABORATORIES | NYSE |
+| T | `0000732717` | AT&T INC. | NYSE |
+| PG | `0000080424` | PROCTER & GAMBLE Co | NYSE |
+| UNP | `0000100885` | UNION PACIFIC CORP | NYSE |
+| WDC | `0000106040` | WESTERN DIGITAL CORP | Nasdaq |
+| SPOT | `0001639920` | Spotify Technology S.A. | NYSE |
+| HON | `0000773840` | HONEYWELL INTERNATIONAL INC | Nasdaq |
+| AXP | `0000004962` | AMERICAN EXPRESS CO | NYSE |
+| INFY | `0001067491` | Infosys Ltd | NYSE |
+
+All 23 requested symbols matched exactly one row in the SEC
+[ticker/CIK/name/exchange mapping](https://www.sec.gov/files/company_tickers_exchange.json).
+The 22 new CIKs are distinct and disjoint from the existing universe. Retrieved
+`2026-10-16T00:22:02.770247+00:00`; source Last-Modified
+`2026-10-15T13:39:20Z`; source SHA-256:
+`d04923d674c6d0084dc56e67efd9cb5756f965366affe9d3e18d38b379ffd45f`.
+
+The 22 additions were applied as a separate create-only transaction, preserving
+the requested order after omitting the existing META record. Strong verification
+at `2026-10-16T00:23:28.861765Z` (October 15 locally) matched all 72 records exactly,
+including all 50 unchanged original records. The additions are now included in
+`infra/seed/companies.prod.json`; the separate additions file has been removed.
+The consolidated file uses a new request token because its transaction contents
+differ from both applied requests. Use the loader for repeat loads; do not replay
+the raw transaction as a readiness check.
+
+The enabled-company index subsequently returned all 72 CIKs. The running service's
+Yahoo refresh at `2026-10-16T00:23:53.035186Z` included all 72 companies, confirming
+runtime pickup without restart. It failed with `IncompleteCalendarSnapshot`;
+CloudWatch shows the same error before this update (including `00:10:34Z`). The
+last successful calendar refresh remained `2026-10-13T14:48:45.962504Z` for the
+original scope. This pre-existing provider issue does not disable safety polling;
+the universe update does not establish fresh calendar coverage.
+
+Normal five-minute runtime reloads discover company changes without an image
+release or restart. Calendar observations for additions arrive with the next
+scheduled full Yahoo refresh; an already running refresh loop retains its daily
+deadline. Until then, companies without expectations use safety polling. A restart
+would refresh mismatched scope, but is not needed to enable filing discovery.
+The fixed inclusive `2026-10-06T04:00:00Z` acceptance cutoff also applies to these
+newly enabled companies. No historical submissions traversal is introduced.
+
+The calendar-only diagnostic reads the consolidated file directly, covering all
+72 companies without applying any DynamoDB writes:
+
+```bash
+.venv/bin/python -m finbot_ingestion.calendar.check \
+  --companies-file infra/seed/companies.prod.json --days 30 \
+  --output /private/tmp/finbot-calendar-check-NEW-ID.json
+```
+
+The finite Fargate `--deployment-check` still requires its original reviewed
+50-company count. It is not a current expanded-universe readiness check; review
+and update that diagnostic's expected scope before using it against 72 companies.

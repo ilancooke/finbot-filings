@@ -253,30 +253,50 @@ production test shim is used.
 
 ## Company universe
 
-[PRODUCTION_UNIVERSE](PRODUCTION_UNIVERSE.md) records the reviewed initial scope.
-Its create-only seed is already applied. Do not rerun it as a readiness check;
-later company changes require separately reviewed inputs.
-
-For authorized initial setup, first inspect whether the target table is empty:
+[PRODUCTION_UNIVERSE](PRODUCTION_UNIVERSE.md) records the reviewed scope.
+`infra/seed/companies.prod.json` is the consolidated input for all 72 reviewed
+companies. Append newly reviewed company records to this file, then run:
 
 ```bash
-aws dynamodb scan --table-name finbot-prod-companies --select COUNT \
-  --consistent-read --limit 1 --no-paginate \
-  --profile default --region us-east-1 --output json --no-cli-pager
+.venv/bin/python scripts/load_companies.py --profile default
 ```
 
-Count one means records exist, not that the whole table has one row. After reviewing
-identities, the saved transaction creates all 50 or none:
+This works with an empty or populated table: missing CIKs are conditionally
+inserted; existing CIKs are skipped successfully. It never overwrites existing
+names/symbols, re-enables disabled companies or removes records absent from the
+file. The runtime reads DynamoDB, not the file. Review ticker/CIK/name identities
+against SEC before appending; the loader does not resolve them or call providers.
 
-```bash
-aws dynamodb transact-write-items --cli-input-json file://infra/seed/companies.prod.json \
-  --profile default --region us-east-1 --output json --no-cli-pager
-```
+For a read-only preview, append `--dry-run`. `--companies-file PATH` selects a
+reviewed alternate input; all rows must target one explicit table ARN. The loader
+uses its region and checks the active AWS account against its account before
+accessing DynamoDB. Use normal operator credentials with STS GetCallerIdentity,
+DynamoDB GetItem and conditional PutItem access to that table. No ingestion-role
+or infrastructure permission changes are needed.
 
-Preserve create-only conditions; do not delete rows to retry. The fixed request
-token permits identical retries for ten minutes; an already applied seed later
-fails its create conditions. Capacity returned is not a row count. Verify actual
-base-table attributes, then the runtime's eventual enabled index:
+The complete input is validated before opening clients; identical duplicate CIK
+records collapse, and conflicting duplicates or ambiguous ticker mappings reject
+the input. Each CIK is strongly read first. Conditional creation handles concurrent
+writers/lost acknowledgments by strongly rereading and reporting a skip. Existing
+record differences are listed by field name in `existing_differences`; this command
+is additive and does not reconcile changes to existing configuration.
+
+JSON output includes `status`, `requested`, `inserted`, `skipped`, `would_insert`,
+`duplicates_in_file` and `existing_differences`. Existing rows are a successful
+outcome. Malformed inputs, wrong-account credentials and actual AWS failures exit
+nonzero; failures retain completed progress counts without exposing raw SDK errors.
+Loads are per record, not an all-or-nothing transaction. If interrupted or failed,
+resolve the underlying error and rerun the same command: earlier inserts are now
+skipped. There is no transaction-token window or 100-record transaction limit in
+the loader. No service restart or image rebuild is required for this local tool.
+
+The underlying file retains its create-only DynamoDB transaction format, but do
+not submit the full file directly to `transact-write-items` for routine additions;
+that API still rejects the whole transaction if any row already exists. The loader
+ignores its top-level token and processes records individually. Do not delete rows
+or remove the conditional protection to make a load succeed.
+
+For an independent enabled-universe count (GSI propagation may lag):
 
 ```bash
 aws dynamodb query --table-name finbot-prod-companies --index-name EnabledCompanies \
@@ -285,9 +305,37 @@ aws dynamodb query --table-name finbot-prod-companies --index-name EnabledCompan
   --profile default --region us-east-1 --output json --no-cli-pager
 ```
 
-Initial scope is 50. Do not request strong GSI consistency; allow propagation and
+The historical initial scope was 50; after the October 15 additions the reviewed
+current scope is 72. Do not request strong GSI consistency; allow propagation and
 investigate persistent mismatches rather than reseeding. Runtime configuration is
-DynamoDB, not the historical seed/document.
+DynamoDB, not the local seed/document.
+
+### October 15 universe expansion
+
+A separate create-only transaction was applied on October 15 locally (October 16
+UTC), adding 22 SEC-verified companies; META was already enabled. Strong reads
+verified exactly 72 enabled records and preserved all 50 original records. Those
+inputs are now combined in
+[`companies.prod.json`](../infra/seed/companies.prod.json); the separate additions
+file has been removed. This local consolidation made no AWS changes. Do not
+submit the combined raw transaction for verification; use the additive loader
+for repeat loads.
+
+The enabled index returned all 72 CIKs and the running service attempted a Yahoo
+refresh with all 72 at `2026-10-16T00:23:53Z`, without a restart. Calendar refresh
+failed with `IncompleteCalendarSnapshot`, also observed before the update. Last
+successful calendar collection was October 13; fresh expanded calendar coverage
+was not established. Safety polling remains enabled.
+
+Company changes enter the running scheduler on its normal five-minute reload;
+no application deployment or restart is needed. Additions without calendar hints
+use safety polling until the next scheduled daily Yahoo refresh supplies their
+observations. The active refresh loop does not immediately advance its deadline
+when company scope changes. Keep the fixed live cutoff for all additions.
+See [the reviewed identities and consolidated diagnostic input](PRODUCTION_UNIVERSE.md#october-15-2026-additions).
+The finite cloud deployment diagnostic remains pinned to its original 50-company
+scope; update that reviewed expectation before running it against the expanded
+universe. No finite diagnostic was run for this data-only expansion.
 
 ## GitHub application delivery and activation
 

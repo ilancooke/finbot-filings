@@ -30,9 +30,9 @@ def snapshot(companies):
             raw_provider_payload={"private": "must not appear in report"}),))
 
 
-def test_all_50_company_inputs_are_loaded_without_client_construction():
+def test_all_72_company_inputs_are_loaded_without_client_construction():
     companies = check.load_companies(SEED)
-    assert len(companies) == len({company.cik for company in companies}) == 50
+    assert len(companies) == len({company.cik for company in companies}) == 72
 
 
 @pytest.mark.parametrize("changes", [
@@ -50,7 +50,7 @@ def test_missing_observations_are_visible_and_raw_payload_is_excluded():
     result = check.snapshot_report(snapshot(companies), companies, START, END)
     assert result["collection_complete"] is True
     assert result["matched_companies"] == 1
-    assert len(result["companies_without_observations"]) == 49
+    assert len(result["companies_without_observations"]) == 71
     assert "AAPL" not in result["companies_without_observations"]
     assert "private" not in json.dumps(result)
     with pytest.raises(CalendarDataError):
@@ -73,7 +73,7 @@ def test_operator_command_uses_real_bounded_adapter_and_closes_it(tmp_path, monk
                        "--output", str(path)]) == 0
     report = json.loads(path.read_text())
     assert (report["start_date"], report["end_date"], report["days_requested"]) == (str(START), str(END), 30)
-    assert report["requested_companies"] == 50
+    assert report["requested_companies"] == 72
     assert report["status"] == "collection_complete" and report["matched_companies"] == 1
     assert report["aws_writes"] is False
     assert {day for day, _, _ in source.calls} == {START + check.timedelta(days=i) for i in range(30)}

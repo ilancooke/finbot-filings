@@ -8,8 +8,9 @@ interpretation, earnings extraction, features and consumer queues belong downstr
 
 The migration from the POC and the subsequent earnings-focused filtering work
 are complete. Only `finbot_ingestion` is installed. Infrastructure and application
-delivery are in place. The [initial production universe](docs/PRODUCTION_UNIVERSE.md)
-contains 50 reviewed companies; approximately 500 remains the capacity target.
+delivery are in place. The [production universe](docs/PRODUCTION_UNIVERSE.md)
+contains 72 reviewed companies: the original 50 plus 22 additions applied October 15, 2026.
+Approximately 500 remains the capacity target.
 
 See [architecture and contracts](docs/ARCHITECTURE.md),
 [accepted decisions](docs/DECISIONS.md), and the
@@ -82,8 +83,10 @@ Tests can run individually, for example:
 ```
 
 The calendar check reads the reviewed seed file as company input; it never applies
-the write requests. It uses the production Yahoo adapter, normal bounded request
-settings and a new private temporary cache, then closes the provider and worker.
+the write requests. The consolidated file covers all 72 reviewed companies.
+It uses the production Yahoo adapter,
+normal bounded request settings and a new private temporary cache, then closes
+the provider and worker.
 It fetches 30 inclusive calendar dates starting on today's America/New_York date.
 Optional `--start-date YYYY-MM-DD` selects a reproducible starting date. Help is
 offline; running the check makes live Yahoo requests. `YAHOO_*` environment
@@ -94,8 +97,10 @@ lists companies without observations. It does not prove Yahoo supplied every
 company's earnings date or approve activation. Raw payloads, cookies and provider
 exception messages are excluded. See [DEPLOYMENT](docs/DEPLOYMENT.md) for review.
 
-The deployment check refuses credentials outside the ECS task role. It checks
-all 50 enabled company records, private writable `/tmp`, atomic heartbeat files,
+The deployment check refuses credentials outside the ECS task role. Its original
+reviewed scope is 50 enabled company records; update the diagnostic scope before
+using it against the expanded 72-company universe. It checks company records,
+private writable `/tmp`, atomic heartbeat files,
 bounded memory allocation, DynamoDB conditional test checkpoints and immutable
 SSE-S3 test bytes. Its process budget is 180 seconds. It emits a sanitized report
 and separate `Finbot/DeploymentChecks` EMF, without starting ingestion, fetching
@@ -119,6 +124,35 @@ needed for production or offline tests, and the application does not load them.
 `LOG_LEVEL` defaults to `INFO`. AWS uses the normal SDK credential chain, including
 task-role credentials in ECS. Do not place credentials in source, images or
 diagnostic payloads.
+
+## Load new companies
+
+Maintain the full reviewed company list in `infra/seed/companies.prod.json`.
+After adding new records with verified SEC CIK/name/ticker identities, run from
+this repository:
+
+```bash
+.venv/bin/python scripts/load_companies.py --profile default
+# Optional preview; reads AWS but performs no writes:
+.venv/bin/python scripts/load_companies.py --profile default --dry-run
+```
+
+The loader inserts missing CIKs and skips existing records successfully, so the
+same file can be loaded repeatedly. It never updates, re-enables or deletes an
+existing company. Differences from the file are reported in `existing_differences`.
+It validates the entire input before AWS access, verifies the caller's account
+against the table ARN, and protects each insert with `attribute_not_exists(cik)`.
+Identical input duplicates collapse; conflicting CIKs/tickers or malformed input
+fail before any writes. AWS permission/service errors still return a nonzero
+status with progress counts; rerun the same command after resolving them.
+Loads are per record, so completed inserts survive an interruption.
+
+`--companies-file PATH` selects another reviewed file in the same format. Region,
+account and table come from the input ARN; `--profile` is optional and otherwise
+the normal AWS credential chain applies. No SEC/Yahoo calls are made. The top-level
+transaction token is unused by this loader. The running service picks up additions
+on its normal reload without a release or restart. This is a local operator tool,
+excluded from the production image. See [company operations](docs/DEPLOYMENT.md#company-universe).
 
 ## Container workflow
 
@@ -174,7 +208,7 @@ and metadata-only publication. No mock-mode switch is shipped in the application
 
 ## Acquisition and durable contracts
 
-Initial coverage is the [50-symbol production universe](docs/PRODUCTION_UNIVERSE.md),
+Current coverage is the [72-company production universe](docs/PRODUCTION_UNIVERSE.md),
 with approximately 500 companies retained as the v0 capacity target.
 Runtime company records require verified ticker/CIK/name/enabled fields.
 Ticker is convenience metadata; CIK normalizes to ten digits. Relevant forms are

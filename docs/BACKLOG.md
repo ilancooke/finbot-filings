@@ -73,6 +73,25 @@ positive. Recheck vendor fixes and scans on image updates; rebuild/test/release 
 fixed image when available. The historical scan assessment is not a current
 vulnerability verification. See [deployment evidence](DEPLOYMENT.md#last-recorded-verification).
 
+## OPS-004 — Automate application and infrastructure releases
+
+The FilingReady/topic cutover required manual delivery-flag toggles, ECS stops,
+image-digest copying, separate CDK deployments and baseline-ARN updates. The split
+between GitHub application delivery and manual infrastructure deployment makes
+combined releases cumbersome and prone to configuration mistakes.
+
+Consider extending the existing GitHub Actions/CDK setup into one release workflow:
+build/test an immutable image once, pass its digest into CDK, present the deployment
+diff for production approval, deploy stacks in order, update the baseline, and
+activate/verify the service. Automate the handoffs without routine flag toggles
+or copying digests/ARNs. Target operator flow: push to main, successful CI, approve.
+
+Revisit ADR 007's ownership split and provide a scoped OIDC infrastructure role;
+the current release role cannot deploy CDK. Preserve serialized releases, actual
+STOPPED handoffs, stopped environments unless activation is requested, compatible
+rollback/recovery and release evidence. Use DEPLOYMENT.md's current procedure as
+the starting contract.
+
 ## Completed work
 
 DATA-002 earnings-focused selection and the bundle-exclusion portion of DATA-001

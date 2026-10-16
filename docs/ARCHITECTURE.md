@@ -13,10 +13,16 @@ is `finbot_ingestion`. It discovers SEC filings, selects relevant documents,
 preserves original response-content bytes in S3, records durable facts in
 DynamoDB and publishes metadata-only `FilingReady` events through SNS.
 
-Initial coverage is the [50-company curated universe](PRODUCTION_UNIVERSE.md).
+Current coverage is the [72-company curated universe](PRODUCTION_UNIVERSE.md),
+expanded from the original 50 companies on October 15, 2026.
 Approximately 500 companies is the capacity target, not the current company count.
 CIK is stable company identity; ticker is lookup/convenience metadata. The runtime
 requires an existing nonempty enabled universe and never provisions or seeds it.
+The separate local operator tool `scripts/load_companies.py` reads the consolidated
+company JSON, validates all records and the target account, and conditionally
+inserts missing CIKs. Existing companies are skipped without configuration changes;
+repeat or interrupted loads resume per record. This does not change runtime table
+ownership, discovery or package contracts. See the company-universe runbook.
 
 Document interpretation, financial extraction, features, consumer queues and
 portfolio/trading decisions belong downstream. Historical backfill tooling,
