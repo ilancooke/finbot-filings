@@ -117,8 +117,10 @@ def install():
             if url.endswith("index.json"):
                 return Response((fixtures / "directory.json").read_bytes(), "application/json")
             if scenario == "six_k" and url.endswith("/Primary.htm"):
-                return Response(b'<h1>First quarter report 2026</h1>'
-                    b'<p>99.1 Press release announcing financial results for Q1 2026</p>', "text/html")
+                return Response(b'<h1>Form 6-K</h1><p>99.1 Press release</p>', "text/html")
+            if scenario == "six_k" and url.endswith("/release.htm"):
+                return Response(b'<h1>Issuer reports quarterly financial results</h1>'
+                    b'<p>Issuer reports revenue and net income for Q1 2026.</p>', "text/html")
             if scenario == "blocking" and not self.blocked:
                 self.blocked = True
                 trace("blocked")

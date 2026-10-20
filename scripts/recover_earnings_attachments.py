@@ -234,8 +234,9 @@ async def recover(discovery, target, manifest, *, execute=False, check_stopped):
     return {'manifest': str(manifest), 'additions': fresh['additions']}
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(*, description=__doc__, operation=recover):
+    """Shared stopped-service operator wiring; recovery scope stays in operation."""
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument('--profile', default='default')
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--private-config', type=Path,
@@ -260,7 +261,7 @@ def main():
         discovery = DiscoveryService(sec, execution, DynamoDBFilingRepository(db),
             DynamoDBArtifactRepository(db), WorkControl(WorkflowConfig()),
             selection=AcquisitionPolicy.from_env(env))
-        result = asyncio.run(recover(discovery, target, args.manifest, execute=args.execute,
+        result = asyncio.run(operation(discovery, target, args.manifest, execute=args.execute,
                                      check_stopped=lambda: stopped(ecs)))
         print(json.dumps(result, indent=2))
     return 0

@@ -228,8 +228,9 @@ without a count cutoff, then admission applies `earnings-acquisition-v3`:
   primary-report headings; unresolved/conflicting evidence stays visible.
 - 10-Q/10-K and their amendments retain their primary financial report.
 - 6-K/6-K/A require explicit reported quarterly, half-year or annual results,
-  or an identified periodic financial report. Index descriptions and bounded primary
-  inspection determine eligibility; generic press releases, meeting/board notices,
+  or an identified periodic financial report. Index descriptions, bounded primary
+  inspection and bounded inspection of identified generic release attachments
+  determine eligibility; generic labels alone, meeting/board notices,
   future earnings announcements and ambiguous references do not qualify.
 
 Identical accession duplicates collapse; conflicts and invalid relevant rows reject
@@ -261,7 +262,21 @@ block (at most 1,500 normalized characters). Boilerplate/historical references d
 not qualify. A qualified package retains the primary, identified results releases,
 periodic financial reports/statements and financial/operating supplements; decks,
 transcripts, newspaper advertisements and unrelated files are omitted. Generic or
-conflicting attachments stay unresolved. PDF attachments can qualify from labels;
+conflicting attachments stay unresolved. Quoted announcement/exhibit titles split
+across at most three consecutive absolute-positioned layout lines are reconstructed
+within one container (still capped at 1,500 characters). Ordinary paragraphs and
+different exhibits/sections are never concatenated.
+
+If a 6-K remains unresolved, up to two uniquely numbered same-package EX-99 HTML/text
+press/news releases with generic labels can be inspected, each capped at 4 MiB.
+The opening headline must describe results or reported financial measures, and one
+of the first four nonempty blocks must independently pass the existing reported-results
+and reporting-period checks. Conflicting/deck labels cannot be overridden by content;
+later boilerplate cannot qualify a release. Only selected inspection bytes are stored,
+through the normal immutable path, without a second download during enumeration.
+Unsuccessful inspection does not authorize acquisition/publication.
+
+PDF attachments can qualify from labels;
 no PDF parsing or OCR is added. Filing qualification requires a results document
 whose combined descriptions resolve affirmatively, or results reported directly
 in the primary. A disputed attachment cannot establish results context for itself

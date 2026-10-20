@@ -470,3 +470,30 @@ changes. Failed refreshes keep the prior expectations/freshness until a complete
 collection is applied. Do not rewrite health checkpoints or force alarms to OK.
 Revisit the ticker-group assumption if provider evidence changes; unknown or
 inconsistent layouts must continue to fail explicitly.
+
+
+<a id="adr-023"></a>
+## ADR 023 — Recover wrapped 6-K titles and inspect generic release attachments
+
+**Accepted 2026-10-20; implemented locally, production activation pending.**
+The ERIC October 15 results cover splits a quoted title and Exhibit 99.1 description
+across absolute-positioned lines. TSM's cover identifies a generic press release;
+the release's opening paragraph explicitly reports the quarter's financial results.
+Refine v3 evidence handling without changing domestic routing or the fixed cutoff.
+
+Reconstruct only bounded, closed quoted descriptions across at most three adjacent
+layout lines in one container, retaining unique exhibit/link binding guards.
+For otherwise unresolved 6-Ks, permit at most two 4-MiB same-package EX-99.x HTML/text
+generic release inspections, with a results headline and independent period/results
+evidence in the first four blocks. Reuse existing text checks; no issuer/filename
+guesses, full-document keyword windows, PDF interpretation or extraction. Conflicting
+roles remain guarded. Store only selected original bytes through normal acquisition.
+
+Blocked checkpoints remain blocked during normal delivery. A dedicated stopped-service,
+preview-first operator operation may reopen only ERIC `0001628280-26-065962` and TSM
+`0001046179-26-000726` after the normal selector reproduces the exact two-document
+membership per filing. Pin source fingerprints/deployment/state in the preview,
+revalidate before revision-conditional writes, preserve original row/history fields
+and queue enumeration. Interrupted execution resumes using the same manifest;
+other unresolved/completed/terminal work is outside scope. Production execution
+and activation are separate from implementing this local change.

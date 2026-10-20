@@ -7,7 +7,7 @@ import logging
 
 from finbot_ingestion.selection.policy import (POLICY_VERSION, POLICY_UPGRADES, Decision,
     MAX_ROUTING_PARSE_BYTES, document_decision, primary_exhibits, primary_items)
-from finbot_ingestion.selection.six_k import SIX_K_FORMS, select_six_k
+from finbot_ingestion.selection.six_k import SIX_K_FORMS, inspection_candidates, select_six_k
 from finbot_ingestion.sec.errors import SECDocumentTooLarge
 
 from finbot_ingestion.repositories.errors import RepositoryNotFound
@@ -112,9 +112,10 @@ class DiscoveryService:
                     return EnumerationResult(Outcome.COMPLETE)
                 try:
                     package = await self.execution.call(self.sec.get_filing_index, filing=filing)
-                    decisions, primary_bytes = None, None
+                    decisions, primary_bytes, routing_downloads = None, None, {}
                     if self.selection is not None:
-                        admission, decisions, primary_bytes = await self.select_package(filing, package, progress)
+                        admission, decisions, primary_bytes = await self.select_package(
+                            filing, package, progress, routing_downloads=routing_downloads)
                         await self._record(self.filings, accession_number, admission)
                         if not admission.selected:
                             return EnumerationResult(Outcome.SKIPPED)
@@ -131,6 +132,9 @@ class DiscoveryService:
                         for child in children:
                             await self._record(self.artifacts, child.artifact_id, decisions[child.filename])
                         await self._reuse_primary(filing, package.primary_document_name, primary_bytes)
+                        for name, downloaded in routing_downloads.items():
+                            if decisions[name].selected:
+                                await self._reuse_primary(filing, name, downloaded)
                     return EnumerationResult(Outcome.COMPLETE, tuple(child.artifact_id for child in children))
                 except Exception as exc:
                     if not work_error(exc):
@@ -173,7 +177,7 @@ class DiscoveryService:
                 "accession_number": filing.accession_number,
                 "artifact_id": filing.accession_number + "/" + package.primary_document_name})
 
-    async def select_package(self, filing, package, progress):
+    async def select_package(self, filing, package, progress, *, routing_downloads=None):
         """Evaluate a package without checkpoint writes (also used by operators)."""
         primary = None
         primary_document = next(d for d in package.documents if d.filename == package.primary_document_name)
@@ -197,6 +201,24 @@ class DiscoveryService:
                     primary = None
                 if primary is not None:
                     admission, decisions = select_six_k(filing, package, primary.content)
+            if admission.outcome == "UNRESOLVED":
+                content = primary.content if primary is not None else None
+                inspected = {}
+                for document in inspection_candidates(filing, package, content):
+                    try:
+                        downloaded = await self.execution.call(self.sec.download_document,
+                            url=document.sec_url, max_bytes=MAX_ROUTING_PARSE_BYTES,
+                            context={"ticker": filing.ticker, "cik": filing.company_cik,
+                                "accession_number": filing.accession_number,
+                                "artifact_id": filing.accession_number + "/" + document.filename})
+                    except SECDocumentTooLarge:
+                        continue
+                    inspected[document.filename] = downloaded
+                if inspected:
+                    admission, decisions = select_six_k(filing, package, content,
+                        attachment_contents={name: value.content for name, value in inspected.items()})
+                    if routing_downloads is not None:
+                        routing_downloads.update(inspected)
             if not admission.selected:
                 self._log(filing, admission)
             return admission, decisions, primary
@@ -244,7 +266,7 @@ class DiscoveryService:
         progress = await self.artifacts.get_checkpoint(identity)
         if child is None or progress is None or child.stored_at is not None or progress.terminal_at is not None or progress.selection_blocked:
             return
-        # The primary was already fetched to route exhibits. Preserve these exact
+        # The document was already fetched for routing. Preserve these exact
         # bytes through the same inspect/conditional-put path; do not keep a cache.
         stored = await self.downloader.acquire(child, filing, downloaded=downloaded)
         await self.control.checkpoint(lambda: self.artifacts.mark_stored(identity,
@@ -254,7 +276,7 @@ class DiscoveryService:
             self.metrics.count("ArtifactsStored")
             self.metrics.latency("DownloadLatencyMs", child.discovered_at, stored.stored_at)
             self.metrics.latency("IngestionLatencyMs", filing.filed_at, stored.stored_at)
-        LOGGER.info("Routing primary stored", extra={"operation": "ACQUIRE", "artifact_id": identity})
+        LOGGER.info("Routing document stored", extra={"operation": "ACQUIRE", "artifact_id": identity})
 
     async def authorize_artifact(self, artifact, filing, parent, progress):
         """Check pending ACQUIRE and PUBLISH, including legacy direct dispatch."""

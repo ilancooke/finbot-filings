@@ -143,6 +143,11 @@ updates elsewhere. Evidence is evaluated within blocks, never by combining keywo
 across the whole filing.
 
 SEC index descriptions, safe links and short primary sections supply labels.
+Quoted announcement/exhibit titles beginning after `regarding` may continue across
+at most three adjacent absolute-positioned leaf divs in one container. Reconstruct
+only through their closing quotation, within the 1,500-character bound; stop at
+another exhibit, heading, non-layout node or container boundary. Preserve links
+from every line for normal binding/conflict checks; do not concatenate paragraphs.
 Plain numbered exhibit rows and attached-Item/Exhibit paragraphs bind to the
 unique package EX-99.x file; multi-file/multi-number/conflicting bindings remain
 unresolved. Resolve each document's combined labels before using it to qualify
@@ -157,6 +162,23 @@ referenced files cannot admit an otherwise generic package. Blocks are capped at
 Oversized inspection stays unresolved
 unless explicit index evidence already qualifies the package. Normal selected
 acquisition retains its 64-MiB limit. Primary routing bytes reuse immutable storage.
+
+An otherwise UNRESOLVED package may inspect at most two generic press/news release
+attachments, ordered by filename. Each must be a uniquely numbered EX-99.x HTML/text
+document with a validated same-package URL and no classified/conflicting labels.
+Each read uses the shared SEC client/budget and a 4-MiB cap (at most 8 MiB of
+additional bodies per enumeration). Oversize remains unresolved; transport errors
+use ordinary workflow retry. No PDF/OCR or image inspection is added.
+
+After removing head/script/style/comments and empty/exhibit-marker blocks, require
+an opening headline about results or reported financial measures, then affirmative
+reported-results/period evidence in an individual one of the first four blocks.
+Apply existing notice/reference/deck/approval guards. Do not combine periods and
+results across blocks or inspect later boilerplate. Attach the qualifying block
+only to that document's labels and resolve conflicts before admitting the package.
+Only selected routing bodies pass through normal immutable storage; enumeration
+reuses inspected original bytes instead of fetching the release again. No durable
+evidence store, ticker/filename classification rules or new checkpoint schema.
 
 A selected package retains its primary and individually identified results releases,
 periodic financial reports/statements, and financial/operating supplements.

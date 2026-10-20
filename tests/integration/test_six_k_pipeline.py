@@ -20,15 +20,64 @@ from finbot_ingestion.selection.policy import AcquisitionPolicy, POLICY_VERSION
 from tests.support.dynamodb import make_filing, NOW, ACCESSION
 from tests.support.ingestion import run
 from tests.support.runtime import setup
+from tests.support.six_k import wire_captures, CASES, capture_content
 
 COMPANY = Company('AAPL', '320193', 'Synthetic foreign issuer')
 FIXTURES = Path(__file__).parents[1] / 'fixtures/sec_6k'
 
 
+def test_captured_layouts_store_exact_artifacts_and_survive_restart(system, monkeypatch):
+    filings, _, downloads = wire_captures(system, monkeypatch)
+    worker = system.worker()
+    worker.discovery.selection = AcquisitionPolicy.from_env({})
+    async def scenario():
+        for filing in filings.values():
+            await system.db.filings.create_if_absent(filing)
+            await worker.process_filing(filing.accession_number)
+        assert len(system.s3.objects) == 4 and len(system.messages.events) == 2
+        expected = {name for case in CASES.values() for name in (case.primary, case.release)}
+        assert sorted(name for name, _ in downloads) == sorted(expected)
+        for name, bound in downloads:
+            if name != CASES['wrapped_description'].release:
+                assert bound == 4 * 1024 * 1024
+        bodies = [body for body, _ in system.s3.objects.values()]
+        assert capture_content('generic_release', CASES['generic_release'].release) in bodies
+        import json
+        for _, event in system.messages.events:
+            message = json.loads(event['Message'])
+            assert len(message['artifacts']) == 2 and message['form_type'] == '6-K'
+        restarted = system.worker()
+        restarted.discovery.selection = worker.discovery.selection
+        await RecoveryService(restarted).run_pass()
+        assert len(downloads) == 4 and len(system.messages.events) == 2
+    run(scenario())
+
+
+def test_oversized_inspection_stays_unresolved_without_storage(system, monkeypatch):
+    filings, _, downloads = wire_captures(system, monkeypatch)
+    original = system.sec.download_document
+    def limited(url, **kwargs):
+        if url.endswith(CASES['generic_release'].release):
+            raise SECDocumentTooLarge('release exceeds routing bound')
+        return original(url, **kwargs)
+    monkeypatch.setattr(system.sec, 'download_document', limited)
+    worker = system.worker()
+    worker.discovery.selection = AcquisitionPolicy.from_env({})
+    async def scenario():
+        filing = filings[CASES['generic_release'].accession]
+        await system.db.filings.create_if_absent(filing)
+        await worker.process_filing(filing.accession_number)
+        checkpoint = await system.db.filings.get_checkpoint(filing.accession_number)
+        assert checkpoint.selection_decision == 'UNRESOLVED'
+        assert not system.s3.objects and not system.messages.events
+        assert not system.db.memory.tables['artifacts']
+    run(scenario())
+
+
 def wire(worker, system, monkeypatch, *, primary=None, rows=None, form='6-K', oversized=False):
     worker.discovery.selection = AcquisitionPolicy(NOW - timedelta(days=1))
     filing = make_filing(form_type=form, primary_document_name='Primary.htm')
-    primary = (FIXTURES / 'asml_primary.html').read_bytes() if primary is None else primary
+    primary = (FIXTURES / 'numbered_exhibits_primary.html').read_bytes() if primary is None else primary
     rows = rows or [('Primary.htm', form, '6-K'), ('release.htm', 'EX-99.1', 'EX-99.1'),
         ('deck.htm', 'EX-99.2', 'EX-99.2'), ('statements.htm', 'EX-99.3', 'EX-99.3'),
         ('interim.pdf', 'EX-99.4', 'EX-99.4'), ('logo.jpg', 'GRAPHIC', 'Logo'),
@@ -66,7 +115,7 @@ def test_selected_original_bytes_events_and_restart_do_not_reacquire(system, mon
         assert (parent.selection_policy, parent.selection_reason, parent.enumerated_artifact_count) == (POLICY_VERSION, 'earnings_6_k', 4)
         assert len(system.s3.objects) == 4 and len(system.messages.events) == 1
         assert any('/2026-10-08_' + form.replace('/', '-') + '_' in key for _, key in system.s3.objects)
-        assert (FIXTURES / 'asml_primary.html').read_bytes() in [body for body, _ in system.s3.objects.values()]
+        assert (FIXTURES / 'numbered_exhibits_primary.html').read_bytes() in [body for body, _ in system.s3.objects.values()]
         restarted = system.worker()
         restarted.discovery.selection = worker.discovery.selection
         await RecoveryService(restarted).run_pass()
@@ -91,7 +140,8 @@ def test_rejected_packages_create_no_children_objects_or_publications(system, mo
         assert not (await system.db.filings.list_pending()).items
         assert not system.db.memory.tables['artifacts'] and not system.s3.objects and not system.messages.events
         await RecoveryService(worker).run_pass()
-        assert [name for name, _ in downloads] == ['Primary.htm']
+        expected = ['Primary.htm', 'release.htm'] if b'99.1 Press release' in primary else ['Primary.htm']
+        assert [name for name, _ in downloads] == expected
     run(scenario())
 
 

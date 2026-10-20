@@ -166,6 +166,8 @@ def test_installed_6k_pipeline_stores_routing_bytes_once_and_publishes(docker):
         assert all(event['form_type'] == '6-K' and event['event_type'] == 'filing.ready' for event in result['events'])
         urls = [entry['url'] for entry in result['trace'] if entry['kind'] == 'sec']
         assert sum(url.endswith('/Primary.htm') for url in urls) == 1
+        assert sum(url.endswith('/release.htm') for url in urls) == 1
         assert not any(url.endswith(('Slides.PDF', 'graphic.jpg')) for url in urls)
-        assert any(bytes.fromhex(value).startswith(b'<h1>First quarter report') for value in result['objects'])
+        assert any(bytes.fromhex(value).startswith(b'<h1>Form 6-K') for value in result['objects'])
+        assert any(bytes.fromhex(value).startswith(b'<h1>Issuer reports quarterly') for value in result['objects'])
         assert not result['health_exists']

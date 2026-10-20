@@ -136,6 +136,49 @@ manifest pins the policy and task/image: an existing v2 manifest must be resumed
 with its compatible original helper/image, not rewritten or bypassed with a new
 preview after partial execution.
 
+### October 15 ERIC/TSM unresolved-parent recovery
+
+ADR 023 uses normal application delivery, with no infrastructure/schema changes.
+Merging/deploying the selector does not reopen existing UNRESOLVED parents.
+The separate operator helper is scoped to ERIC `0001628280-26-065962` and TSM
+`0001046179-26-000726`. Expected membership is the ERIC cover
+`a2610156-kq326.htm` plus `a2026q3forfiling.htm`, and the TSM cover
+`tsm-20261015x6k.htm` plus `a3q26e_withguidancexfinal.htm`. TSM's presentation is
+excluded. The other six reviewed non-earnings holds are outside this operation.
+
+Deploy the tested image first. For explicitly authorized recovery, pause delivery,
+stop ingestion and prove every observed task STOPPED using the existing handoff
+procedure. Keep that fixed task definition/image installed while generating and
+executing the preview. From the repo root, using the matching reviewed checkout:
+
+```bash
+# Read-only AWS/SEC inspection; creates a NEW local manifest:
+.venv/bin/python -m scripts.recover_unresolved_6k --profile default \
+  --manifest /private/tmp/finbot-eric-tsm-recovery-NEW.json
+# After reviewing the two parents, exact filenames, fingerprints and changes:
+.venv/bin/python -m scripts.recover_unresolved_6k --profile default \
+  --manifest /private/tmp/finbot-eric-tsm-recovery-NEW.json --execute
+```
+
+The helper verifies account/region/table/task/image/cutoff, current unresolved
+identities, no completed/terminal/publication facts or observed children, and normal
+selector decisions. Preview makes no AWS writes. Execution revalidates the entire
+saved plan/source, then uses revision-conditional parent updates to SELECT and
+ENUMERATE, preserving original identities/timestamps/failure history. It never
+deletes rows, writes S3, creates children or publishes events itself. Strong reads
+also check the two expected artifact IDs; index reads reject other observed children.
+The service must remain stopped throughout; these checks are not distributed fencing.
+
+On interruption/lost acknowledgment, keep ingestion stopped and rerun execution
+with the same manifest, checkout and task/image. Already committed exact parent
+transitions are no-ops; changed source/state or unrelated work is rejected. Do not
+generate a new preview after partial execution. After verified execution, restart
+the tested image through the normal activation path. Normal enumeration/acquisition
+must store four artifacts total and publish two complete FilingReady events. Verify
+original bytes, exact selected membership, stored/published checkpoints, no new
+terminal failures, and the two dashboard entries after Refresh. Re-running the
+operator helper after processing completes is intentionally rejected.
+
 ## Configuration and offline validation
 
 Application setup is in [README](../README.md#install-and-validate). Install the

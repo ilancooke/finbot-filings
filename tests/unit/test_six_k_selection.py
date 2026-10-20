@@ -7,10 +7,88 @@ import pytest
 from finbot_ingestion.sec.filing_index import FilingIndex, PackageDocument
 from finbot_ingestion.sec.urls import document_url
 from finbot_ingestion.selection.policy import MAX_ROUTING_PARSE_BYTES
-from finbot_ingestion.selection.six_k import results_document, select_six_k
+from finbot_ingestion.selection.six_k import results_document, select_six_k, inspection_candidates
 from tests.support.dynamodb import make_filing
 
 FIXTURES = Path(__file__).parents[1] / "fixtures/sec_6k"
+
+
+def test_wrapped_descriptions_bind_results_to_the_numbered_attachment():
+    from tests.support.six_k import captured, capture_content
+    filing, listing, release = captured('wrapped_description')
+    admission, decisions = select_six_k(filing, listing,
+        capture_content('wrapped_description', listing.primary_document_name))
+    assert admission.selected
+    assert {name for name, d in decisions.items() if d.selected} == {listing.primary_document_name, release}
+    assert decisions[release].reason == 'earnings_release'
+
+
+def test_generic_release_requires_attachment_evidence_and_excludes_presentation():
+    from tests.support.six_k import captured, capture_content
+    filing, listing, release = captured('generic_release')
+    primary = capture_content('generic_release', listing.primary_document_name)
+    assert select_six_k(filing, listing, primary)[0].outcome == 'UNRESOLVED'
+    assert [d.filename for d in inspection_candidates(filing, listing, primary)] == [release]
+    admission, decisions = select_six_k(filing, listing, primary,
+        attachment_contents={release: capture_content('generic_release', release)})
+    assert admission.selected
+    assert {name for name, d in decisions.items() if d.selected} == {listing.primary_document_name, release}
+    presentation = next(d.filename for d in listing.documents if d.document_type == 'EX-99.2')
+    assert decisions[presentation].outcome == 'EXCLUDE'
+
+
+@pytest.mark.parametrize('middle', [
+    '</div><div>',  # separate containers
+    '<div style="position:absolute">Exhibit 99.2 Something else</div>',
+    '<h2>Another section</h2>',
+    '<p>2026</p>',
+])
+def test_wrapped_titles_cannot_cross_sections_or_exhibit_boundaries(middle):
+    filing, listing = package([('Primary.htm', '6-K', '6-K'), ('release.htm', 'EX-99.1', 'EX-99.1')])
+    content = ('<div><div style="position:absolute">Exhibit 99.1 Announcement regarding '
+        '“Issuer reports third</div>' + middle +
+        '<div style="position:absolute">quarter results 2026”</div></div>').encode()
+    assert not select_six_k(filing, listing, content)[0].selected
+
+
+@pytest.mark.parametrize('headline', [
+    'Share buybacks', 'Changes to the Executive Team', 'Drilling results',
+    'Project director appointment', 'Labor certification statement',
+    'Will announce financial results for Q2 2026', 'Q2 2026 earnings presentation',
+])
+def test_non_earnings_headline_cannot_admit_historical_financial_paragraph(headline):
+    filing, listing = package([('Primary.htm', '6-K', '6-K'), ('release.htm', 'EX-99.1', 'Press release')])
+    body = f'<h1>{headline}</h1><p>Issuer reported revenue and net income for Q2 2026.</p>'.encode()
+    assert not select_six_k(filing, listing, b'<p>6-K</p>', attachment_contents={'release.htm': body})[0].selected
+
+
+@pytest.mark.parametrize('label,kind,name', [
+    ('Press release and earnings presentation', 'EX-99.1', 'release.htm'),
+    ('Press release', 'EX-99.1', 'release.pdf'),
+    ('Press release', 'EX-10.1', 'release.htm'),
+    ('EX-99.1', 'EX-99.1', 'release.htm'),
+])
+def test_ineligible_documents_cannot_trigger_content_inspection(label, kind, name):
+    filing, listing = package([('Primary.htm', '6-K', '6-K'), (name, kind, label)])
+    assert not inspection_candidates(filing, listing)
+
+
+def test_inspection_is_bounded_and_duplicate_exhibit_numbers_are_not_guessed():
+    filing, listing = package([('Primary.htm', '6-K', '6-K'),
+        *[(f'r{i}.htm', f'EX-99.{i}', 'Press release') for i in range(1, 5)]])
+    assert len(inspection_candidates(filing, listing)) == 2
+    from dataclasses import replace
+    duplicate = replace(listing.documents[1], filename='other.htm')
+    listing = replace(listing, documents=listing.documents + (duplicate,))
+    assert 'r1.htm' not in {d.filename for d in inspection_candidates(filing, listing)}
+
+
+def test_oversized_or_late_attachment_evidence_does_not_admit():
+    filing, listing = package([('Primary.htm', '6-K', '6-K'), ('release.htm', 'EX-99.1', 'Press release')])
+    lead = b'<h1>Issuer reports Q2 2026 financial results</h1>'
+    for body in [lead + b'x' * MAX_ROUTING_PARSE_BYTES,
+                 b'<p>News</p>' * 4 + lead]:
+        assert not select_six_k(filing, listing, attachment_contents={'release.htm': body})[0].selected
 
 
 def package(rows, *, primary="Primary.htm"):
@@ -46,8 +124,8 @@ def test_generic_future_governance_and_historical_descriptions_do_not_admit(labe
 
 
 @pytest.mark.parametrize("fixture,selected", [
-    ("asml_primary.html", {"Primary.htm", "release.htm", "statements.htm", "interim.pdf"}),
-    ("wipro_primary.html", {"Primary.htm", "release.htm", "statements.htm", "interim.pdf", "metrics.htm"}),
+    ("numbered_exhibits_primary.html", {"Primary.htm", "release.htm", "statements.htm", "interim.pdf"}),
+    ("attached_items_primary.html", {"Primary.htm", "release.htm", "statements.htm", "interim.pdf", "metrics.htm"}),
 ])
 def test_plain_exhibit_numbers_and_attached_item_paragraphs(fixture, selected):
     filing, listing = package([("Primary.htm", "6-K", "6-K"),
@@ -62,7 +140,7 @@ def test_plain_exhibit_numbers_and_attached_item_paragraphs(fixture, selected):
 
 def test_embedded_primary_report_qualifies_without_exhibits():
     filing, listing = package([("Primary.htm", "6-K", "6-K")])
-    admission, decisions = select_six_k(filing, listing, (FIXTURES / "ericsson_primary.html").read_bytes())
+    admission, decisions = select_six_k(filing, listing, (FIXTURES / "embedded_results_primary.html").read_bytes())
     assert admission.selected and decisions["Primary.htm"].selected
 
 
@@ -98,7 +176,7 @@ def test_clear_results_document_admits_package_despite_conflicting_attachment(em
         ("statements.htm", "EX-99.3", "Consolidated financial statements")]
     content = b'<p>99.1 Earnings presentation</p>'
     if embedded_primary:
-        content += (FIXTURES / "ericsson_primary.html").read_bytes()
+        content += (FIXTURES / "embedded_results_primary.html").read_bytes()
     else:
         rows.append(("report.pdf", "EX-99.2", "First quarter financial report 2026"))
     filing, listing = package(rows)
