@@ -4,11 +4,16 @@ from dataclasses import dataclass, replace
 from collections import OrderedDict
 import asyncio
 import logging
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from finbot_ingestion.selection.policy import (POLICY_VERSION, POLICY_UPGRADES, Decision,
     MAX_ROUTING_PARSE_BYTES, document_decision, primary_exhibits, primary_items)
 from finbot_ingestion.selection.six_k import SIX_K_FORMS, inspection_candidates, select_six_k
 from finbot_ingestion.sec.errors import SECDocumentTooLarge
+from finbot_ingestion.sec.client import DownloadedDocument
+from finbot_ingestion.sec.errors import SECDataError
+from finbot_ingestion.selection.images import MAX_HTML_BYTES, MAX_SUPPORTING_IMAGES, supporting_images
 
 from finbot_ingestion.repositories.errors import RepositoryNotFound
 from finbot_ingestion.repositories.package_checkpoint import PackageCheckpoint
@@ -119,22 +124,34 @@ class DiscoveryService:
                         await self._record(self.filings, accession_number, admission)
                         if not admission.selected:
                             return EnumerationResult(Outcome.SKIPPED)
-                        self._remember(filing, decisions)
-                        for document in package.documents:
-                            self._log(filing, decisions[document.filename], filename=document.filename)
-                        package = replace(package, documents=tuple(d for d in package.documents if decisions[d.filename].selected))
-                    children = package.artifacts(filing, discovered_at=self.control.now())
-                    completed_at = self.control.now()
-                    await self.control.checkpoint(lambda: self.packages.persist(filing, children,
-                        primary_document_name=package.primary_document_name, completed_at=completed_at),
-                        operation="persist_package", identity=accession_number)
-                    if decisions is not None:
-                        for child in children:
-                            await self._record(self.artifacts, child.artifact_id, decisions[child.filename])
-                        await self._reuse_primary(filing, package.primary_document_name, primary_bytes)
-                        for name, downloaded in routing_downloads.items():
-                            if decisions[name].selected:
-                                await self._reuse_primary(filing, name, downloaded)
+                    with TemporaryDirectory(prefix="finbot-html-") as spool:
+                        staged = {}
+                        if decisions is not None:
+                            available = dict(routing_downloads)
+                            if primary_bytes is not None:
+                                available[package.primary_document_name] = primary_bytes
+                            staged = await self._supporting_images(filing, package, decisions, available, Path(spool))
+                            self._remember(filing, decisions)
+                            for document in package.documents:
+                                self._log(filing, decisions[document.filename], filename=document.filename)
+                            package = replace(package, documents=tuple(d for d in package.documents if decisions[d.filename].selected))
+                        children = package.artifacts(filing, discovered_at=self.control.now())
+                        completed_at = self.control.now()
+                        await self.control.checkpoint(lambda: self.packages.persist(filing, children,
+                            primary_document_name=package.primary_document_name, completed_at=completed_at),
+                            operation="persist_package", identity=accession_number)
+                        if decisions is not None:
+                            for child in children:
+                                await self._record(self.artifacts, child.artifact_id, decisions[child.filename])
+                            # Spool one body at a time: all selected HTML is inspected
+                            # before membership freezes, without retaining a package
+                            # of large reports in memory or downloading it twice.
+                            for name, (path, content_type, url) in staged.items():
+                                await self._reuse_primary(filing, name,
+                                    DownloadedDocument(path.read_bytes(), content_type, url))
+                            for name, downloaded in available.items():
+                                if name not in staged and decisions[name].selected:
+                                    await self._reuse_primary(filing, name, downloaded)
                     return EnumerationResult(Outcome.COMPLETE, tuple(child.artifact_id for child in children))
                 except Exception as exc:
                     if not work_error(exc):
@@ -160,6 +177,36 @@ class DiscoveryService:
                 "artifact_id": filing.accession_number + "/" + filename if filename else None,
                 "policy_version": POLICY_VERSION, "reason": decision.reason,
                 "selection_decision": decision.outcome})
+
+    async def _supporting_images(self, filing, package, decisions, available, spool):
+        """Expand selected HTML dependencies before the durable enumeration checkpoint."""
+        staged, total, images = {}, 0, set()
+        for document in package.documents:
+            if not decisions[document.filename].selected or not document.filename.lower().endswith((".htm", ".html")):
+                continue
+            downloaded = available.get(document.filename)
+            if downloaded is None:
+                bound = self.downloader.max_artifact_bytes if self.downloader else 64 * 1024 * 1024
+                downloaded = await self.execution.call(self.sec.download_document,
+                    url=document.sec_url, max_bytes=bound,
+                    context={"ticker": filing.ticker, "cik": filing.company_cik,
+                        "accession_number": filing.accession_number,
+                        "artifact_id": filing.accession_number + "/" + document.filename})
+            total += downloaded.size_bytes
+            if total > MAX_HTML_BYTES:
+                raise SECDataError("supporting image HTML inspection byte limit exceeded")
+            for name, decision in supporting_images(filing, package, downloaded.content).items():
+                if decision.selected:
+                    decisions[name] = decision
+                    images.add(name)
+                elif not decisions.get(name, Decision("EXCLUDE", "")).selected:
+                    decisions[name] = decision
+            if len(images) > MAX_SUPPORTING_IMAGES:
+                raise SECDataError("supporting image count limit exceeded")
+            path = spool / str(len(staged))
+            path.write_bytes(downloaded.content)
+            staged[document.filename] = (path, downloaded.content_type, downloaded.source_url)
+        return staged
 
     async def _record(self, repo, identity, decision):
         at = self.control.now()
@@ -292,6 +339,15 @@ class DiscoveryService:
             await self._record(self.artifacts, artifact.artifact_id, scope)
             self._log(filing, scope, filename=artifact.filename)
             return False
+        if (progress.selection_policy == POLICY_VERSION and progress.selection_decision == "SELECT"
+                and progress.selection_reason == "supporting_content_image"
+                and artifact.artifact_id in (parent.selected_artifact_ids or ())
+                and parent.selection_decision == "SELECT"
+                and (parent.selection_policy == POLICY_VERSION
+                     or (parent.selection_policy, POLICY_VERSION) in POLICY_UPGRADES)):
+            # A stopped-service recovery can add verified dependencies without
+            # rewriting the completed parent's historical admission checkpoint.
+            return True
         if (progress.selection_policy == POLICY_VERSION and progress.selection_decision == "SELECT"
                 and parent.selection_policy == POLICY_VERSION and parent.selection_decision == "SELECT"):
             return True

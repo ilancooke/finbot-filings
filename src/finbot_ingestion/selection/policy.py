@@ -238,4 +238,8 @@ def image_only_html(content):
     soup = BeautifulSoup(content, "html.parser")
     for node in soup.find_all(["head", "script", "style"]):
         node.decompose()
+    for node in soup.find_all(style=True):
+        if re.search(r"font-size\s*:\s*(?:0|1(?:\.0*)?)\s*(?:pt|px)\b|display\s*:\s*none|visibility\s*:\s*hidden",
+                     node.get("style", ""), re.I):
+            node.clear()
     return len(soup.get_text(" ", strip=True)) < 80

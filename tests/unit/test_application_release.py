@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import json
 
 from scripts.release import Release, ReleaseError, registration
+from scripts import release as release_module
 import pytest
 
 
@@ -297,3 +298,145 @@ def test_failed_stopped_service_can_stage_manual_recovery(tmp_path):
         return result
     ecs.describe_services = failed
     assert release.deploy(NEW)["outcome"] == "staged"
+
+
+def test_superseded_after_preflight_never_mutates_ecs(tmp_path):
+    release, ecs = runner(tmp_path)
+    result = release.deploy(NEW, activation_approved=True, is_current=lambda: False)
+    assert result["outcome"] == "superseded"
+    assert not ecs.trace and ecs.count == 1 and ecs.revision == "old"
+
+
+@pytest.fixture
+def github_delivery(tmp_path, monkeypatch):
+    """Run the real publishing/handoff path with offline GitHub, Docker and AWS."""
+    commit, tested_id = "a" * 40, "sha256:" + "3" * 64
+    values = {"AWS_REGION": "us-east-1", "FINBOT_REPOSITORY_URI": REPO,
+        "FINBOT_CLUSTER": "cluster", "FINBOT_SERVICE": "service", "FINBOT_BASELINE": "baseline",
+        "FINBOT_ACTIVATION_APPROVED": "true", "RELEASE_COMMIT": commit,
+        "TESTED_IMAGE_ID": tested_id, "GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "push",
+        "GITHUB_REPOSITORY": "owner/repo", "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1"}
+    ecs, clock = ECS(), Clock()
+    state = SimpleNamespace(values=values, ecs=ecs, commands=[], clients=[], heads=[commit, commit],
+        actual_id=tested_id, arch="arm64", closed=[])
+
+    class DeliveryECR(ECR):
+        def get_authorization_token(self):
+            import base64
+            return {"authorizationData": [{"authorizationToken": base64.b64encode(b"AWS:dummy").decode()}]}
+        def close(self):
+            state.closed.append("ecr")
+
+    ecr = DeliveryECR()
+    ecs.close = lambda: state.closed.append("ecs")
+    def client(name, **kwargs):
+        state.clients.append(name)
+        return {"ecs": ecs, "ecr": ecr}[name]
+    monkeypatch.setattr(release_module.boto3, "Session", lambda **kwargs: SimpleNamespace(client=client))
+    def output(command, **kwargs):
+        state.commands.append(command)
+        if command[0] == "gh":
+            head = state.heads.pop(0)
+            if isinstance(head, Exception):
+                raise head
+            return head.encode()
+        return (state.actual_id if command[-1] == "{{.Id}}" else state.arch).encode()
+    monkeypatch.setattr(release_module.subprocess, "check_output", output)
+    monkeypatch.setattr(release_module.subprocess, "run", lambda command, **kwargs: state.commands.append(command))
+    original = Release
+    monkeypatch.setattr(release_module, "Release", lambda **kwargs: original(
+        **kwargs, timeout=8, poll_seconds=1, clock=clock, sleep=clock.sleep))
+    monkeypatch.chdir(tmp_path)
+    state.manifest = tmp_path / "release-manifest.json"
+    return state
+
+
+def test_github_publishes_tested_image_once_then_hands_off(github_delivery):
+    state = github_delivery
+    release_module.github_release(state.values)
+    manifest = json.loads(state.manifest.read_text())
+    assert manifest["outcome"] == "running" and manifest["image_digest"] == NEW
+    assert manifest["tested_image_id"] == state.values["TESTED_IMAGE_ID"]
+    assert [c[1] for c in state.commands if c[0] == "docker"].count("push") == 1
+    assert not any("build" in c for c in state.commands)
+    tagged = next(c for c in state.commands if c[:2] == ["docker", "tag"])
+    assert tagged[2] == state.values["TESTED_IMAGE_ID"]
+    assert state.ecs.trace.index(("stopped", "old-task")) < state.ecs.trace.index(("update", 1, None))
+    assert set(state.closed) == {"ecr", "ecs"}
+
+
+@pytest.mark.parametrize("late", [False, True])
+def test_github_skips_superseded_commit_without_stopping_service(github_delivery, late):
+    state = github_delivery
+    state.heads = [state.values["RELEASE_COMMIT"], "b" * 40] if late else ["b" * 40]
+    release_module.github_release(state.values)
+    assert json.loads(state.manifest.read_text())["outcome"] == "superseded"
+    assert not state.ecs.trace and state.ecs.count == 1
+    if not late:
+        assert not state.clients
+        assert not any(c[0] == "docker" for c in state.commands)
+
+
+@pytest.mark.parametrize("late", [False, True])
+def test_github_main_lookup_failure_never_stops_service(github_delivery, late):
+    state = github_delivery
+    failure = RuntimeError("GitHub unavailable")
+    state.heads = [state.values["RELEASE_COMMIT"], failure] if late else [failure]
+    with pytest.raises(RuntimeError, match="unavailable"):
+        release_module.github_release(state.values)
+    assert not state.ecs.trace and state.ecs.count == 1
+
+
+def test_github_rejects_wrong_loaded_image_before_aws(github_delivery):
+    state = github_delivery
+    state.actual_id = OLD
+    with pytest.raises(ReleaseError, match="differs from the tested"):
+        release_module.github_release(state.values)
+    assert not state.clients and not state.ecs.trace
+
+
+def test_github_rejects_wrong_architecture_before_push_or_handoff(github_delivery):
+    state = github_delivery
+    state.arch = "amd64"
+    with pytest.raises(ReleaseError, match="ARM64"):
+        release_module.github_release(state.values)
+    assert not state.ecs.trace
+    assert not any(c[:2] == ["docker", "push"] for c in state.commands)
+    assert state.commands[-1][:2] == ["docker", "logout"]
+    assert set(state.closed) == {"ecs", "ecr"}
+
+
+def test_github_existing_digest_uses_pull_without_publish(github_delivery):
+    state = github_delivery
+    state.values.update(ROLLBACK_DIGEST=NEW, GITHUB_EVENT_NAME="workflow_dispatch")
+    release_module.github_release(state.values)
+    assert any(c[:2] == ["docker", "pull"] for c in state.commands)
+    assert not any(c[:2] in (["docker", "push"], ["docker", "tag"]) for c in state.commands)
+    assert json.loads(state.manifest.read_text())["outcome"] == "running"
+
+
+def test_github_keeps_intentionally_paused_service_stopped(github_delivery):
+    state = github_delivery
+    state.ecs.count, state.ecs.records = 0, {}
+    release_module.github_release(state.values)
+    assert json.loads(state.manifest.read_text())["outcome"] == "staged"
+    assert state.ecs.count == 0
+
+
+def test_github_handoff_failure_restores_previous_revision(github_delivery):
+    state = github_delivery
+    state.ecs.failure = "lost_start_ack"
+    with pytest.raises(RuntimeError, match="lost acknowledgment"):
+        release_module.github_release(state.values)
+    assert json.loads(state.manifest.read_text())["outcome"] == "failed_restored"
+    assert state.ecs.count == 1 and state.ecs.revision == "old"
+
+
+@pytest.mark.parametrize("name,value", [("GITHUB_REF", "refs/heads/other"),
+    ("GITHUB_EVENT_NAME", "pull_request"), ("RELEASE_COMMIT", "bad"), ("ROLLBACK_DIGEST", "latest")])
+def test_github_rejects_invalid_event_or_identity_before_aws(github_delivery, name, value):
+    state = github_delivery
+    state.values[name] = value
+    with pytest.raises(ReleaseError):
+        release_module.github_release(state.values)
+    assert not state.clients and not state.ecs.trace

@@ -20,7 +20,7 @@ background worker with outbound SEC/Yahoo access and no inbound API.
 | State stack | Raw S3, four tables/indexes, Filings SNS, failed-work SQS, application ECR |
 | Runtime stack | Network, cluster/service, baseline task definition, roles, logs and alarms |
 | GitHub release | Digest-pinned application revisions matching baseline configuration except image |
-| Operator | Reviewed configuration, company inputs, readiness, approval and infrastructure maintenance |
+| Operator | Reviewed configuration, company inputs, initial readiness and infrastructure maintenance |
 
 Task role accesses application data; execution role pulls images/writes logs;
 release role publishes images/updates this service. Release cannot deploy CDK,
@@ -41,7 +41,7 @@ baseline's `FILING_READY_TOPIC_ARN` setting.
    filter. Stop ingestion and wait for every observed service task to be STOPPED.
 2. Commit/review the changes and require successful main CI, including rebuilt
    ARM64 lifecycle checks. While ingestion remains stopped, enable delivery and
-   manually stage with `activate=false`. Approve the reviewed run and record its
+   manually stage with `activate=false`. Inspect the reviewed run and record its
    new image digest; disable delivery again after staging. A stopped task can
    carry the old baseline temporarily, but must not be started with it.
 3. Save that compatible image digest in `infra/cdk/config.prod.json`. Select both
@@ -80,6 +80,86 @@ Keep a rollback image compatible with filing PUBLISH work, new checkpoints and
 `FILING_READY_TOPIC_ARN`; do not restore an older image blindly. No data reset,
 cutoff adjustment, company reseed or historical notification replay is needed.
 See [FILING_READY](FILING_READY.md) for exact event contracts and limits.
+
+## Supporting image recovery
+
+The supporting-images v1 release keeps filing admission and FilingReady 1.0
+unchanged, but image-bearing snapshots require compatible consumers. This
+procedure is prepared, not executed. The helper is intentionally scoped to ASML
+`0001628280-26-065813`, BAC `0000070858-26-000481`, UNH
+`0000731766-26-000255`, and CMC `0000022444-26-000065`.
+
+1. Review/commit the changes in finbot-filings, finbot-earnings and
+   finbot-filing-evals. Pass each repository's checks. Rebuild ingestion and run
+   its offline container lifecycle suite. Build the earnings Lambda asset with
+   its pinned Linux Pillow wheel. Deploy/update compatible downstream consumers
+   before allowing image-bearing events; preserve the current disabled queue
+   setting unless separately activating that service.
+2. Pause automatic ingestion delivery (`FINBOT_DELIVERY_ENABLED=false`) and
+   any active earnings consumption. Stop ingestion and wait for every service
+   task to reach STOPPED. Record the current task definition/digest. Stage the
+   compatible ingestion release at desired count zero using the normal delivery
+   procedure; `activate=false` preserves zero only if the service is already
+   stopped. Do not change the SEC cutoff, reset tables or delete raw objects.
+3. From this repository, prepare a new read-only preview. The private config
+   supplies account/contact; normal profile credentials stay outside output:
+
+   ```bash
+   .venv/bin/python scripts/recover_supporting_images.py --profile default --manifest /private/tmp/finbot-supporting-images-review.json
+   ```
+
+   This verifies the account, stopped service and pinned task, reads strong
+   canonical records and fresh SEC package metadata/routing evidence, and reads
+   original HTML from its canonical S3 objects. It downloads no image files and
+   performs no cloud writes. Inspect `image_count`, every proposed image ID,
+   `stored_html_sha256`, original membership, and original snapshot state in the
+   manifest. Expect 12 ASML, 19 BAC, 16 UNH page images plus CMC content graphics;
+   the actual fresh source-backed preview is authoritative. Existing image rows,
+   unrelated document omissions, pending unpublished snapshots or conflicting
+   state are refused rather than adopted. Preserve this exact manifest.
+4. When the preview is approved and the service is still stopped, apply that
+   same manifest:
+
+   ```bash
+   .venv/bin/python scripts/recover_supporting_images.py --profile default --manifest /private/tmp/finbot-supporting-images-review.json --execute
+   ```
+
+   The helper revalidates source hashes, directory membership, canonical rows and
+   deployment before writing. It conditionally creates only the reviewed image
+   children/SELECT checkpoints, then commits complete filing membership before
+   restart. Original HTML, prior immutable event rows and first enumeration
+   counts/times are unchanged. Interrupted execution can resume with the same
+   manifest while stopped; do not delete partial records or regenerate a plan
+   to bypass an error. If any verification fails, keep ingestion stopped.
+5. Confirm the returned queued image IDs match the reviewed manifest. Restore
+   delivery and explicitly activate the compatible digest. Normal ingestion
+   acquires the images through the shared SEC limiter and immutable storage
+   path. Verify all required images are stored, new complete snapshot IDs are
+   published, prior snapshots survive, and no image is terminal/dead-lettered.
+   A failed required image must block that filing's new readiness notification.
+6. Update the local golden bundle in a separately staged copy from those new
+   stored snapshots, including image bytes, source manifests/document inventory
+   and integrity. Preserve human label edits/notes and the original bundle;
+   do not append loose images, hand-edit snapshot hashes or reuse old integrity.
+   This cloud helper intentionally does not migrate a golden bundle. Validate
+   the refreshed copy with the review package before replacing the canonical
+   bundle, rebuild the catalog, restart Streamlit and inspect ASML/BAC/UNH page
+   tables. Until that refresh, the old local bundle will still lack images.
+
+Do not roll back to an image-unaware consumer once image-bearing snapshots are
+published. The earnings adapter uses separate image count/byte limits, a new
+prompt/config version, and review-required visual evidence; collecting images
+does not certify extracted values or automatically confirm human labels.
+
+Local validation (2026-10-21): 933 package tests passed, nine opt-in container
+tests skipped in the normal suite and all nine passed explicitly against the
+rebuilt ARM64 image. Wheel, compileall, dependency and whitespace checks passed.
+Recovery tests exercised preview invariance, changed-source/task/manifest refusal,
+lost-create-acknowledgment resume, preserved first enumeration facts and normal
+worker publication without repeating stored-source downloads. Read-only scanning
+of the current local bundle selected 12/19/16 ASML/BAC/UNH page images and three
+CMC content graphics. This is not a fresh SEC/S3 recovery preview. No recovery,
+deployment, paid inference, shared-data write or cloud resource mutation ran.
 
 ## SEC request metric cost reduction
 
@@ -264,8 +344,9 @@ Append `:environment:production` to the returned prefix, including permanent IDs
 when immutable subjects are enabled. `use_default=true` does not imply name-only
 subjects. Recorded production subject:
 `repo:ilancooke@8453151/finbot-filings@1341430877:environment:production`.
-Trust also requires `aud=sts.amazonaws.com`. Protect production with required
-reviewer/main-only branch policy. No static AWS keys belong in variables/images.
+Trust also requires `aud=sts.amazonaws.com`. Protect production with the main-only
+environment branch policy. Routine delivery has no required reviewer or wait timer
+(ADR 025). No static AWS keys belong in variables/images.
 
 Supported VPC: two public subnets (region suffixes a/b), public task IP, HTTPS-only
 egress, no ingress/NAT/load balancer. Verify target AZ availability; private egress
@@ -402,26 +483,54 @@ universe. No finite diagnostic was run for this data-only expansion.
 [infra/github](../infra/github/README.md) owns setup files and exact CLI commands.
 `FINBOT_DELIVERY_ENABLED` is repository-scoped; target/activation variables are
 production-environment-scoped. `FINBOT_ACTIVATION_APPROVED` permits active delivery;
-manual `activate=true` additionally requests startup of a stopped service. Each
-production release requires environment approval. Setting flags does not dispatch,
-stop or cancel work.
+manual `activate=true` additionally requests startup of a stopped service. Routine
+delivery has no environment-review approval. The saved environment configuration
+must be applied once to remove the previous reviewer requirement; committing it
+does not change live GitHub settings. Setting flags does not dispatch, stop or
+cancel work.
 
-CI runs offline application/CDK/workflow/rebuilt ARM64 checks without AWS credentials.
-Delivery follows successful same-repository main-push CI or manual main dispatch,
-serializes without cancelling handoffs and obtains OIDC only in the release job.
+For normal application changes, commit/push directly to `main`. Leave delivery
+enabled. `.github/workflows/ci.yml` owns the whole sequence: its credential-free
+validation job runs application/CDK/workflow checks and builds/tests one ARM64
+image. Only a successful main push or manual main dispatch can enter its production
+release job. Pull requests, when used, validate only; no branch/PR workflow is
+required. The tested image is transferred within the same run/attempt, its Docker
+image ID is checked, and that image is tagged/pushed to immutable ECR storage and
+deployed by resolved digest. Deployment never rebuilds it.
+
+The release job serializes without cancelling active handoffs and obtains OIDC
+only in the production environment. `scripts/release.py --github` owns image
+publication and ECS handoff/restoration; there is no second delivery wrapper or
+workflow. Before publication and again immediately before the first ECS mutation,
+it reads current `main` through GitHub. A superseded commit records `superseded`
+and leaves the service alone. Lookup errors fail before interruption. If main
+advances after handoff starts, the in-progress release finishes or restores; the
+newer successful run follows. GitHub may replace pending release jobs, so each
+queued job checks the actual branch head rather than relying on queue order.
+
 Stopped environments stay stopped on ordinary delivery. **`activate=false` does
 not stop an already active service.** Explicitly stop before incompatible staging.
+The repository pause flag is an emergency/maintenance switch, not a daily release
+step. It prevents future eligible release jobs; verify existing jobs have finished
+before any manual maintenance. Failed validation leaves the running service alone.
 
-To activate or roll back to an already validated compatible digest:
+To retry the current main commit without a new push, dispatch `ci.yml` with defaults.
+Retrying only a failed release job reuses its validation job's image artifact
+(retained one day); dispatch a fresh run if that artifact has expired.
+To explicitly activate or roll back to an already validated compatible digest:
 
 ```bash
-gh workflow run deploy.yml --repo ilancooke/finbot-filings --ref main \
+gh workflow run ci.yml --repo ilancooke/finbot-filings --ref main \
   -f activate=true -f image_digest=sha256:REVIEWED_DIGEST
 ```
 
-Inspect commit/digest/input and pending deployment before approval; inspect the
-retained manifest afterward. Selecting an existing digest avoids rebuilding between
-validation and activation. `release.py` validates baseline/roles/platform/target
+Review commit/digest/input before dispatch; inspect the retained manifest afterward.
+Manual dispatch runs the same validation gate. An existing digest selects the
+previously validated image for deployment; it is pulled/checked as ARM64 rather
+than replaced by the image built for current-main validation. Dispatch from current
+`main` with the compatible prior digest; do not rerun a superseded commit to roll
+back. Leave `activate=false` to preserve an intentionally paused service.
+`release.py` validates baseline/roles/platform/target
 and digest before interruption. Controlled handoff/restoration uses:
 
 1. Register replacement; retain predecessor revision/digest/count.
@@ -475,6 +584,7 @@ reconcile against an old image.
 | `failed_restored` | Independently verify prior revision/digest/health; workflow remains failed |
 | `failed_restore_unverified` / missing checkpoint | Pause, scale zero, prove STOPPED, inspect logs/events; restore a retained compatible digest through the same path |
 | `staged` | Zero count is intentional; delivery did not activate |
+| `superseded` | Main advanced before handoff; no ECS mutation occurred; inspect the newer run |
 
 Do not reset terminal facts/delete raw objects to repair service state.
 

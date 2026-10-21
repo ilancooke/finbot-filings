@@ -90,6 +90,9 @@ owners and must be reconciled deliberately.
 This reduces overhead for one maintainer. Revisit for shared infrastructure,
 separate platform ownership or different permissions/release lifecycles.
 
+Routine application automation is specified by [ADR 025](#adr-025); it preserves
+this manual infrastructure boundary.
+
 <a id="adr-008"></a>
 ## ADR 008 — Conservative automatic recovery
 
@@ -204,8 +207,15 @@ extraction. Preserve policy/skip/unresolved reasons in existing checkpoints/logs
 no separate manifest/review store is needed. Selected documents retain the 64-MiB
 acquisition limit; primary routing inspection is bounded to 4 MiB.
 
-This intentionally narrows coverage: decks can contain unique guidance/KPIs and
-image-only HTML is not fully preserved by retaining its markup. Completion means
+Update (2026-10-21): the linked-image exclusion is superseded only for supporting
+rasters of already-selected HTML, as specified in ARCHITECTURE.md's Supporting
+images section. Preserve page images and ambiguous material graphics while
+excluding confidently decorative assets. No OCR, model call or financial-value
+extraction belongs in ingestion. Existing snapshots require explicit scoped
+recovery; activate compatible consumers first. Filing admission remains v3.
+
+This intentionally narrows coverage: decks can contain unique guidance/KPIs.
+Completion means
 selected documents, not full-package or complete earnings coverage. Recovery also
 filters older pending acquisition/publication. Historical published objects/events
 are not retracted, and terminal/dead-letter facts are neither deleted nor redriven.
@@ -523,3 +533,38 @@ is needed. Historical ticker metric points remain queryable; new image activatio
 ends their emission, and subsequent hours without points incur no custom metric
 charge. Rollback to the previous emission code resumes those charges. Revisit only
 if a measured operational need justifies budgeted ticker-specific metric series.
+
+
+<a id="adr-025"></a>
+## ADR 025 — Push main to validate and deploy with automated singleton handoff
+
+**Accepted 2026-10-21; implemented locally, live GitHub configuration pending.**
+The maintainer works directly on `main`. Routine application releases should need
+one push, with no manual deployment toggle, CI wait, environment approval or ECS
+shutdown. Keep one GitHub Actions workflow and one release helper rather than add
+an orchestrator, persistent deploy service or distributed lease.
+
+`ci.yml` runs offline application, infrastructure and workflow checks and builds/tests
+one ARM64 image. A dependent, serialized production job transfers that exact image,
+checks its image ID, publishes it under an immutable tag and deploys the resolved
+digest. Validation has no AWS credentials; the main-only production job uses the
+existing scoped OIDC role. Optional pull requests validate only. Manual dispatch
+supports retries, compatible digest rollback and explicit activation of a stopped
+service through the same validation gate. Remove the production environment's
+routine reviewer/wait timer while retaining its main-only branch restriction and
+one normally enabled emergency delivery flag. Initial readiness approval remains.
+
+`release.py` absorbs the publication wrapper and keeps the existing STOPPED proof,
+separate revision/count updates, health/digest verification and bounded restoration.
+Preserve desired count zero for maintenance. Check current main before publication
+and immediately before the first ECS mutation; superseded commits skip. Once a
+handoff begins, finish or restore without cancellation. A newer successful push
+follows; failed validation leaves the prior service running. A failed restoration
+still requires operator intervention, and forced runner termination can interrupt
+cleanup. This does not guarantee zero downtime or formal distributed exclusion.
+
+Keep ADR 008's graceful admission/drain, 120-second ECS stop timeout, 150-second
+startup quiet period and 300-second health startup allowance. Infrastructure,
+incompatible configuration/schema migrations and recovery operations retain their
+separate maintenance runbooks. Applying saved GitHub settings is a one-time rollout
+step, separate from committing this code; no AWS infrastructure change is needed.

@@ -63,14 +63,14 @@ def test_preview_is_read_only_then_reopens_exactly_two_and_normal_worker_publish
     async def finish():
         summary = await RecoveryService(seeded.worker).run_pass()
         assert summary.errors == summary.terminal == 0
-        assert len(system.s3.objects) == 4 and len(system.messages.events) == 2
+        assert len(system.s3.objects) == 5 and len(system.messages.events) == 2
         for accession in recovery.TARGETS:
             checkpoint = await system.db.filings.get_checkpoint(accession)
             assert checkpoint.enumeration_completed_at and checkpoint.ready_published_at
         worker = system.worker()
         worker.discovery.selection = seeded.worker.discovery.selection
         await RecoveryService(worker).run_pass()
-        assert len(system.s3.objects) == 4 and len(system.messages.events) == 2
+        assert len(system.s3.objects) == 5 and len(system.messages.events) == 2
     run(finish())
 
 

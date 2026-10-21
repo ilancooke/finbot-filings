@@ -95,7 +95,8 @@ class IngestionWorker:
                     artifact = await self.artifacts.get(artifact_id)
                     stage = "ACQUIRE"
                     if artifact.stored_at is None:
-                        stored = await self.downloader.acquire(artifact, filing)
+                        image_options = {"required_image": True} if progress.selection_reason == "supporting_content_image" else {}
+                        stored = await self.downloader.acquire(artifact, filing, **image_options)
                         await self.control.checkpoint(lambda: self.artifacts.mark_stored(artifact_id,
                             stored.s3_uri, stored.stored_at, stored.content_type, stored.size_bytes),
                             operation="mark_stored", identity=artifact_id)

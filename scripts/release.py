@@ -1,15 +1,20 @@
 """Explicit stop/wait/start application release. Never provisions infrastructure.
 
-Imports are inert; CLI execution uses AWS. Tests inject clients and clocks.
+GitHub uses --github to publish the already tested image and release it. Direct
+CLI arguments support operator recovery. Imports are inert; execution uses AWS.
+Tests inject clients and clocks. Infrastructure remains a separate manual change.
 """
 import argparse
+import base64
 from copy import deepcopy
 from contextlib import closing, contextmanager
 import json
 import math
+import os
 from pathlib import Path
 import re
 import signal
+import subprocess
 import sys
 import time
 
@@ -193,7 +198,8 @@ class Release:
             taskDefinition=arn, desiredCount=0)
         self.await_revision(arn, digest, 0)
 
-    def deploy(self, digest, *, activate=False, activation_approved=False, source_commit=None):
+    def deploy(self, digest, *, activate=False, activation_approved=False, source_commit=None,
+               is_current=None):
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             raise ReleaseError("require resolved image digest")
         if activate and not activation_approved:
@@ -223,6 +229,12 @@ class Release:
         # Existing activation cannot be inferred merely from a repository push.
         if target_count and not activation_approved:
             raise ReleaseError("active releases require production-readiness approval")
+        # Check after preflight, immediately before the first ECS mutation. Once
+        # handoff starts it must finish (or restore), even if main advances.
+        if is_current is not None and not is_current():
+            self.record(outcome="superseded", checkpoint="skipped", source_commit=source_commit,
+                image_digest=digest)
+            return self.manifest
         args = registration(baseline)
         args["containerDefinitions"][0]["image"] = self.repository_uri + "@" + digest
         self.record(previous_revision=previous, previous_count=old_count, image_digest=digest,
@@ -268,16 +280,106 @@ class Release:
             raise
 
 
+def current_main(values):
+    """Fail closed on lookup errors; a stale queued release never changes ECS."""
+    repository = values["GITHUB_REPOSITORY"]
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise ReleaseError("invalid GitHub repository")
+    head = subprocess.check_output(
+        ["gh", "api", f"repos/{repository}/git/ref/heads/main", "--jq", ".object.sha"],
+        timeout=30).decode().strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", head):
+        raise ReleaseError("invalid main commit response")
+    return head == values["RELEASE_COMMIT"]
+
+
+def github_release(values):
+    """Publish one run's tested image; preserve the service's running/paused state."""
+    if values.get("GITHUB_REF") != "refs/heads/main" or values.get("GITHUB_EVENT_NAME") not in {"push", "workflow_dispatch"}:
+        raise ReleaseError("GitHub delivery requires a main push or main dispatch")
+    region, uri, commit = values["AWS_REGION"], values["FINBOT_REPOSITORY_URI"], values["RELEASE_COMMIT"]
+    if not re.fullmatch(r"\d{12}\.dkr\.ecr\." + re.escape(region) + r"\.amazonaws\.com/[a-z0-9/_-]+", uri):
+        raise ReleaseError("invalid target repository/region")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ReleaseError("invalid release commit")
+    digest = values.get("ROLLBACK_DIGEST", "")
+    if digest and not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ReleaseError("invalid rollback digest")
+    if not current_main(values):
+        Path("release-manifest.json").write_text(json.dumps({
+            "outcome": "superseded", "checkpoint": "skipped", "source_commit": commit}) + "\n")
+        print("Release skipped: main has advanced.")
+        return
+    # No build here: normal delivery uses the image exported by validation.
+    tested_id = values.get("TESTED_IMAGE_ID", "")
+    if not digest:
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", tested_id):
+            raise ReleaseError("missing tested image ID")
+        actual = subprocess.check_output(
+            ["docker", "image", "inspect", "finbot-ingestion:ci", "--format", "{{.Id}}"], timeout=30).decode().strip()
+        if actual != tested_id:
+            raise ReleaseError("loaded image differs from the tested image")
+    sdk = Config(connect_timeout=5, read_timeout=10, retries={"mode": "standard", "total_max_attempts": 3})
+    session = boto3.Session(region_name=region)
+    with closing(session.client("ecr", config=sdk)) as ecr, closing(session.client("ecs", config=sdk)) as ecs:
+        registry, repository = uri.split("/", 1)
+        auth = ecr.get_authorization_token()["authorizationData"][0]
+        username, password = base64.b64decode(auth["authorizationToken"]).decode().split(":", 1)
+        subprocess.run(["docker", "login", "--username", username, "--password-stdin", registry],
+            input=password.encode(), check=True, timeout=60)
+        try:
+            tag = None
+            if digest:
+                image = uri + "@" + digest
+                subprocess.run(["docker", "pull", "--platform", "linux/arm64", image], check=True, timeout=180)
+            else:
+                run, attempt = values["GITHUB_RUN_ID"], values["GITHUB_RUN_ATTEMPT"]
+                if not run.isdecimal() or not attempt.isdecimal():
+                    raise ReleaseError("invalid GitHub run identity")
+                tag = f"{commit}-{run}-{attempt}"
+                image = uri + ":" + tag
+                subprocess.run(["docker", "tag", tested_id, image], check=True, timeout=30)
+            arch = subprocess.check_output(
+                ["docker", "image", "inspect", image, "--format", "{{.Architecture}}"], timeout=30).decode().strip()
+            if arch != "arm64":
+                raise ReleaseError("image must be ARM64")
+            if not digest:
+                subprocess.run(["docker", "push", image], check=True, timeout=300)
+                response = ecr.describe_images(repositoryName=repository, imageIds=[{"imageTag": tag}])
+                digest = response["imageDetails"][0]["imageDigest"]
+            runner = Release(ecs=ecs, ecr=ecr, cluster=values["FINBOT_CLUSTER"], service=values["FINBOT_SERVICE"],
+                repository_uri=uri, baseline=values["FINBOT_BASELINE"], manifest_path="release-manifest.json")
+            runner.record(image_tag=tag, tested_image_id=tested_id if tag else None)
+            runner.deploy(digest, activate=values.get("ACTIVATE") == "true",
+                activation_approved=values.get("FINBOT_ACTIVATION_APPROVED") == "true",
+                source_commit=commit, is_current=lambda: current_main(values))
+            print(f"Release outcome: {runner.manifest['outcome']}")
+        finally:
+            subprocess.run(["docker", "logout", registry], check=False, timeout=30)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--github", action="store_true", help="release this workflow run's tested image using GitHub environment variables")
     for arg in ("region", "cluster", "service", "repository-uri", "baseline", "image-digest"):
-        parser.add_argument("--" + arg, required=True)
+        parser.add_argument("--" + arg)
     parser.add_argument("--manifest", default="release-manifest.json")
     parser.add_argument("--timeout", type=float, default=1200)
     parser.add_argument("--activate", action="store_true")
     parser.add_argument("--activation-approved", action="store_true")
     parser.add_argument("--source-commit")
     args = parser.parse_args(argv)
+    if args.github:
+        try:
+            with release_signals():
+                github_release(os.environ)
+            return 0
+        except (Exception, KeyboardInterrupt) as exc:
+            print(f"Release failed: {type(exc).__name__}; inspect release-manifest.json if present", file=sys.stderr)
+            return 1
+    for arg in ("region", "cluster", "service", "repository_uri", "baseline", "image_digest"):
+        if not getattr(args, arg):
+            parser.error("required for direct releases: --" + arg.replace("_", "-"))
     if not re.fullmatch(r"\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9/_-]+", args.repository_uri):
         parser.error("invalid private ECR repository URI")
     account, region = args.repository_uri.split(".")[0], args.repository_uri.split(".")[3]

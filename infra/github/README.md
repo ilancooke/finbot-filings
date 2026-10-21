@@ -5,12 +5,36 @@ These configuration files are the reviewed GitHub setup inputs for the
 using the standard GitHub CLI; no custom script or console setup is required.
 These inputs are not CloudFormation resources and are applied separately from CDK.
 
-`production-environment.json` names `ilancooke` (verified GitHub user ID `8453151`)
-as the required deployment reviewer and selects custom deployment branch rules.
-Self-review is allowed so the sole operator can approve their own workflow runs.
-`production-branch-policy.json` allows the branch `main`; it does not allow tags.
-After delivery is enabled, production release jobs wait for the operator's approval.
-This approval does not replace the separate production-readiness/activation decision.
+`production-environment.json` removes required reviewers and the wait timer while
+selecting custom deployment branch rules. `production-branch-policy.json` allows
+only branch `main`, with no tags. The scoped AWS OIDC trust still requires this
+production environment. After setup, a direct push to `main` runs validation and
+automatic application delivery in `ci.yml`; no per-release approval is required.
+Initial production readiness and explicit activation remain separate decisions.
+
+## Upgrade an existing deployment
+
+These are one-time setup steps, not the routine release process:
+
+1. Before publishing the consolidated workflow, pause delivery with the repository
+   flag below and verify no old release is running or waiting for approval. Let
+   active handoffs finish; cancel obsolete approval-waiting jobs. Keep the service
+   running. This avoids overlapping an old workflow with the replacement.
+2. Publish the reviewed changes directly to `main` and require the new `CI` run to
+   pass. The paused flag skips its release job; it does not stop ingestion.
+3. Apply the environment PUT below to remove the old required reviewer. Verify the
+   existing branch policy still permits only branch `main`; do not POST a duplicate.
+   Verify production variables and OIDC target settings; preserve the approved
+   activation flag and current baseline ARN. No AWS/CDK change is required.
+4. Set the repository delivery flag to `true` and dispatch `ci.yml` from current
+   `main` with `activate=false`. This replaces a running worker automatically or
+   stages a stopped service. Inspect the run and retained release manifest.
+5. Leave delivery enabled. Subsequent pushes to `main` validate and deploy without
+   manual toggles, approvals or service shutdown commands.
+
+Live GitHub settings are not changed by committing these files. The one-time
+configuration rollout and first release must be authorized separately from local
+implementation. Existing intentionally paused services remain stopped.
 
 ## Initial setup
 
@@ -81,12 +105,10 @@ job condition reads that flag at repository scope. Keep it unset/false until cod
 publication, CI and delivery target verification are complete. Applying these
 variables alone does not run a workflow or activate ingestion.
 
-## Enable staged delivery after CI passes
+## Enable automatic delivery
 
-The production environment and its targets must be verified, and the intended
-main-branch commit must pass all CI checks, including workflow lint and ARM64
-container/lifecycle tests. Then apply `repository-variables.env` at repository
-scope (omit `--env`):
+After target settings and production readiness are verified, apply the repository
+flag at repository scope (omit `--env`):
 
 ```bash
 gh variable set \
@@ -94,59 +116,56 @@ gh variable set \
   --env-file infra/github/repository-variables.env
 ```
 
-This file sets `FINBOT_DELIVERY_ENABLED=true`. Future successful main-push CI runs
-can create production release jobs that wait for reviewer approval. Changing this
-variable does not rerun an already skipped delivery job. The first staged release
-can be dispatched manually from `main` with `activate=false` after verifying the
-flag:
+This sets `FINBOT_DELIVERY_ENABLED=true`. Leave it enabled for daily work. A push
+to `main` runs the one workflow's checks and ARM64 lifecycle tests, then its
+serialized production job publishes the tested image and calls `release.py`.
+It never rebuilds the deployment image. Each release checks current main before
+publication and again before the first ECS mutation; superseded commits skip.
+Active handoffs finish or restore without cancellation. Inspect the retained
+`release-manifest.json` artifact for the result and exact digest/revisions.
+
+Changing the flag does not rerun an already skipped job. Dispatch the current
+`main` to retry validation/delivery or perform the first post-setup release:
 
 ```bash
-gh workflow run deploy.yml \
+gh workflow run ci.yml \
   --repo ilancooke/finbot-filings \
   --ref main \
   -f activate=false
 ```
 
-The job first waits for the production reviewer. After approval, it runs offline
-application/image tests, authenticates to AWS using OIDC, publishes the ARM64
-image and stages its ECS revision. Inspect the selected commit and pending job
-before approval. Keep the production environment's `FINBOT_ACTIVATION_APPROVED=false` while
-production-readiness work remains. A staged release to a stopped service publishes
-an image and updates its ECS task revision while retaining desired count zero.
-This does not authorize production activation or resolve the open image finding.
+`activate=false` preserves a running service's desired count one and a paused
+service's desired count zero. It does not stop a running service for maintenance.
+Initial activation additionally requires `FINBOT_ACTIVATION_APPROVED=true` and an
+explicit dispatch with `activate=true`. Keep that environment flag false until
+readiness is complete. The checked-in true value records the existing production
+readiness decision; do not apply it blindly to a new environment.
 
-Inspect a dispatched run and its pending environment review using its run ID:
-
-```bash
-gh run view RUN_ID --repo ilancooke/finbot-filings
-gh api repos/ilancooke/finbot-filings/actions/runs/RUN_ID/pending_deployments
-```
-
-After checking the selected commit and activation input, the required reviewer
-can approve the staged release through the standard API. Replace `RUN_ID` with
-the inspected run ID and confirm the pending response's production environment
-ID matches `23924540932`:
+To activate or roll back using a previously validated compatible ARM64 image,
+review the digest and dispatch from current `main`:
 
 ```bash
-gh api --method POST \
-  repos/ilancooke/finbot-filings/actions/runs/RUN_ID/pending_deployments \
-  -F 'environment_ids[]=23924540932' \
-  -f state=approved \
-  -f comment='Approve staged release with ingestion stopped (activate=false).'
+gh workflow run ci.yml \
+  --repo ilancooke/finbot-filings \
+  --ref main \
+  -f activate=true \
+  -f image_digest=sha256:REVIEWED_DIGEST
 ```
 
-This approval applies to that run only. The environment ID is a GitHub resource
-identifier, not an AWS resource or credential. If the environment is recreated,
-use the ID returned by the pending-deployments response instead.
+The same validation gate runs; the selected existing image is pulled and checked
+rather than rebuilt. Use `activate=false` when a paused service should stay paused.
+Inspect results with `gh run view RUN_ID --repo ilancooke/finbot-filings`.
 
-To disable future delivery jobs, set the repository variable back to `false`:
+For emergency pause or infrastructure/data maintenance, disable future releases:
 
 ```bash
 gh variable set FINBOT_DELIVERY_ENABLED \
   --repo ilancooke/finbot-filings --body false
 ```
 
-Disabling the flag does not cancel an in-progress release or stop an active service.
+The flag does not cancel an eligible, queued or running release and does not stop
+ingestion. Verify release jobs have finished before manual maintenance. Restore
+true afterward; normal application changes do not require this procedure.
 
 The deployed AWS role must trust the exact repository subject returned by GitHub,
 including immutable owner/repository IDs. See the runbook's OIDC verification;
@@ -155,9 +174,9 @@ do not change GitHub's subject format to accommodate an outdated IAM trust polic
 References: [environment API](https://docs.github.com/en/rest/deployments/environments#create-or-update-an-environment),
 [branch-policy API](https://docs.github.com/en/rest/deployments/branch-policies#create-a-deployment-branch-policy),
 [`gh api --input`](https://cli.github.com/manual/gh_api),
-and [`gh variable set --env-file`](https://cli.github.com/manual/gh_variable_set).
-Manual dispatch uses [`gh workflow run`](https://cli.github.com/manual/gh_workflow_run).
-Review uses the [pending-deployments API](https://docs.github.com/en/rest/actions/workflow-runs#review-pending-deployments-for-a-workflow-run).
+[`gh variable set --env-file`](https://cli.github.com/manual/gh_variable_set),
+[`gh workflow run`](https://cli.github.com/manual/gh_workflow_run),
+and [workflow concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 
 ## FilingReady topic cutover
 

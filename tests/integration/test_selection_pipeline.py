@@ -360,7 +360,7 @@ def test_published_and_terminal_history_are_untouched(system, monkeypatch):
     run(scenario())
 
 
-def test_selected_oversized_release_retains_terminal_failure_path(system, monkeypatch):
+def test_selected_oversized_release_blocks_enumeration_before_readiness(system, monkeypatch):
     worker, filing, parsed, downloads = selected_worker(system, monkeypatch)
     original = system.sec.download_document
     def oversized(url, *, max_bytes, context=None):
@@ -370,9 +370,11 @@ def test_selected_oversized_release_retains_terminal_failure_path(system, monkey
     monkeypatch.setattr(system.sec, 'download_document', oversized)
     async def scenario():
         await worker.discover_company(COMPANY)
-        progress = await system.db.artifacts.get_checkpoint(ACCESSION + '/release.htm')
-        assert progress.terminal_stage == 'ACQUIRE' and progress.acquisition_failures == 1
+        progress = await system.db.filings.get_checkpoint(ACCESSION)
+        assert progress.terminal_stage == 'ENUMERATE' and progress.enumeration_failures == 1
         assert progress.dead_lettered_at is not None
+        assert progress.enumeration_completed_at is None
+        assert await system.db.artifacts.get(ACCESSION + '/release.htm') is None
         assert sum(op == 'SendMessage' for op, _ in system.messages.events) == 1
     run(scenario())
 

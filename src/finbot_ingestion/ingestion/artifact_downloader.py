@@ -3,6 +3,8 @@
 import logging
 
 from finbot_ingestion.selection.policy import POLICY_VERSION, image_only_html
+from finbot_ingestion.selection.images import MAX_IMAGE_BYTES, RASTER_SUFFIXES
+from finbot_ingestion.sec.errors import SECDataError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -14,20 +16,28 @@ class ArtifactDownloader:
         self.sec, self.execution, self.store = sec_client, sec_execution, store
         self.max_artifact_bytes = max_artifact_bytes
 
-    async def acquire(self, artifact, filing, *, downloaded=None):
+    async def acquire(self, artifact, filing, *, downloaded=None, required_image=False):
         stored = await self.store.inspect(artifact, filing)
         if stored is not None:
             return stored
         if downloaded is None:
             downloaded = await self.execution.call(self.sec.download_document, url=artifact.sec_url,
-                max_bytes=self.max_artifact_bytes, context={"ticker": filing.ticker,
+                max_bytes=min(self.max_artifact_bytes, MAX_IMAGE_BYTES) if artifact.filename.lower().endswith(RASTER_SUFFIXES) else self.max_artifact_bytes, context={"ticker": filing.ticker,
                     "cik": filing.company_cik, "accession_number": filing.accession_number,
                     "artifact_id": artifact.artifact_id})
         elif downloaded.source_url != artifact.sec_url or downloaded.size_bytes > self.max_artifact_bytes:
             raise ValueError("routing bytes disagree with the artifact URL or size bound")
+        if required_image:
+            content = downloaded.content
+            suffix = artifact.filename.lower().rsplit(".", 1)[-1]
+            valid = ((suffix in {"jpg", "jpeg"} and content.startswith(b"\xff\xd8\xff"))
+                     or (suffix == "png" and content.startswith(b"\x89PNG\r\n\x1a\n"))
+                     or (suffix == "gif" and content.startswith((b"GIF87a", b"GIF89a"))))
+            if len(content) > MAX_IMAGE_BYTES or not valid:
+                raise SECDataError("supporting image bytes disagree with the raster format or byte bound")
         if (artifact.filename.lower().endswith((".htm", ".html"))
                 and image_only_html(downloaded.content)):
-            LOGGER.warning("Selected HTML has little text and relies on excluded images", extra={
+            LOGGER.info("Selected HTML relies on supporting images", extra={
                 "operation": "acquisition_selection", "artifact_id": artifact.artifact_id,
                 "policy_version": POLICY_VERSION, "reason": "possible_image_only_content"})
         return await self.store.put_if_absent(artifact, filing, downloaded)

@@ -59,7 +59,11 @@ def wire_captures(system, monkeypatch):
     monkeypatch.setattr(system.sec, 'get_filing_index', lambda filing: packages[filing.accession_number])
     def download(url, *, max_bytes, context=None):
         name = url.rsplit('/', 1)[-1]
-        # Presentation/asset acquisition must fail the replay immediately.
+        # The generic release's ambiguous small raster is retained conservatively.
+        # Presentation assets and other unreferenced graphics still fail here.
+        if name == 'image_1.jpg' and CASES['generic_release'].accession.replace('-', '') in url:
+            downloads.append((name, max_bytes))
+            return DownloadedDocument(b'\xff\xd8\xffSynthetic raster', 'image/jpeg', url)
         layout = next((layout for layout, case in CASES.items() if name in (case.primary, case.release)), None)
         assert layout is not None
         downloads.append((name, max_bytes))

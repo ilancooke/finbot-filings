@@ -107,8 +107,49 @@ layouts remain unresolved. Clearly selected documents can proceed while ambiguou
 attachments are skipped. Bounded text inspection may warn about image-only HTML;
 there is no OCR, financial interpretation or fetching excluded attachments to
 classify them. Legitimate selected `.txt` releases remain allowed; submission
-bundles are excluded by accession-bundle identity. No linked images, stylesheets,
-scripts or investor-relations content are acquired.
+bundles are excluded by accession-bundle identity. The supporting-image exception
+below preserves selected document content; stylesheets, scripts and
+investor-relations content remain excluded.
+
+### Supporting images
+
+`selection/images.py` implements supporting-images v1, supplementing unchanged
+earnings-acquisition-v3 filing/document admission. A graphic is eligible only as
+an explicit `img src` dependency of selected HTML. Images in excluded decks and
+unreferenced directory graphics remain excluded. Decode declared HTML encodings
+and scan incrementally without building a large DOM. Never follow base URLs,
+external/cross-accession links, traversal, queries, CSS resources or SVG. Unsafe,
+missing or unsupported required references fail enumeration visibly.
+
+Preserve page-image sequences, smaller financial charts and ambiguous content
+graphics. A page image has declared width/height of at least 400px each; this
+positive evidence takes precedence over branding hints. Otherwise exclude a
+separator with a dimension at most 2px, explicit logo/icon/spacer/banner labels,
+or an image at most 40px high with aspect ratio at least 3:1 that repeats or
+occurs before 100 text characters. Missing dimensions or ambiguous names do not
+establish decoration. If one use requires a shared image, retain it once even
+when another use is decorative. These are conservative structural heuristics,
+not a guarantee of image semantics; some nonfinancial graphics will be retained.
+
+Inspect selected HTML before the enumeration checkpoint. Retain inspected bytes
+in a private temporary spool (128 MiB cumulative HTML per filing), reuse routing
+bodies, and store those exact bytes after membership commits. Each body retains
+the existing configurable 64-MiB maximum. No permanent body cache or transformed
+source is introduced. Incomplete enumeration retries can repeat source inspection;
+publication retries never redownload stored members. Required images are ordinary
+artifacts with SELECT/supporting_content_image checkpoints, limited to 128 per
+filing and 8 MiB per image. JPEG/PNG/GIF signatures must match filename format.
+All selected image objects/checkpoints must exist before FilingReady publication.
+The original HTML's image references retain document association and page order.
+
+FilingReady 1.0 fields and immutable storage layout remain unchanged. Consumers
+must handle supporting rasters separately from standalone document limits.
+`finbot-earnings` uses bounded image inputs and keeps visual evidence subject to
+human review; `finbot-filing-evals` renders verified local raster bytes with no
+external fetches. Deploy compatible consumers before activating acquisition.
+Older consumers reject images, so they are not compatible rollback targets for
+image-bearing snapshots. Existing completed packages remain unchanged until the
+explicit stopped-service recovery in DEPLOYMENT.md; no cutoff reset or label edit.
 
 Fresh known exclusions create no work. Unresolved filing routing removes pending
 enumeration eligibility through a selection checkpoint. Discovery and every
@@ -182,10 +223,11 @@ evidence store, ticker/filename classification rules or new checkpoint schema.
 
 A selected package retains its primary and individually identified results releases,
 periodic financial reports/statements, and financial/operating supplements.
-Presentations, transcripts, newspaper advertisements, graphics, bundles and unrelated
+Presentations, transcripts, newspaper advertisements, unreferenced graphics, bundles and unrelated
 files are excluded; ambiguous children are omitted while clear documents proceed.
-PDFs can qualify from labels without PDF interpretation. Unknown/image-only layouts
-remain a coverage limit. Persist only existing SELECT/EXCLUDE/UNRESOLVED checkpoints
+PDFs can qualify from labels without PDF interpretation. Unsupported layouts can
+still leave filing admission unresolved; selected HTML preserves supporting
+rasters under the exception above. Persist only existing SELECT/EXCLUDE/UNRESOLVED checkpoints
 with minimal reasons, including parent `earnings_6_k`; no evidence records/excerpts.
 
 V3 keeps domestic v2 selection unchanged and permits affirmative v1/v2 checkpoints
@@ -583,6 +625,12 @@ provider readiness; no inbound health API is exposed.
 CDK owns retained state and a stopped-by-default ARM64 runtime. GitHub owns tested
 application revisions through scoped OIDC; infrastructure remains manual. Keep
 one active process, immutable digest releases and the explicit STOPPED handoff.
+One `ci.yml` workflow validates direct main pushes and transfers the tested ARM64
+image to a serialized production release job. `scripts/release.py` owns publication,
+current-main checks and the existing stop/wait/start/restore sequence. Routine
+delivery requires no manual shutdown or environment approval after one-time
+GitHub setup; intentionally paused services stay paused. See ADR 025 and the
+[application delivery runbook](DEPLOYMENT.md#github-application-delivery-and-activation).
 Production deployment settings are tracked in `infra/cdk/config.prod.json`;
 account and contact inputs are supplied separately through the ignored local
 file. The loader permits only those private fields, preventing hidden overrides

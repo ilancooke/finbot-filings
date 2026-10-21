@@ -48,6 +48,13 @@ null. Every artifact must belong to the envelope's filing and company; artifact
 identity must agree with accession and filename. Preserve canonical S3 URI
 encoding from upstream.
 
+Selected HTML can include supporting JPEG/PNG/GIF artifacts. They use the same
+entry fields and must be stored before readiness; the original HTML's `img src`
+references identify parent documents and page order. Consumers must distinguish
+supporting rasters from standalone documents and apply separate bounds. This
+extends selected membership without changing schema 1.0. Image-unaware consumers
+must be updated before activating the supporting-images producer release.
+
 ### Readiness guarantees expected by the consumer
 
 The notification lists a nonempty complete selection with unique artifact IDs

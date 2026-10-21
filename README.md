@@ -246,11 +246,17 @@ Routing also recognizes descriptive same-package links outside exhibit tables,
 generic news/press releases and quarterly supplements tied to exact Item 2.02
 exhibit references, and explicitly labelled financial statements/supplementary
 sales data. See the [exact attachment rules](docs/ARCHITECTURE.md#filing-admission-and-document-selection).
-Decks, standalone images/logos, complete submission TXT bundles, unrelated exhibits
-and auxiliary files are skipped without downloading them. Legitimate selected text
+Decks, unreferenced graphics, decorative logos, complete submission TXT bundles,
+unrelated exhibits and auxiliary files are skipped. Selected HTML is inspected
+for supporting page images and content graphics before package membership is
+finalized. Only same-accession JPEG/PNG/GIF references present in the directory
+qualify. Page sequences and ambiguous material graphics are preserved; explicit
+branding, thin separators and repeated short headers are excluded. This is
+structural acquisition, with no OCR or financial-value extraction. See
+[supporting images](docs/ARCHITECTURE.md#supporting-images) for exact rules/bounds,
+consumer compatibility and temporary HTML spooling. Legitimate selected text
 releases are allowed. Unresolved exhibit roles are logged and skipped while clear
-selected documents proceed. Image-only HTML receives a coverage warning when the
-bounded text inspection detects it; no linked images, OCR or financial extraction.
+selected documents proceed.
 Primary routing/text inspection is limited to 4 MiB; larger/unsupported layouts
 stay unresolved. Acquisition still permits selected documents up to 64 MiB.
 
@@ -289,6 +295,9 @@ new evidence store or retained routing excerpt.
 
 Completed packages are not automatically re-enumerated when routing changes;
 previously omitted attachments require a separate scoped recovery operation.
+For ASML/BAC/UNH/CMC supporting images, use the stopped-service preview/execute
+procedure in [the image recovery runbook](docs/DEPLOYMENT.md#supporting-image-recovery).
+This does not update local golden bundles or human labels automatically.
 The operator-only `scripts/recover_earnings_attachments.py` previews and queues
 the four reviewed DAL/WFC/JNJ omissions. See the
 [targeted recovery steps](docs/DEPLOYMENT.md#targeted-dalwfcjnj-attachment-recovery).
@@ -728,11 +737,19 @@ npm run synth -- --no-lookups
 
 Use [DEPLOYMENT.md](docs/DEPLOYMENT.md) for real configuration and deployment;
 never deploy the default dummy inputs. CDK owns retained state and a runtime
-service at desired count zero. GitHub CI has no AWS credentials; delivery uses
-scoped OIDC, immutable tags/digests and an explicit STOPPED handoff. Stopped
+service at desired count zero. After the one-time [GitHub setup](infra/github/README.md),
+commit/push directly to `main` for routine application delivery. One
+[workflow](.github/workflows/ci.yml) validates the application/infrastructure and
+builds/tests an ARM64 image without AWS credentials. Its serialized release job
+publishes that same image and calls [release.py](scripts/release.py) through scoped
+OIDC. Superseded commits skip before handoff; active handoffs finish without
+cancellation. No routine deployment approval or manual stop is required.
+Delivery uses immutable tags/digests and an explicit STOPPED handoff. Stopped
 environments stay stopped until separate readiness approval and manual activation.
 Delivery settles a new task revision at desired count zero before separately
 scaling to one; restoration follows the same sequence.
+Expect a brief interruption and the existing 150-second startup quiet period.
+Infrastructure changes and data recovery remain separate operator procedures.
 The customized account/region bootstrap template is version-controlled under
 [infra/bootstrap](infra/bootstrap/README.md), with its pinned origin, SSE-S3
 policy, explicit deployment parameters and update procedure. Bootstrap remains a separately

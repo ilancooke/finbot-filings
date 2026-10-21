@@ -34,22 +34,22 @@ def test_captured_layouts_store_exact_artifacts_and_survive_restart(system, monk
         for filing in filings.values():
             await system.db.filings.create_if_absent(filing)
             await worker.process_filing(filing.accession_number)
-        assert len(system.s3.objects) == 4 and len(system.messages.events) == 2
-        expected = {name for case in CASES.values() for name in (case.primary, case.release)}
+        assert len(system.s3.objects) == 5 and len(system.messages.events) == 2
+        expected = {name for case in CASES.values() for name in (case.primary, case.release)} | {'image_1.jpg'}
         assert sorted(name for name, _ in downloads) == sorted(expected)
         for name, bound in downloads:
-            if name != CASES['wrapped_description'].release:
+            if name not in {CASES['wrapped_description'].release, 'image_1.jpg'}:
                 assert bound == 4 * 1024 * 1024
         bodies = [body for body, _ in system.s3.objects.values()]
         assert capture_content('generic_release', CASES['generic_release'].release) in bodies
         import json
         for _, event in system.messages.events:
             message = json.loads(event['Message'])
-            assert len(message['artifacts']) == 2 and message['form_type'] == '6-K'
+            assert len(message['artifacts']) == (3 if message['ticker'] == 'TSM' else 2) and message['form_type'] == '6-K'
         restarted = system.worker()
         restarted.discovery.selection = worker.discovery.selection
         await RecoveryService(restarted).run_pass()
-        assert len(downloads) == 4 and len(system.messages.events) == 2
+        assert len(downloads) == 5 and len(system.messages.events) == 2
     run(scenario())
 
 
