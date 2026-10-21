@@ -1,4 +1,4 @@
-"""SEC HTTP attempts reconcile across CloudWatch's four dimension sets."""
+"""SEC attempts reconcile across bounded metrics and ordinary ticker-detail logs."""
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -25,12 +25,13 @@ def series(output):
     counts = defaultdict(int)
     for line in output:
         event = json.loads(line)
-        for directive in event["_aws"]["CloudWatchMetrics"]:
+        for directive in event.get("_aws", {}).get("CloudWatchMetrics", []):
             assert directive["Namespace"] == "Finbot/Ingestion"
             for metric in directive["Metrics"]:
                 if metric["Name"] == "SecRequests":
                     assert metric["Unit"] == "Count"
                     for dimensions in directive["Dimensions"]:
+                        assert "Ticker" not in dimensions
                         key = tuple(sorted((name, event[name]) for name in dimensions))
                         counts[key] += event["SecRequests"]
     return counts
@@ -40,7 +41,23 @@ def key(**dimensions):
     return tuple(sorted((*BASE, *dimensions.items())))
 
 
-def test_seven_http_attempts_reconcile_independent_and_combined_breakdowns():
+def details(output):
+    counts = defaultdict(int)
+    for line in output:
+        event = json.loads(line)
+        if event.get("Event") == "sec_request_breakdown":
+            assert "_aws" not in event
+            assert event["Service"] == "finbot-ingestion"
+            assert event["Environment"] == "prod"
+            counts[(event["Ticker"], event["CallType"])] += event["SecRequests"]
+    return dict(counts)
+
+
+def timestamp(event):
+    return event["_aws"]["Timestamp"] if "_aws" in event else event["Timestamp"]
+
+
+def test_seven_http_attempts_reconcile_total_call_types_and_ticker_logs():
     output = []
     client, session, _ = make([Response() for _ in range(7)])
     client.metrics = Metrics(sink=output.append, environment="prod", now_ms=lambda: 123)
@@ -53,24 +70,20 @@ def test_seven_http_attempts_reconcile_independent_and_combined_breakdowns():
 
     counts = series(output)
     assert len(session.calls) == counts[BASE] == 7
-    assert counts[key(Ticker="AAPL")] == 4
-    assert counts[key(Ticker="HOVR")] == 3
+    assert len(counts) == 5
     for call_type, expected in (("submissions", 2), ("filing_index", 2),
                                 ("filing_directory", 2), ("document", 1)):
         assert counts[key(CallType=call_type)] == expected
     expected_pairs = {(ticker, call_type): 1 for ticker in ("AAPL", "HOVR")
                       for call_type in ("submissions", "filing_index", "filing_directory")}
     expected_pairs[("AAPL", "document")] = 1
-    assert {tuple(dict(k)[name] for name in ("Ticker", "CallType")): v
-            for k, v in counts.items() if len(k) == 4} == expected_pairs
-    for dimensions in (3, 4):
-        # The 3-dimension sets include both independent views.
-        assert sum(v for k, v in counts.items() if len(k) == dimensions) == (14 if dimensions == 3 else 7)
+    assert details(output) == expected_pairs
+    assert sum(v for k, v in counts.items() if len(k) == 3) == 7
     events = [json.loads(line) for line in output]
-    assert {event["_aws"]["Timestamp"] for event in events} == {123}
+    assert {timestamp(event) for event in events} == {123}
     assert events[0]["RuntimeHealthy"] == 1
     assert all(directive["Metrics"] == [{"Name": "SecRequests", "Unit": "Count"}]
-               for event in events[1:] for directive in event["_aws"]["CloudWatchMetrics"])
+               for event in events[1:] for directive in event.get("_aws", {}).get("CloudWatchMetrics", []))
 
 
 def test_network_retry_and_redirect_each_count_under_original_company_and_type():
@@ -82,8 +95,8 @@ def test_network_retry_and_redirect_each_count_under_original_company_and_type()
     client.metrics.flush()
     counts = series(output)
     assert len(session.calls) == counts[BASE] == 3
-    assert counts[key(Ticker="AAPL")] == counts[key(CallType="document")] == 3
-    assert counts[key(Ticker="AAPL", CallType="document")] == 3
+    assert counts[key(CallType="document")] == 3
+    assert details(output) == {("AAPL", "document"): 3}
     assert session.calls[-1][1].endswith("/Archives/next")
     assert json.loads(output[0])["RetryAttempts"] == 1
 
@@ -106,9 +119,11 @@ def test_public_poll_and_index_methods_supply_company_context():
     assert client.get_filing_index(filing).primary_document_name == "Primary.htm"
     client.metrics.flush()
     counts = series(output)
-    assert len(session.calls) == counts[BASE] == counts[key(Ticker="AAPL")] == 3
+    assert len(session.calls) == counts[BASE] == 3
     for call_type in ("submissions", "filing_index", "filing_directory"):
-        assert counts[key(Ticker="AAPL", CallType=call_type)] == 1
+        assert counts[key(CallType=call_type)] == 1
+    assert details(output) == {("AAPL", call_type): 1
+                              for call_type in ("submissions", "filing_index", "filing_directory")}
 
 
 def test_missing_context_is_counted_as_unknown_but_stopped_admissions_are_not_counted():
@@ -122,8 +137,8 @@ def test_missing_context_is_counted_as_unknown_but_stopped_admissions_are_not_co
     client.metrics.flush()
     counts = series(output)
     assert len(session.calls) == counts[BASE] == 1
-    assert counts[key(Ticker="UNKNOWN", CallType="document")] == 1
-    assert key(Ticker="AAPL") not in counts
+    assert counts[key(CallType="document")] == 1
+    assert details(output) == {("UNKNOWN", "document"): 1}
 
 
 def test_flush_captures_atomic_batch_and_concurrent_updates_go_to_next_batch():
@@ -139,17 +154,31 @@ def test_flush_captures_atomic_batch_and_concurrent_updates_go_to_next_batch():
     metrics.count_sec_request("submissions", "AAPL")
     metrics.flush()
     first = series(output)
-    assert first[BASE] == first[key(Ticker="AAPL", CallType="submissions")] == 1
-    assert key(Ticker="HOVR") not in first
+    assert first == {BASE: 1, key(CallType="submissions"): 1}
+    assert details(output) == {("AAPL", "submissions"): 1}
     offset = len(output)
     metrics.flush()
     second = series(output[offset:])
-    assert second[BASE] == second[key(Ticker="HOVR", CallType="document")] == 400
-    assert key(Ticker="AAPL") not in second
-    assert {json.loads(line)["_aws"]["Timestamp"] for line in output[:offset]} == {1000}
-    assert {json.loads(line)["_aws"]["Timestamp"] for line in output[offset:]} == {2000}
+    assert second == {BASE: 400, key(CallType="document"): 400}
+    assert details(output[offset:]) == {("HOVR", "document"): 400}
+    assert {timestamp(json.loads(line)) for line in output[:offset]} == {1000}
+    assert {timestamp(json.loads(line)) for line in output[offset:]} == {2000}
     metrics.flush()
-    assert len(output) == offset + 2  # Empty flush emits no duplicate counts.
+    assert len(output) == offset + 3  # Empty flush emits no duplicate counts.
+
+
+def test_500_tickers_still_emit_only_five_metric_series():
+    output = []
+    metrics = Metrics(sink=output.append, environment="prod")
+    call_types = ("submissions", "filing_index", "filing_directory", "document")
+    for number in range(500):
+        for call_type in call_types:
+            metrics.count_sec_request(call_type, f"T{number}")
+    metrics.flush()
+    assert series(output) == {BASE: 2000, **{key(CallType=c): 500 for c in call_types}}
+    assert len(details(output)) == 2000
+    assert sum(details(output).values()) == 2000
+    assert all("Ticker" not in json.loads(line) for line in output if "_aws" in json.loads(line))
 
 
 @pytest.mark.parametrize("call_type,ticker", [("invalid", "AAPL"), ("document", "\n"),

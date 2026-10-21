@@ -560,12 +560,15 @@ The provider-only diagnostic is documented in [DEPLOYMENT](DEPLOYMENT.md#one-sho
 
 ## Observability, deployment and capacity limits
 
-Sanitized JSON logs go to stderr; bounded thread-safe EMF goes to stdout with
-Service/Environment dimensions. `SecRequests` additionally publishes independent
-Ticker and CallType dimension sets and their combination. One atomic dispatch
-counter update and shared flush timestamp preserve the total across all views;
-retries and redirects retain their company/type attribution. Other metrics keep
-their existing dimension sets. See [request charts](../README.md#sec-request-breakdowns-in-cloudwatch).
+Sanitized application JSON logs go to stderr; bounded thread-safe EMF and
+aggregated SEC request-detail JSON logs go to stdout. EMF uses Service/Environment
+dimensions; `SecRequests` additionally publishes only the CallType dimension set,
+for at most five request series per service/environment regardless of universe size.
+Ticker/type counts are ordinary `Event=sec_request_breakdown` logs without `_aws`
+metadata, never metric dimensions. One atomic dispatch counter update and shared
+flush timestamp preserve the total across metrics and detail logs; retries and
+redirects retain their company/type attribution. Other metrics keep their existing
+dimension sets. See ADR 024 and [request charts](../README.md#sec-request-breakdowns-in-cloudwatch).
 CIK/accession/artifact IDs stay in logs. Metric
 buffers cap samples/names and report drops. Operational samples can repeat during
 repair and are not an exactly-once ledger. Discovery latency measures SEC acceptance

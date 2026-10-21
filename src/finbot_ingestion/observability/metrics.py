@@ -1,4 +1,4 @@
-"""Thread-safe bounded EMF emission; no metrics API calls in request threads."""
+"""Thread-safe EMF and request-detail logs; no metrics API calls in request threads."""
 
 from collections import defaultdict
 import json
@@ -19,7 +19,7 @@ class Metrics:
         self.observe(name, value, unit="Count", aggregate=True)
 
     def count_sec_request(self, call_type, ticker=None):
-        """Count one dispatched HTTP attempt in the total and each breakdown."""
+        """Count one HTTP attempt for aggregate metrics and ticker-detail logs."""
         if call_type not in {"submissions", "filing_index", "filing_directory", "document"}:
             raise ValueError("invalid SEC call type")
         ticker = ticker or "UNKNOWN"
@@ -73,15 +73,23 @@ class Metrics:
             "Metrics": [{"Name": k, "Unit": units[k]} for k in values]}]},
             "Service": "finbot-ingestion", "Environment": self.environment, **values}
         self.sink(json.dumps(event, allow_nan=False, separators=(",", ":")))
-        for (ticker, call_type), count in sec_requests.items():
+        by_call_type = defaultdict(int)
+        for (_, call_type), count in sec_requests.items():
+            by_call_type[call_type] += count
+        for call_type, count in by_call_type.items():
             # The base event alone emits the total; including its dimension set
             # here would count each request a second time.
             event = {"_aws": {"Timestamp": timestamp, "CloudWatchMetrics": [{
-                "Namespace": self.namespace, "Dimensions": [
-                    ["Service", "Environment", "Ticker"],
-                    ["Service", "Environment", "CallType"],
-                    ["Service", "Environment", "Ticker", "CallType"]],
+                "Namespace": self.namespace,
+                "Dimensions": [["Service", "Environment", "CallType"]],
                 "Metrics": [{"Name": "SecRequests", "Unit": "Count"}]}]},
+                "Service": "finbot-ingestion", "Environment": self.environment,
+                "CallType": call_type, "SecRequests": count}
+            self.sink(json.dumps(event, allow_nan=False, separators=(",", ":")))
+        for (ticker, call_type), count in sec_requests.items():
+            # Ordinary JSON, without EMF metadata: ticker cardinality must not
+            # create custom metrics. Counts share the aggregate snapshot/time.
+            event = {"Event": "sec_request_breakdown", "Timestamp": timestamp,
                 "Service": "finbot-ingestion", "Environment": self.environment,
                 "Ticker": ticker, "CallType": call_type, "SecRequests": count}
             self.sink(json.dumps(event, allow_nan=False, separators=(",", ":")))

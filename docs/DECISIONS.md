@@ -497,3 +497,29 @@ revalidate before revision-conditional writes, preserve original row/history fie
 and queue enumeration. Interrupted execution resumes using the same manifest;
 other unresolved/completed/terminal work is outside scope. Production execution
 and activation are separate from implementing this local change.
+
+
+<a id="adr-024"></a>
+## ADR 024 — Keep ticker request details in logs rather than metric dimensions
+
+**Accepted 2026-10-20; implemented locally, production activation pending.**
+Supersedes the October 11 ticker and ticker/type `SecRequests` dimension sets.
+Cost Explorer attributes essentially all current CloudWatch charges to EMF custom
+metrics. On October 19, the 72-company ticker dimensions accounted for about 91%
+of metric cost; hourly safety polls maintain both ticker-only and ticker/submissions
+series, so the recurring expense grows with the universe.
+
+Keep the original Service/Environment total and aggregate the four bounded
+CallType series independently of ticker. Emit each nonempty ticker/type count as
+ordinary JSON with `Event=sec_request_breakdown`, the shared millisecond `Timestamp`,
+Service/Environment/Ticker/CallType and SecRequests. Omit `_aws` entirely from these
+detail records. Preserve atomic snapshots, retries/redirects, UNKNOWN attribution
+and empty-flush behavior. Use on-demand Logs Insights for company diagnostics;
+metric filters must not reintroduce ticker cardinality. Query costs and retained
+log volume still apply.
+
+Use normal application delivery; no infrastructure, alarm or data-schema migration
+is needed. Historical ticker metric points remain queryable; new image activation
+ends their emission, and subsequent hours without points incur no custom metric
+charge. Rollback to the previous emission code resumes those charges. Revisit only
+if a measured operational need justifies budgeted ticker-specific metric series.

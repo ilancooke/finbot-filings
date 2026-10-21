@@ -469,8 +469,8 @@ evidence of extracted or validated earnings. See the
 
 Required-loop failure, unexpected return or stalled busy work exits nonzero.
 Sanitized JSON logs go to stderr; bounded CloudWatch EMF records go to stdout with
-Service/Environment dimensions; `SecRequests` also has company and call-type
-breakdowns described below. Local health separates liveness from calendar
+Service/Environment dimensions; `SecRequests` also has call-type metrics and
+company breakdown logs described below. Local health separates liveness from calendar
 age/scope/provider configuration. CloudWatch collection, DLQ-depth monitoring and
 alarms are defined by CDK and require manual infrastructure deployment. Discovery latency
 remains a metric; its alarm is omitted by default through
@@ -484,50 +484,57 @@ notification actions independently of ingestion. See [DEPLOYMENT.md](docs/DEPLOY
 ### SEC request breakdowns in CloudWatch
 
 `Finbot/Ingestion` / `SecRequests` counts each dispatched SEC HTTP attempt,
-including unsuccessful attempts, retries and redirect hops. The existing total
-keeps its `Service=finbot-ingestion`, `Environment=prod` dimensions. Additional
-series provide independent and combined views:
-
-| View | Additional dimensions |
-| --- | --- |
-| Total | None |
-| By company | `Ticker` |
-| By call type | `CallType` |
-| By company and call type | `Ticker`, `CallType` |
-
-Call types are `submissions` (company filing polls), `filing_index` (HTML listing),
-`filing_directory` (JSON listing), and `document` (primary filings/exhibits).
-Retries/redirects retain their original ticker and call type. Both document
-download paths carry company context. Direct client calls without company context
-use `Ticker=UNKNOWN`, so unattributed requests remain included in each breakdown.
+including unsuccessful attempts, retries and redirect hops. The total keeps its
+`Service=finbot-ingestion`, `Environment=prod` dimensions. The only additional
+metric dimension is `CallType`: `submissions` (company filing polls), `filing_index`
+(HTML listing), `filing_directory` (JSON listing), or `document` (primary/exhibits).
+This produces at most five request metric series per service/environment,
+independent of the number of watched tickers. Existing alarms and other metrics
+retain their dimensions. See [ADR 024](docs/DECISIONS.md#adr-024).
 
 In region `us-east-1`, open **CloudWatch → Metrics → All metrics →
-Finbot/Ingestion**. Select the dimension group for the desired view, filter to
-production and `SecRequests`, and select the series to graph. Under **Graphed
-metrics**, choose **Sum** and a **5-minute** period; a stacked graph shows the
-contributions to each period's total. For example, a total of seven attempts can
-break down into two submissions, two HTML indexes, two JSON directories and one
-document. Company totals and company/type totals each sum to those same seven.
-Use one view at a time when summing series; adding multiple views double-counts
-the same attempts.
+Finbot/Ingestion**. Select the total or call-type dimension group, filter to
+production and `SecRequests`, and choose **Sum** with a **5-minute** period.
+Call-type counts sum to the total; adding both views double-counts attempts.
 
-All views share one atomic counter snapshot and EMF flush timestamp. Series are
-emitted only when requests occur; these are HTTP attempt counts, not successful
-responses or distinct companies polled. In particular, filter `CallType=submissions`
-in the combined view to examine company polling attempts. Breakdowns start with
-the release that adds them; older aggregate datapoints cannot be split afterward.
-Each distinct dimension combination is a billable custom metric. URLs, CIKs,
-accessions and filenames are not metric dimensions. Existing alarms and other
-metrics retain their current dimensions.
+Ticker details are ordinary JSON logs with `Event=sec_request_breakdown`,
+`Timestamp` (epoch milliseconds), `Service`, `Environment`, `Ticker`, `CallType`
+and `SecRequests`. They contain no `_aws` metadata and create no custom metrics.
+Each nonempty ticker/type pair emits one aggregated record per flush. Both
+metrics and logs share one atomic snapshot and timestamp. Retries/redirects
+retain original ticker/type attribution; direct calls without company context
+use `Ticker=UNKNOWN`. These are HTTP attempts, not successes or distinct polls.
 
-The raw EMF log stream contains both the total and breakdown records. To query
-only total request counts in Logs Insights QL, select `/finbot/finbot-prod` and use:
+In **Logs Insights**, select `/finbot/finbot-prod`. For ticker and call-type counts
+from the new ordinary detail logs, use:
+
+```sql
+filter Service = "finbot-ingestion" and Environment = "prod"
+    and Event = "sec_request_breakdown"
+| stats sum(SecRequests) as requests by Ticker, CallType
+| sort requests desc
+```
+
+Filter `CallType = "submissions"` for company polling attempts, or group only by
+`Ticker` for company totals. Logs Insights queries incur scan charges; bound the
+time range and query on demand. Do not turn ticker fields back into metric filters.
+
+To query total request counts without counting call-type or detail records twice:
 
 ```sql
 filter Service = "finbot-ingestion" and Environment = "prod"
     and ispresent(SecRequests) and not ispresent(Ticker)
+    and not ispresent(CallType)
 | stats sum(SecRequests) as requests by bin(5m)
 ```
+
+The total query also works across the previous EMF layout. For historical
+company/type analysis across both layouts, select records with both `Ticker` and
+`CallType` present instead of filtering by `Event`. Older aggregate-only data
+cannot be split afterward. Previously published ticker metrics remain available
+for historical queries, but receive no new points after the new image is deployed.
+Custom metric billing stops for hours without new points; reducing flush frequency
+within the same hour would not remove the per-series cost.
 
 ## Configuration reference
 

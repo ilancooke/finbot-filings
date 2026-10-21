@@ -81,6 +81,22 @@ Keep a rollback image compatible with filing PUBLISH work, new checkpoints and
 cutoff adjustment, company reseed or historical notification replay is needed.
 See [FILING_READY](FILING_READY.md) for exact event contracts and limits.
 
+## SEC request metric cost reduction
+
+ADR 024 uses normal application delivery with no CDK, alarm or environment changes.
+Rebuild and validate the image before delivery. After activation, verify new
+`SecRequests` EMF records contain only Service/Environment and optional CallType
+dimensions, and `Event=sec_request_breakdown` ticker/type logs contain no `_aws`.
+Verify the four call-type counts and detail-log counts each sum to the total over
+the same completed flush interval. Use the [README queries](../README.md#sec-request-breakdowns-in-cloudwatch)
+to avoid summing duplicate views.
+
+Old ticker metrics can remain listed after deployment; inspect timestamps rather
+than treating their presence as continued billing. They must receive no new points
+from the new runtime. Charges stop in hours without emissions; confirm the decline
+in Cost Explorer after billing catches up. Reverting to an older image restores
+ticker metric emission and cost. Historical metrics and log records need no deletion.
+
 ## Earnings matching policy updates
 
 The ten-minute post-match frequent-polling extension also uses normal application
