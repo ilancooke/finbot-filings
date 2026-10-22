@@ -4,6 +4,9 @@ Stop ingestion and pause consumers first. Preview reads canonical stored HTML an
 fresh SEC package metadata. Execute conditionally adds only reviewed image rows
 and commits complete membership; normal ingestion later downloads/publishes them.
 Original HTML, prior snapshots, first enumeration facts and labels are preserved.
+Legacy completed filings without selected membership are accepted only when the
+current source selection matches their original count and every original child
+is durably stored and published. Preview never repairs their checkpoint in place.
 """
 
 import argparse
@@ -52,7 +55,7 @@ async def inspect(discovery, target, at, read_html, *, resuming=False):
         filing = await discovery.filings.get(accession)
         progress = await discovery.filings.get_checkpoint(accession)
         if (filing is None or progress is None or (filing.ticker, filing.company_cik, filing.form_type) != identity
-                or progress.enumeration_completed_at is None or not progress.selected_artifact_ids
+                or progress.enumeration_completed_at is None
                 or progress.selection_decision != 'SELECT' or progress.terminal_at
                 or (progress.selection_policy != POLICY_VERSION and
                     (progress.selection_policy, POLICY_VERSION) not in POLICY_UPGRADES)
@@ -66,7 +69,13 @@ async def inspect(discovery, target, at, read_html, *, resuming=False):
             raise RuntimeError(f'{accession}: changed document selection')
         documents = [doc for doc in package.documents if decisions[doc.filename].selected]
         expected_docs = {accession + '/' + doc.filename for doc in documents}
-        old_docs = {key for key in progress.selected_artifact_ids
+        legacy = progress.selected_artifact_ids is None
+        if legacy and progress.enumerated_artifact_count != len(expected_docs):
+            raise RuntimeError(f'{accession}: legacy document count differs from current selection')
+        # These pre-FilingReady parents retain enumeration facts but no explicit
+        # membership. Reconstruct only the exact original document selection;
+        # each source-backed child is strongly read and verified below.
+        old_docs = expected_docs if legacy else {key for key in progress.selected_artifact_ids
                     if not key.lower().endswith(('.jpg', '.jpeg', '.png', '.gif'))}
         if expected_docs != old_docs:
             raise RuntimeError(f'{accession}: document omissions require a separate recovery')
@@ -77,6 +86,8 @@ async def inspect(discovery, target, at, read_html, *, resuming=False):
             checkpoint = await discovery.artifacts.get_checkpoint(accession + '/' + doc.filename)
             if child is None or checkpoint is None or child.stored_at is None or checkpoint.terminal_at or checkpoint.selection_blocked:
                 raise RuntimeError(f'{accession}: selected source is not durably stored')
+            if legacy and child.published_at is None:
+                raise RuntimeError(f'{accession}: legacy source has not completed publication')
             assert_same_artifact(child, candidates[doc.filename])
             existing[child.artifact_id] = {'artifact': record(child), 'checkpoint': record(checkpoint)}
             if not doc.filename.lower().endswith(('.htm', '.html')):
@@ -93,7 +104,7 @@ async def inspect(discovery, target, at, read_html, *, resuming=False):
         if len(selected_images) > MAX_SUPPORTING_IMAGES:
             raise RuntimeError('supporting image count limit exceeded')
         image_ids = {accession + '/' + name for name in selected_images}
-        if not set(progress.selected_artifact_ids) <= expected_docs | image_ids:
+        if not set(progress.selected_artifact_ids or ()) <= expected_docs | image_ids:
             raise RuntimeError(f'{accession}: existing membership has unexpected images')
         for name, decision in selected_images.items():
             child = candidates[name]

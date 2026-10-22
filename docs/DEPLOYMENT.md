@@ -85,7 +85,8 @@ See [FILING_READY](FILING_READY.md) for exact event contracts and limits.
 
 The supporting-images v1 release keeps filing admission and FilingReady 1.0
 unchanged, but image-bearing snapshots require compatible consumers. This
-procedure is prepared, not executed. The helper is intentionally scoped to ASML
+cloud operation was completed on 2026-10-21; local review-bundle replacement is
+tracked separately. The helper is intentionally scoped to ASML
 `0001628280-26-065813`, BAC `0000070858-26-000481`, UNH
 `0000731766-26-000255`, and CMC `0000022444-26-000065`.
 
@@ -117,6 +118,11 @@ procedure is prepared, not executed. The helper is intentionally scoped to ASML
    the actual fresh source-backed preview is authoritative. Existing image rows,
    unrelated document omissions, pending unpublished snapshots or conflicting
    state are refused rather than adopted. Preserve this exact manifest.
+   Legacy completed ASML/BAC/UNH parents may lack explicit selected membership.
+   The helper reconstructs it in the preview only when the current document
+   selection matches the original enumeration count and every original child is
+   durably stored and published. Execution commits that verified selection plus
+   images while preserving the first enumeration facts; preview makes no repairs.
 4. When the preview is approved and the service is still stopped, apply that
    same manifest:
 
@@ -150,6 +156,15 @@ Do not roll back to an image-unaware consumer once image-bearing snapshots are
 published. The earnings adapter uses separate image count/byte limits, a new
 prompt/config version, and review-required visual evidence; collecting images
 does not certify extracted values or automatically confirm human labels.
+
+Recovery verification (2026-10-21): revision 31 acquired all 50 reviewed JPEGs
+(ASML 12, BAC 19, UNH 16, CMC 3). Every S3 object matched its stored size, content
+type and source provenance. Four complete snapshots were published, containing
+15/21/18/4 artifacts respectively. All eight original document records and first
+enumeration facts were unchanged; CMC's previous published snapshot was retained.
+Automatic application delivery was restored afterward. The stopped-service helper
+was updated locally to support the three legacy parents without explicit membership,
+using original enumeration counts and stored/published child checks.
 
 Local validation (2026-10-21): 933 package tests passed, nine opt-in container
 tests skipped in the normal suite and all nine passed explicitly against the

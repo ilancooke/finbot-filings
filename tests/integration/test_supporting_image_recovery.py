@@ -7,6 +7,7 @@ from botocore.exceptions import ReadTimeoutError
 import pytest
 
 from scripts import recover_supporting_images as recovery
+from finbot_ingestion.domain import Company
 from finbot_ingestion.domain.filing_ready import FilingReady
 from finbot_ingestion.ingestion.recovery_service import RecoveryService
 from finbot_ingestion.repositories.package_checkpoint import PackageCheckpoint
@@ -118,3 +119,79 @@ def test_changed_inputs_refuse_writes(seeded, tmp_path, change):
     with pytest.raises(RuntimeError):
         operation(seeded, path, execute=True, guard=guard)
     assert seeded.system.db.memory.tables == before and not seeded.downloads
+
+
+def legacy_parent(seeded):
+    """Model the completed production parents written before FilingReady existed."""
+    row = seeded.system.db.memory.tables['filings'][(ACCESSION,)]
+    for field in ('selected_artifact_ids', 'ready_snapshot_id', 'ready_published_at'):
+        row.pop(field, None)
+    return row
+
+
+@pytest.mark.parametrize('missing_name', [False, True])
+def test_legacy_preview_and_resume_preserve_first_facts_and_publish_full_snapshot(seeded, tmp_path, missing_name):
+    import json
+    row = legacy_parent(seeded)
+    if missing_name:
+        row.pop('company_name', None)
+        run(seeded.system.db.companies.upsert(Company(ticker='AAPL', cik='320193', name='Apple')))
+        seeded.worker.companies = seeded.system.db.companies
+    path = tmp_path / 'legacy-images.json'
+    before = deepcopy(seeded.system.db.memory.tables)
+    assert operation(seeded, path)['image_count'] == 1
+    assert seeded.system.db.memory.tables == before
+    plan = json.loads(path.read_text())
+    assert 'selected_artifact_ids' not in plan['parents'][ACCESSION]['checkpoint']
+    # A lost image-create acknowledgment leaves the parent in its original
+    # legacy form. Retrying must still validate that form against the same plan.
+    seeded.system.db.memory.lost.append('PutItem')
+    with pytest.raises(ReadTimeoutError):
+        operation(seeded, path, execute=True)
+    assert 'selected_artifact_ids' not in row
+    operation(seeded, path, execute=True)
+    after = deepcopy(seeded.system.db.memory.tables)
+    operation(seeded, path, execute=True)
+    assert seeded.system.db.memory.tables == after
+    updated = after['filings'][(ACCESSION,)]
+    for field in ('enumeration_completed_at', 'enumerated_artifact_count', 'selection_policy',
+                  'selection_checked_at', 'discovered_at'):
+        assert updated[field] == before['filings'][(ACCESSION,)][field]
+    assert len(updated['selected_artifact_ids']) == 2 and updated['pending_work_kind'] == 'PUBLISH'
+    original_key = (ACCESSION + '/Primary.htm',)
+    assert after['artifacts'][original_key] == before['artifacts'][original_key]
+    async def finish():
+        summary = await RecoveryService(seeded.worker).run_pass()
+        assert not summary.errors and not summary.terminal
+        progress = await seeded.system.db.filings.get_checkpoint(ACCESSION)
+        assert progress.ready_published_at and len(progress.selected_artifact_ids) == 2
+        assert len(seeded.downloads) == 1
+        await RecoveryService(seeded.worker).run_pass()
+        assert len(seeded.downloads) == 1
+    run(finish())
+
+
+@pytest.mark.parametrize('change', ['count', 'missing_child', 'unpublished_child', 'unstored_child'])
+def test_legacy_incomplete_or_changed_originals_refuse_preview_without_writes(seeded, tmp_path, change):
+    row = legacy_parent(seeded)
+    children = seeded.system.db.memory.tables['artifacts']
+    key = (ACCESSION + '/Primary.htm',)
+    if change == 'count':
+        row['enumerated_artifact_count'] = 2
+    elif change == 'missing_child':
+        del children[key]
+    elif change == 'unpublished_child':
+        children[key].pop('published_at')
+        children[key]['pending_work_kind'] = 'PUBLISH'
+        children[key]['pending_work_sort'] = row['discovered_at'] + '/' + key[0]
+    else:
+        for field in ('published_at', 'stored_at', 's3_uri', 'content_type', 'size_bytes'):
+            children[key].pop(field, None)
+        children[key]['pending_work_kind'] = 'ACQUIRE'
+        children[key]['pending_work_sort'] = row['discovered_at'] + '/' + key[0]
+    before = deepcopy(seeded.system.db.memory.tables)
+    path = tmp_path / 'refused.json'
+    with pytest.raises(RuntimeError):
+        operation(seeded, path)
+    assert seeded.system.db.memory.tables == before
+    assert not path.exists() and not seeded.downloads
