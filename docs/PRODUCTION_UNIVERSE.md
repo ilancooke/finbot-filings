@@ -4,10 +4,10 @@ On 2026-10-09, the user selected these 50 distinct ticker symbols for the initia
 production universe. Preserve the supplied order. This supersedes the unresolved
 universe choice; approximately 500 companies remains a v0 capacity target.
 
-The current reviewed universe contains **72 companies** in one consolidated
+The current reviewed universe contains **92 companies** in one consolidated
 [`infra/seed/companies.prod.json`](../infra/seed/companies.prod.json) file. It lists
-the original 50 first, followed by the 22 additions below, with no duplicate CIKs
-or tickers. DynamoDB remains the running service's source of enabled companies;
+the original 50 first, followed by the 22 October 15 additions and the 20 October 26
+additions below, with no duplicate CIKs or tickers. DynamoDB remains the running service's source of enabled companies;
 editing this file alone does not update production.
 
 ## Initial selected symbols
@@ -138,12 +138,13 @@ before applying the seed; no ticker substitutions or inferred aliases were used.
 ## Reviewed seed and maintenance
 
 [`infra/seed/companies.prod.json`](../infra/seed/companies.prod.json) is the
-consolidated create-only DynamoDB transaction for all 72 reviewed companies,
+consolidated create-only DynamoDB transaction for all 92 reviewed companies,
 targeting account `559007813222`, `us-east-1`, `finbot-prod-companies`.
 Each item contains repository schema version and enabled-index marker; every Put
 requires `attribute_not_exists(cik)`. This input cannot overwrite an existing CIK.
-The original 50 and later 22 were already applied in separate transactions; their
-local JSON inputs are now consolidated. Use the additive loader after appending
+The original 50 and October 15 additions were applied in separate transactions;
+the October 26 additions were applied with the additive loader. All records are
+consolidated locally. Use the additive loader after appending
 reviewed new records to this single file:
 
 ```bash
@@ -243,7 +244,7 @@ The fixed inclusive `2026-10-06T04:00:00Z` acceptance cutoff also applies to the
 newly enabled companies. No historical submissions traversal is introduced.
 
 The calendar-only diagnostic reads the consolidated file directly, covering all
-72 companies without applying any DynamoDB writes:
+92 reviewed companies without applying any DynamoDB writes:
 
 ```bash
 .venv/bin/python -m finbot_ingestion.calendar.check \
@@ -253,4 +254,81 @@ The calendar-only diagnostic reads the consolidated file directly, covering all
 
 The finite Fargate `--deployment-check` still requires its original reviewed
 50-company count. It is not a current expanded-universe readiness check; review
-and update that diagnostic's expected scope before using it against 72 companies.
+and update that diagnostic's expected scope before using it against the expanded universe.
+
+## October 26, 2026 additions
+
+The user requested 23 symbols in this order:
+
+```text
+V
+KO
+UNH
+NVS
+BA
+STX
+GLW
+FCX
+UPS
+MSFT
+TSLA
+IBM
+TMUS
+ADP
+FDX
+INTC
+MO
+SBUX
+COIN
+LYV
+CZR
+JBLU
+RIVN
+```
+
+`UNH`, `TSLA` and `IBM` were already present and remain included once. The following
+20 new companies extend the reviewed seed to **92 companies**. The previous 72
+records retain their order and attributes; additions follow the supplied order.
+
+| Ticker | CIK | SEC registrant name | Exchange |
+| --- | --- | --- | --- |
+| V | `0001403161` | VISA INC. | NYSE |
+| KO | `0000021344` | COCA COLA CO | NYSE |
+| NVS | `0001114448` | NOVARTIS AG | NYSE |
+| BA | `0000012927` | BOEING CO | NYSE |
+| STX | `0001137789` | Seagate Technology Holdings plc | Nasdaq |
+| GLW | `0000024741` | CORNING INC /NY | NYSE |
+| FCX | `0000831259` | FREEPORT-MCMORAN INC | NYSE |
+| UPS | `0001090727` | UNITED PARCEL SERVICE INC | NYSE |
+| MSFT | `0000789019` | MICROSOFT CORP | Nasdaq |
+| TMUS | `0001283699` | T-Mobile US, Inc. | Nasdaq |
+| ADP | `0000008670` | AUTOMATIC DATA PROCESSING INC | Nasdaq |
+| FDX | `0001048911` | FEDEX CORP | NYSE |
+| INTC | `0000050863` | INTEL CORP | Nasdaq |
+| MO | `0000764180` | ALTRIA GROUP, INC. | NYSE |
+| SBUX | `0000829224` | STARBUCKS CORP | Nasdaq |
+| COIN | `0001679788` | Coinbase Global, Inc. | Nasdaq |
+| LYV | `0001335258` | Live Nation Entertainment, Inc. | NYSE |
+| CZR | `0001590895` | Caesars Entertainment, Inc. | Nasdaq |
+| JBLU | `0001158463` | JETBLUE AIRWAYS CORP | Nasdaq |
+| RIVN | `0001874178` | Rivian Automotive, Inc. / DE | Nasdaq |
+
+All 23 symbols matched exactly one row in the SEC
+[ticker/CIK/name/exchange mapping](https://www.sec.gov/files/company_tickers_exchange.json).
+The 20 new CIKs are distinct and disjoint from the previous universe. Retrieved
+`2026-10-26T23:13:00.972078+00:00`; source Last-Modified
+`Fri, 23 Oct 2026 21:00:38 GMT`; source SHA-256:
+`f5a8b5c09137999ca3815f91df8b97a3602f24d0818255001e38bc77aae9c472`. The full source is retained outside Git.
+
+The additive loader inserted all 20 missing records and skipped the previous 72
+with no existing-record differences. Strong base-table verification at
+`2026-10-26T23:14:53.006Z` matched all 92 records exactly to the reviewed seed, including
+all 72 unchanged original records, with no missing or extra companies. The
+enabled-company index independently returned 92 records. Verification evidence is
+retained outside Git at `/private/tmp/finbot-universe-20261026-production-verification.json`.
+
+Normal five-minute company reloads pick up additions without a release or restart;
+calendar observations wait for the next scheduled refresh. Runtime pickup and fresh
+92-company calendar coverage were not verified by this data update. The fixed live
+acceptance cutoff remains `2026-10-06T04:00:00Z`. No service restart or release was
+performed.

@@ -9,7 +9,8 @@ interpretation, earnings extraction, features and consumer queues belong downstr
 The migration from the POC and the subsequent earnings-focused filtering work
 are complete. Only `finbot_ingestion` is installed. Infrastructure and application
 delivery are in place. The [production universe](docs/PRODUCTION_UNIVERSE.md)
-contains 72 reviewed companies: the original 50 plus 22 additions applied October 15, 2026.
+contains 92 reviewed companies: the original 50, 22 additions from October 15, 2026,
+and 20 additions from October 26, 2026.
 Approximately 500 remains the capacity target.
 
 See [architecture and contracts](docs/ARCHITECTURE.md),
@@ -83,7 +84,7 @@ Tests can run individually, for example:
 ```
 
 The calendar check reads the reviewed seed file as company input; it never applies
-the write requests. The consolidated file covers all 72 reviewed companies.
+the write requests. The consolidated file covers all 92 reviewed companies.
 It uses the production Yahoo adapter,
 normal bounded request settings and a new private temporary cache, then closes
 the provider and worker.
@@ -99,7 +100,7 @@ exception messages are excluded. See [DEPLOYMENT](docs/DEPLOYMENT.md) for review
 
 The deployment check refuses credentials outside the ECS task role. Its original
 reviewed scope is 50 enabled company records; update the diagnostic scope before
-using it against the expanded 72-company universe. It checks company records,
+using it against the expanded 92-company universe. It checks company records,
 private writable `/tmp`, atomic heartbeat files,
 bounded memory allocation, DynamoDB conditional test checkpoints and immutable
 SSE-S3 test bytes. Its process budget is 180 seconds. It emits a sanitized report
@@ -208,7 +209,7 @@ and metadata-only publication. No mock-mode switch is shipped in the application
 
 ## Acquisition and durable contracts
 
-Current coverage is the [72-company production universe](docs/PRODUCTION_UNIVERSE.md),
+Current coverage is the [92-company production universe](docs/PRODUCTION_UNIVERSE.md),
 with approximately 500 companies retained as the v0 capacity target.
 Runtime company records require verified ticker/CIK/name/enabled fields.
 Ticker is convenience metadata; CIK normalizes to ten digits. Relevant forms are

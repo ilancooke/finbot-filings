@@ -62,7 +62,7 @@ class ConditionalFailure(Exception):
 
 
 def test_production_input_is_valid_and_identical_duplicates_are_collapsed(tmp_path):
-    assert len(loader.load_input(loader.DEFAULT_FILE)["items"]) == 72
+    assert len(loader.load_input(loader.DEFAULT_FILE)["items"]) == 92
     plan = loader.load_input(input_file(tmp_path, [COMPANY, COMPANY, SECOND]))
     assert plan["items"] == (COMPANY, SECOND)
     assert plan["duplicates_in_file"] == 1

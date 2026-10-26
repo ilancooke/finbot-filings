@@ -410,7 +410,7 @@ production test shim is used.
 ## Company universe
 
 [PRODUCTION_UNIVERSE](PRODUCTION_UNIVERSE.md) records the reviewed scope.
-`infra/seed/companies.prod.json` is the consolidated input for all 72 reviewed
+`infra/seed/companies.prod.json` is the consolidated input for all 92 reviewed
 companies. Append newly reviewed company records to this file, then run:
 
 ```bash
@@ -461,8 +461,8 @@ aws dynamodb query --table-name finbot-prod-companies --index-name EnabledCompan
   --profile default --region us-east-1 --output json --no-cli-pager
 ```
 
-The historical initial scope was 50; after the October 15 additions the reviewed
-current scope is 72. Do not request strong GSI consistency; allow propagation and
+The historical initial scope was 50, expanding to 72 on October 15; the October 26
+reviewed seed and verified enabled index contain 92 companies. Do not request strong GSI consistency; allow propagation and
 investigate persistent mismatches rather than reseeding. Runtime configuration is
 DynamoDB, not the local seed/document.
 
@@ -492,6 +492,20 @@ See [the reviewed identities and consolidated diagnostic input](PRODUCTION_UNIVE
 The finite cloud deployment diagnostic remains pinned to its original 50-company
 scope; update that reviewed expectation before running it against the expanded
 universe. No finite diagnostic was run for this data-only expansion.
+
+### October 26 universe expansion
+
+The user requested 23 symbols; UNH, TSLA and IBM were already enabled. The additive
+loader inserted the other 20 SEC-verified companies and skipped all 72 existing
+records without differences. Strong base-table verification at `2026-10-26T23:14:53.006Z`
+matched all 92 records exactly to the consolidated seed, with no missing or extra
+companies; the enabled-company index returned 92. See the
+[reviewed identities](PRODUCTION_UNIVERSE.md#october-26-2026-additions).
+
+No service restart or application release was performed. Additions enter the normal
+five-minute reload and use safety polling until calendar expectations are available.
+Runtime pickup and fresh calendar coverage for the expanded scope were not checked.
+The fixed live acceptance cutoff remains unchanged.
 
 ## GitHub application delivery and activation
 

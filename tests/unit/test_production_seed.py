@@ -22,8 +22,9 @@ def test_consolidated_seed_matches_reviewed_universe_and_cannot_overwrite():
     selected = re.search(r"```text\n(.*?)\n```",
                          (ROOT / "docs/PRODUCTION_UNIVERSE.md").read_text(), re.S).group(1).splitlines()
     selected += "NFLX RTX MMM COF GM NOC UAL HAL TSLA LRCX PM SAP IBM ABT T PG UNP WDC SPOT HON AXP INFY".split()
+    selected += "V KO NVS BA STX GLW FCX UPS MSFT TMUS ADP FDX INTC MO SBUX COIN LYV CZR JBLU RIVN".split()
     actions = request["TransactItems"]
-    assert len(actions) == len(selected) == 72
+    assert len(actions) == len(selected) == 92
     companies = []
     for action in actions:
         assert set(action) == {"Put"}
@@ -37,12 +38,13 @@ def test_consolidated_seed_matches_reviewed_universe_and_cannot_overwrite():
         assert re.fullmatch(r"[0-9]{10}", put["Item"]["cik"]["S"])
         companies.append(company)
     assert [company.ticker for company in companies] == selected
-    assert len({company.cik for company in companies}) == 72
-    assert len({company.ticker for company in companies}) == 72
-    assert sum(company.ticker == "META" for company in companies) == 1
+    assert len({company.cik for company in companies}) == 92
+    assert len({company.ticker for company in companies}) == 92
+    for ticker in ("META", "UNH", "TSLA", "IBM"):
+        assert sum(company.ticker == ticker for company in companies) == 1
 
 
 def test_calendar_check_reads_complete_universe_from_single_seed():
     universe = load_companies(ROOT / "infra/seed/companies.prod.json")
-    assert len(universe) == 72
+    assert len(universe) == 92
     assert sum(company.ticker == "META" for company in universe) == 1
